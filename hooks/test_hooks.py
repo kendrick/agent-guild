@@ -205,6 +205,20 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "auditor", "prompt": "no id here"}}, proj)
 check("auditor w/o Audit-ID → exit 2", rc == 2, f"rc={rc}")
 
+# audition: an Audition-ID passes with no task file and no CON-audit, because a
+# tryout runs outside the lifecycle. Fresh proj so neither exists.
+proj_aud = fresh_proj()
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-bulk", "prompt": "Audition-ID: A-001\nSort these lines."}}, proj_aud)
+audlog = os.path.exists(os.path.join(proj_aud, "state", "log", "dispatches.log"))
+check("audition dispatch (Audition-ID, no Task-ID) → exit 0", rc == 0, f"rc={rc} err={err}")
+check("audition dispatch → logged", audlog)
+
+# regression: the audition path must not swallow a genuinely untagged dispatch.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-bulk", "prompt": "just sort the lines"}}, proj_aud)
+check("no Task-ID and no Audition-ID → exit 2", rc == 2 and "no id line" in err, err)
+
 # --------------------------------------------------------- subagent-return
 print("subagent-return.py")
 proj = fresh_proj()
@@ -278,6 +292,13 @@ tx = transcript(proj, "Audit-ID: CON-audit")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "auditor", "transcript_path": tx}, proj)
 check("auditor wrote CON-audit verdict → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# audition return: an A-NNN ident finishes without a task file or verdict, since
+# the battery scorer judges the output, not this gate.
+tx = transcript(proj, "Audition-ID: A-001\nSort these lines.")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-bulk", "transcript_path": tx}, proj)
+check("audition subagent (A-001 transcript) → exit 0", rc == 0, f"rc={rc} err={err}")
 
 # --------------------------------------------------- orchestrator-write-guard
 print("orchestrator-write-guard.py")

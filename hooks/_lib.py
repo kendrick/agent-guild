@@ -40,6 +40,9 @@ CHECKER_AGENTS = {"checker-deterministic", "checker-judgment"}
 
 TASK_ID_RE = re.compile(r"\bTask-ID:\s*(T-\d+)", re.IGNORECASE)
 AUDIT_ID_RE = re.compile(r"\bAudit-ID:\s*(CON-audit|DEC-audit)", re.IGNORECASE)
+# Auditions run outside the task lifecycle—no task file, no tier, no verdict
+# gate—so they carry their own id namespace that the gates log and wave through.
+AUDITION_ID_RE = re.compile(r"\bAudition-ID:\s*(A-\d+)", re.IGNORECASE)
 
 
 def project_dir():
@@ -202,11 +205,13 @@ def id_from_transcript(transcript_path):
         if role != "user":
             continue
         text = _text_of(msg.get("content"))
-        m = TASK_ID_RE.search(text) or AUDIT_ID_RE.search(text)
+        m = (TASK_ID_RE.search(text) or AUDIT_ID_RE.search(text)
+             or AUDITION_ID_RE.search(text))
         if m:
             return m.group(1)
     raise ValueError(
-        f"no Task-ID/Audit-ID found in any user message of {transcript_path}"
+        f"no Task-ID/Audit-ID/Audition-ID found in any user message of "
+        f"{transcript_path}"
     )
 
 

@@ -59,6 +59,7 @@ CLAUDE.md  .claude/  hooks/  scripts/  templates/
 ```
 
 Then:
+
 - Add `state/` to your `.gitignore` (or copy this repo's ignore rules for it).
 - If you already have `.claude/settings.json`, merge the `hooks` block from this one rather than overwriting.
 - Edit the routing table in `CLAUDE.md` to your own model tiers.
@@ -70,4 +71,6 @@ Walk through `SMOKE.md` once in a fresh session to watch every gate fire before 
 
 ## Later: A Plugin
 
-The layout is already close to a Claude Code plugin (`.claude-plugin/plugin.json` plus root-level `agents/`, `skills/`, and `hooks.json`), so packaging it as one installable, versioned unit is a mechanical conversion when the copy-in step gets tiring.
+Most of the kit would package as a Claude Code plugin: agents, skills, and hooks move under a `.claude-plugin/plugin.json`, with hook commands rewired to `$CLAUDE_PLUGIN_ROOT`. The hooks are the clean part, since they already read state from `$CLAUDE_PROJECT_DIR`, so a plugin's gates would keep `state/` in your project untouched.
+
+The catch is the orchestrator contract. Plugins can't ship an always-on CLAUDE.md; they contribute context through skills, agents, and hooks that load on demand, not persistent project instructions. So a plugin would still need a per-project way to make the contract law, either a copied-in CLAUDE.md or a SessionStart hook that injects it. Expect a hybrid (static tooling as a plugin, the contract and `state/` staying in the project), not a one-command install. Worth it once you're running the kit across many projects, not before.

@@ -23,12 +23,12 @@ Workers build. Checkers verify workers, re-deriving every claim rather than trus
 The agent frontmatter defaults match this table; escalation overrides the model
 on the Agent call without changing the agent. -->
 
-| Tier   | Agent(s)                          | Use for |
-|--------|-----------------------------------|---------|
-| haiku  | worker-bulk, checker-deterministic | Mechanical, zero-judgment work; and all deterministic checks (they only run scripts). |
-| sonnet | worker-standard                   | Clear-spec implementation judged on correctness. |
-| opus   | worker-craft, checker-judgment, auditor | User-facing/taste work; judgment checks; auditing your own work. |
-| fable  | (override only)                   | The final escalation rung, and genuinely hard, ambiguous problems. Reserved. |
+| Tier   | Agent(s)                                | Use for                                                                               |
+| ------ | --------------------------------------- | ------------------------------------------------------------------------------------- |
+| haiku  | worker-bulk, checker-deterministic      | Mechanical, zero-judgment work; and all deterministic checks (they only run scripts). |
+| sonnet | worker-standard                         | Clear-spec implementation judged on correctness.                                      |
+| opus   | worker-craft, checker-judgment, auditor | User-facing/taste work; judgment checks; auditing your own work.                      |
+| fable  | (override only)                         | The final escalation rung, and genuinely hard, ambiguous problems. Reserved.          |
 
 Route a task by the work, not the default: a mechanical task goes to worker-bulk even inside a taste-heavy job. A clause checked by a script routes to checker-deterministic; a clause checked by a rubric routes to checker-judgment.
 
@@ -48,18 +48,19 @@ Note: hooks no-op when no task is open, so during Phase 0 the write-guard is not
 
 Statuses and who moves them:
 
-| Status | Meaning | Set by |
-|--------|---------|--------|
-| `pending` | created by decompose | you |
-| `assigned` | worker dispatched (or re-dispatched for rework) | you, just before dispatch |
-| `needs-check` | worker done, artifacts listed | the worker |
-| `checking` | checker dispatched | you |
-| `rework` | FAIL verdict, diagnosis attached | you |
-| `disputed` | worker filed a dispute | the worker |
-| `complete` | PASS verdict accepted | you |
-| `abandoned` | cancelled, with a logged reason | you |
+| Status        | Meaning                                         | Set by                    |
+| ------------- | ----------------------------------------------- | ------------------------- |
+| `pending`     | created by decompose                            | you                       |
+| `assigned`    | worker dispatched (or re-dispatched for rework) | you, just before dispatch |
+| `needs-check` | worker done, artifacts listed                   | the worker                |
+| `checking`    | checker dispatched                              | you                       |
+| `rework`      | FAIL verdict, diagnosis attached                | you                       |
+| `disputed`    | worker filed a dispute                          | the worker                |
+| `complete`    | PASS verdict accepted                           | you                       |
+| `abandoned`   | cancelled, with a logged reason                 | you                       |
 
 The loop:
+
 1. Move a `pending` task to `assigned` and dispatch its executor. **Every worker/checker dispatch prompt must contain a `Task-ID: T-NNN` line** (auditor: `Audit-ID:`). `dispatch-guard` blocks any dispatch that omits it.
 2. The worker returns with the task at `needs-check`. Set it to `checking` and dispatch its checker.
 3. Read the checker's verdict at `state/verdicts/T-NNN-<tier>-r<retries>.md`:
@@ -71,6 +72,7 @@ The loop:
 ## Retry ladder
 
 A FAIL is not "try again." It's "here is precisely what's wrong."
+
 1. Copy the verdict's `## Diagnosis` verbatim into the task's `## Rework diagnosis` section.
 2. Set the task back to `assigned`, increment `retries`, and re-dispatch the **same executor** on the **same model**.
 3. The retry budget is `max_retries` (default 2) **per tier**. When a tier's budget is spent, escalate:
@@ -86,6 +88,7 @@ A FAIL is not "try again." It's "here is precisely what's wrong."
 A checker can be wrong. When a worker sets a task to `disputed`, it has filed `state/disputes/T-NNN-<tier>-r<retries>.md` arguing the artifact already satisfies the cited clause.
 
 Rule it yourself. Read the dispute, the verdict, and the artifact directly—do not defer to either the worker or the checker. Decide strictly against the constitution's clause text and append your ruling to the dispute file, quoting the clause that decides it:
+
 - **Worker upheld** → mark the verdict superseded, set the task `complete` (or re-check with corrected instructions).
 - **Checker upheld** → normal rework path.
 

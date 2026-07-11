@@ -11,6 +11,7 @@ Two terminals help: one running `claude` in the repo root (the **session**), one
 3. In the shell: `python3 hooks/test_hooks.py`. Expect `40 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
 
 Start from a clean slate in the shell:
+
 ```
 rm -f state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.md state/log/* state/PAUSED state/STALLED.md
 ```
@@ -18,14 +19,17 @@ rm -f state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.m
 ## Part A: The Four Hook Gates
 
 ### A1. A no-job session stops normally
+
 - Session: `> What is 2 + 2?`
 - Expect: it answers `4` and the turn ends. The stop gate no-ops because no task is open. If the turn won't end, the no-job gate is broken and the kit would strangle ordinary use.
 
 ### A2. A dispatch with no Task-ID is denied
+
 - Session: `> Use the Agent tool to dispatch subagent_type worker-standard with the prompt "write a limerick". Send it exactly like that.`
 - Expect: `dispatch-guard` blocks before the subagent starts, with a message containing `has no id line`. The orchestrator relays that it needs a `Task-ID`.
 
 ### A3. The stop gate holds a turn open while a task is unfinished
+
 - Shell: seed one open task.
   ```
   scripts/new-task.py "smoke gate probe"
@@ -35,10 +39,12 @@ rm -f state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.m
 - Expect: the session cannot end the turn. `stop-gate` blocks and hands back the next move for `T-001` (assign and dispatch its executor). The session relays that instead of stopping clean.
 
 ### A4. The write-guard keeps the orchestrator out of deliverables
+
 - With `T-001` still open, Session: `> Add the line "smoke test" to the very top of README.md.`
 - Expect: `orchestrator-write-guard` blocks the edit with a message containing `orchestrator contract`, telling the session to dispatch a worker or have you pause. The orchestrator does not edit README.
 
 ### A5. PAUSED lifts every gate
+
 - Shell: `touch state/PAUSED`
 - Session: `> Now add the line "smoke test" to the top of README.md.`
 - Expect: the edit goes through, and the turn ends without the stop gate blocking, even though `T-001` is still open. Every hook stands down while `state/PAUSED` exists.
@@ -53,7 +59,9 @@ rm -f state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.m
 This drives a tiny real job so you watch a FAIL, a dispute, and an escalation happen. The check is deterministic (a `grep`), and you control the artifact, so each outcome is predictable rather than up to a model's mood.
 
 ### B0. Seed a toy constitution, a passing audit, and one task
+
 Run this whole block in the shell:
+
 ```
 cat > state/spec.md <<'EOF'
 # Spec
@@ -87,14 +95,17 @@ EOF
 
 scripts/new-task.py "write the guild motto"
 ```
+
 Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields: `clauses: [C-1]`, `executor: worker-standard`, `executor_model: sonnet`, `checker: checker-deterministic`, `check_method: scripts/check-build.sh "grep -q GUILD guild-motto.txt"`, `status: assigned`. In the `## Spec excerpt` section write: `Write guild-motto.txt containing exactly one line: GUILD ENDURES`.
 
 ### B1. Happy path to complete
+
 - Session: `> Dispatch the executor for T-001. Its Task-ID is T-001.`
 - Expect: worker-standard runs, writes `guild-motto.txt`, sets `artifacts` and `status: needs-check`, drops a note in `state/notes/T-001.md`. `subagent-return` lets it finish because the state file proves the protocol. The stop gate then blocks the turn until the orchestrator sets `T-001` to `checking` and dispatches `checker-deterministic`. The checker runs the grep, it passes, and a PASS verdict lands at `state/verdicts/T-001-sonnet-r0.md`. The orchestrator sets `T-001` complete.
 - Shell check: `cat state/verdicts/T-001-sonnet-r0.md` shows `verdict: PASS`.
 
 ### B2. A forced FAIL and rework
+
 - Shell: reset the task and break the artifact so the check must fail.
   ```
   printf 'the guild endures\n' > guild-motto.txt   # lowercase: violates C-1
@@ -104,6 +115,7 @@ Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields
 - Expect: the checker runs the grep, it fails (exit 1), and it writes `state/verdicts/T-001-sonnet-r0.md` as `verdict: FAIL` with a `## Diagnosis` naming the file and C-1. The orchestrator copies that diagnosis into the task's `## Rework diagnosis`, sets `status: assigned`, `retries: 1`, and re-dispatches the worker, which uppercases the file. A re-check passes.
 
 ### B3. A forced dispute and ruling
+
 - Shell: make the artifact actually correct, then plant a wrong FAIL and a dispute, as if a checker misread valid work.
   ```
   printf 'GUILD ENDURES\n' > guild-motto.txt
@@ -135,12 +147,14 @@ Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields
 - Expect: the orchestrator reads `guild-motto.txt` itself, confirms it satisfies C-1, appends an `## Orchestrator ruling` to the dispute upholding the worker, sets the dispute `status: worker-upheld`, and marks `T-001` complete. It does not just take the worker's word; it checks the artifact.
 
 ### B4. A forced escalation
+
 - Shell / editor: set `T-001` to `status: rework`, `executor_model: sonnet`, `retries: 2` (the sonnet tier's budget is spent).
 - Session: `> T-001 has exhausted its retry budget at the sonnet tier. Proceed per the retry ladder.`
 - Expect: the orchestrator escalates. It sets `executor_model: opus`, resets `retries: 0`, appends an entry to `escalations`, and writes a line to `state/log/escalations.log`. When it re-dispatches, it passes `model: opus` so the dispatch matches the new tier; `dispatch-guard` would block a sonnet dispatch here.
 - Shell check: `cat state/log/escalations.log` shows the sonnet-to-opus bump.
 
 ### B5. Retrospective
+
 - Session: `> Run /retrospective for this job.`
 - Expect: `summarize.py` reports the FAIL you forced as a catch, the escalation, and the upheld dispute. The write-up names them.
 - Shell cleanup:

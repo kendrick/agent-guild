@@ -13,4 +13,7 @@ scripts/package-lock.json
 # The audition log is the one piece of state we DO track—it accumulates across jobs.
 !.claude/skills/audition/results/results.jsonl
 
+__pycache__/
+*.pyc
+
 .DS_Store

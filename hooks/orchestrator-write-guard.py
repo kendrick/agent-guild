@@ -2,7 +2,7 @@
 """PreToolUse(Write|Edit|MultiEdit): keep the orchestrator out of deliverables.
 
 The main session is the boss. It writes specs, constitutions, task files, and
-dispute rulings — all under state/ — and dispatches workers for everything
+dispute rulings—all under state/—and dispatches workers for everything
 else. This turns that contract from prompt language into mechanism: while a job
 is active, a main-session write outside state/ is blocked with an instruction,
 not a bare denial.
@@ -29,7 +29,7 @@ def main(data):
     ti = data.get("tool_input", {}) or {}
     fp = ti.get("file_path") or ti.get("path") or ""
     if not fp:
-        # Nothing to check (unexpected shape) — don't invent a target.
+        # Nothing to check (unexpected shape)—don't invent a target.
         return 0
 
     abs_fp = fp if os.path.isabs(fp) else os.path.join(_lib.project_dir(), fp)
@@ -43,7 +43,7 @@ def main(data):
     return _lib.block(
         f"Orchestrator contract: you don't write deliverables. Blocked write to "
         f"{rel}.\n"
-        "A job is active, so the boss orchestrates — it does not build. To make "
+        "A job is active, so the boss orchestrates—it does not build. To make "
         "this change:\n"
         "  - create a task (scripts/new-task.py) and dispatch a worker to write "
         "it, or\n"

@@ -13,7 +13,7 @@ dispatch, this blocks unless:
     a forgotten escalation;
   - a worker's dispatched model matches the task's current tier, catching a
     forgotten model override after an escalation;
-  - for workers, the constitution has a PASS audit — verification reaches the
+  - for workers, the constitution has a PASS audit—verification reaches the
     orchestrator's own work before any worker builds against it.
 
 Every passing dispatch appends one line to state/log/dispatches.log.
@@ -106,7 +106,7 @@ def main(data):
     if executor and agent != executor:
         return _lib.block(
             f"{tid} names executor '{executor}', but this dispatch is to "
-            f"'{agent}'. Escalation bumps the model, not the agent — dispatch "
+            f"'{agent}'. Escalation bumps the model, not the agent—dispatch "
             f"'{executor}' with a model override, or fix the task's executor."
         )
 
@@ -129,7 +129,7 @@ def main(data):
         if tier == "fable":
             return _lib.block(
                 f"{tid} has exhausted the top (fable) tier. Do not dispatch "
-                "further — surface this to the user, or enrich the spec and "
+                "further—surface this to the user, or enrich the spec and "
                 "reset. The ladder has no rung above fable."
             )
         return _lib.block(

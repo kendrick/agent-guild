@@ -4,12 +4,12 @@
 SubagentStop can validate that a worker followed protocol, but a hook can't
 dispatch the checker that has to run next. This gate is what compels it: while
 any task is non-terminal, the main session is blocked from stopping and handed
-the exact next move for each open task. That closes the loop — worker returns,
+the exact next move for each open task. That closes the loop—worker returns,
 gate refuses to let the turn end until the checker is dispatched and its verdict
 acted on.
 
 Livelock guard: if the same open-task state blocks three times in a row while
-stop_hook_active is set, the gate gives up loudly — it writes state/STALLED.md
+stop_hook_active is set, the gate gives up loudly—it writes state/STALLED.md
 naming the stuck tasks and lets the turn end, rather than spinning forever. Any
 real progress (a status or retry change) resets the counter.
 """
@@ -64,7 +64,7 @@ def _save_state(digest, count):
 def main(data):
     tasks = _lib.open_tasks()
     if not tasks:
-        # Clean slate — clear any stale block counter and let the turn end.
+        # Clean slate—clear any stale block counter and let the turn end.
         _save_state(None, 0)
         return 0
 
@@ -103,7 +103,7 @@ def main(data):
 
     body = "\n".join(_next_move(*t) for t in tasks)
     return _lib.block(
-        f"{len(tasks)} task(s) still open — the turn can't end yet. Next move "
+        f"{len(tasks)} task(s) still open—the turn can't end yet. Next move "
         "for each:\n"
         f"{body}\n"
         "Do the next move, then stop again. If you need to hand control back to "

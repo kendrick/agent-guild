@@ -14,7 +14,7 @@ subagent keeps working.
 
 Identifying which task finished means reading the subagent's transcript for its
 Task-ID/Audit-ID. That parsing depends on Claude Code's transcript format, which
-is not a stable contract — so any failure to read it, or a missing id, is the
+is not a stable contract—so any failure to read it, or a missing id, is the
 loud fail-closed path (HOOK ERROR, exit 2), never a quiet pass. This is the kit's
 most version-fragile point; the fixture tests pin the expected shape.
 """
@@ -77,7 +77,7 @@ def main(data):
             "identify which task this subagent ran"
         )
 
-    # Raises on unreadable / unparseable / no-id — the fail-closed path.
+    # Raises on unreadable / unparseable / no-id—the fail-closed path.
     ident = _lib.id_from_transcript(transcript)
 
     if agent == "auditor":

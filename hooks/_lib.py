@@ -4,13 +4,13 @@ Design rules every hook here obeys:
 
   Fail loud, fail closed. Any unexpected error exits 2 (block) with a HOOK
   ERROR banner, never a silent exit 0. A gate that can't run is a gate that
-  blocks — the alternative is verification silently disappearing, which is the
+  blocks—the alternative is verification silently disappearing, which is the
   one failure this kit exists to prevent.
 
   No-job gate. With no open task, every hook exits 0 immediately, so plain Q&A
   sessions and work on the kit itself run without friction.
 
-  Escape hatch. If state/PAUSED exists, every hook exits 0 — checked before any
+  Escape hatch. If state/PAUSED exists, every hook exits 0—checked before any
   logic that could throw, so a genuinely broken hook is still escapable.
 
 Stdlib only: this runs wherever python3 does, with no install step, so the kit
@@ -181,7 +181,7 @@ def id_from_transcript(transcript_path):
     """Extract the Task-ID / Audit-ID a subagent was dispatched with, by
     reading its transcript. FRAGILE: depends on Claude Code's transcript JSONL
     shape, which is not a stable public contract. Any failure to read, parse,
-    or find an id raises — the caller turns that into a loud fail-closed block.
+    or find an id raises—the caller turns that into a loud fail-closed block.
     The hook fixture tests pin the expected format; update them here if a CC
     release changes it."""
     with open(transcript_path, encoding="utf-8") as f:

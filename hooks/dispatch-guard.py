@@ -46,6 +46,14 @@ def main(data):
     prompt = ti.get("prompt", "") or ""
     override = (ti.get("model") or "").strip().lower()
 
+    # Audition path: a tryout runs outside the lifecycle—no task file, no tier,
+    # no CON-audit precondition. An Audition-ID is enough to log and pass; the
+    # battery's score.py judges the output, not this gate.
+    aud = _lib.AUDITION_ID_RE.search(prompt)
+    if aud:
+        _log(agent, aud.group(1), override or _lib.DEFAULT_MODEL[agent])
+        return 0
+
     # 1. The dispatch must name what it's working on.
     tm = _lib.TASK_ID_RE.search(prompt)
     am = _lib.AUDIT_ID_RE.search(prompt)

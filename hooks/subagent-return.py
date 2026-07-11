@@ -80,6 +80,11 @@ def main(data):
     # Raises on unreadable / unparseable / no-id—the fail-closed path.
     ident = _lib.id_from_transcript(transcript)
 
+    # Audition runs have no task file and no verdict; the battery scorer judges
+    # them, not this gate. Nothing to validate, so let the subagent finish.
+    if re.match(r"^A-\d+$", ident):
+        return 0
+
     if agent == "auditor":
         vpath = _latest_audit_verdict(ident)
         if vpath is None:

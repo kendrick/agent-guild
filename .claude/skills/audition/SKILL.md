@@ -15,7 +15,7 @@ Read [battery/v1/manifest.md](battery/v1/manifest.md): four tasks, each with a c
 
 ## 2. Run each task as the candidate
 
-For each task A-001 through A-004, dispatch the matching guild agent with the Agent tool's `model` override set to the candidate. Give it only the task prompt. Save its output to the filename the manifest names, under one directory for this run (for example `state/audition/<model>/`). Record the wall-clock time each task takes.
+For each task A-001 through A-004, dispatch the matching guild agent with the Agent tool's `model` override set to the candidate. Give it the task prompt plus one `Audition-ID:` line carrying the task's id (A-001 gets `Audition-ID: A-001`): the dispatch and return gates read that line to recognize a tryout and pass it through, since an audition has no task file, tier, or verdict for them to check. Save its output to the filename the manifest names, under one directory for this run (for example `state/audition/<model>/`). Record the wall-clock time each task takes.
 
 Done when all four outputs exist in the run directory.
 

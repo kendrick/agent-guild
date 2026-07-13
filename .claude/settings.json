@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/stop-gate.py\"",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.agent-guild/hooks/stop-gate.py\"",
             "timeout": 30
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/subagent-return.py\"",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.agent-guild/hooks/subagent-return.py\"",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/dispatch-guard.py\"",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.agent-guild/hooks/dispatch-guard.py\"",
             "timeout": 30
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/orchestrator-write-guard.py\"",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.agent-guild/hooks/orchestrator-write-guard.py\"",
             "timeout": 30
           }
         ]

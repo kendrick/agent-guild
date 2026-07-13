@@ -13,7 +13,7 @@ drop it. "The site should feel welcoming" is not a clause. "Every page's
 <h1> matches the nav label that links to it" is.
 
 CHECK METHOD is one of:
-  - a script: scripts/check-foo.sh <args>  (exit 0 = pass; deterministic)
+  - a script: .agent-guild/scripts/check-foo.sh <args>  (exit 0 = pass; deterministic)
   - a judgment call: "checker-judgment: <one-line rubric the checker applies>"
 Deterministic checks route to checker-deterministic (haiku); judgment checks
 route to checker-judgment (opus).
@@ -23,7 +23,7 @@ route to checker-judgment (opus).
 
 ### C-1: <short name>
 - **text**: <the standard, stated so a violation is recognizable>
-- **check**: scripts/check-foo.sh <args>   <!-- or: checker-judgment: <rubric> -->
+- **check**: .agent-guild/scripts/check-foo.sh <args>   <!-- or: checker-judgment: <rubric> -->
 - **severity**: blocker   <!-- blocker | major | minor -->
 - **failing example**: <one concrete artifact that would violate this>
 
@@ -36,8 +36,8 @@ route to checker-judgment (opus).
 ## Protected content
 
 <!-- If any author words must ship verbatim, list the manifest and point every
-relevant clause's check at scripts/check-protected.py. -->
-- manifest: templates/protected-passages.md   <!-- or a job-local copy -->
+relevant clause's check at .agent-guild/scripts/check-protected.py. -->
+- manifest: .agent-guild/templates/protected-passages.md   <!-- or a job-local copy -->
 
 ## Non-goals
 

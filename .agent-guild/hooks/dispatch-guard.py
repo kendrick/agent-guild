@@ -16,7 +16,7 @@ dispatch, this blocks unless:
   - for workers, the constitution has a PASS audit—verification reaches the
     orchestrator's own work before any worker builds against it.
 
-Every passing dispatch appends one line to state/log/dispatches.log.
+Every passing dispatch appends one line to .agent-guild/state/log/dispatches.log.
 """
 import os
 import sys
@@ -79,7 +79,7 @@ def main(data):
     task = _lib.read_task(tid)
     if task is None:
         return _lib.block(
-            f"Dispatch to {agent} references {tid}, but state/tasks/{tid}.md "
+            f"Dispatch to {agent} references {tid}, but .agent-guild/state/tasks/{tid}.md "
             "does not exist. Create the task before dispatching."
         )
 
@@ -144,7 +144,7 @@ def main(data):
             f"{tid} has spent its retry budget at tier '{tier}' "
             f"(retries {retries} > max {max_retries}). Escalate: bump "
             "executor_model to the next tier, reset retries to 0, append an "
-            "entry to `escalations`, and log it to state/log/escalations.log."
+            "entry to `escalations`, and log it to .agent-guild/state/log/escalations.log."
         )
 
     _log(agent, tid, effective_model)

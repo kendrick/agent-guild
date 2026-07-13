@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tally a guild run from state/ for the retrospective. Stdlib only.
+"""Tally a guild run from .agent-guild/state/ for the retrospective. Stdlib only.
 
     summarize.py [--project DIR]
 
@@ -22,9 +22,9 @@ def main():
     ap.add_argument("--project", default=os.environ.get("CLAUDE_PROJECT_DIR"))
     args = ap.parse_args()
     root = args.project or os.getcwd()
-    state = os.path.join(root, "state")
+    state = os.path.join(root, ".agent-guild", "state")
     if not os.path.isdir(state):
-        sys.stderr.write(f"no state/ under {root}\n")
+        sys.stderr.write(f"no .agent-guild/state/ under {root}\n")
         return 3
 
     def readdir(sub):
@@ -84,7 +84,7 @@ def main():
     if counts["ERROR"]:
         print(f"check-infra debt: {counts['ERROR']} ERROR verdict(s)—checks that could not run")
     if stalled:
-        print("STALL: state/STALLED.md present—the stop gate gave up on a stuck loop")
+        print("STALL: .agent-guild/state/STALLED.md present—the stop gate gave up on a stuck loop")
 
     strained = [r for r in task_rows if (r[2] not in ("", "0")) or r[3]]
     if strained:

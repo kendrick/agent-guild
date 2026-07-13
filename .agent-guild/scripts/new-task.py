@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Allocate the next task id atomically and stamp templates/task.md into it.
+"""Allocate the next task id atomically and stamp .agent-guild/templates/task.md into it.
 
 Used by /decompose. Safe under parallel decomposition: the id is claimed with
 open(..., 'x'), so two concurrent callers can never grab the same T-NNN—the
 loser gets FileExistsError and retries the next number.
 
 Usage:
-    scripts/new-task.py "Task title here"
+    .agent-guild/scripts/new-task.py "Task title here"
 Prints the path of the created task file on stdout.
 
 Exit codes: 0 created; 3 usage/infra error (no title, template missing).

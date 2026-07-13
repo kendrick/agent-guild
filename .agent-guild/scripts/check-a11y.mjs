@@ -4,11 +4,11 @@
 // the sighted author, invisible to a real user" bug—checking one theme isn't
 // enough.
 //
-//   scripts/check-a11y.mjs <url> [--wait <selector>]
+//   .agent-guild/scripts/check-a11y.mjs <url> [--wait <selector>]
 //
 // Deps (playwright + @axe-core/playwright) self-bootstrap on first run so the
 // kit stays copy-in portable: no global install, everything lands under
-// scripts/node_modules (gitignored). First run needs network and a couple of
+// .agent-guild/scripts/node_modules (gitignored). First run needs network and a couple of
 // minutes; after that it's fast.
 //
 // Exit codes: 0 clean in both themes; 1 violations found (clause FAIL);

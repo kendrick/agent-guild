@@ -8,12 +8,12 @@ Two terminals help: one running `claude` in the repo root (the **session**), one
 
 1. Start `claude` in the repo root. On a freshly copied-in kit, Claude Code asks you to trust the workspace before it will run the project's hooks. **Accept it.** Until you do, the hooks don't fire, and a session with no gates is not proof of anything, it just looks like it passed.
 2. Type `/hooks`. Expect four registered: `stop-gate` (Stop), `subagent-return` (SubagentStop), `dispatch-guard` and `orchestrator-write-guard` (PreToolUse).
-3. In the shell: `python3 hooks/test_hooks.py`. Expect `44 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
+3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `44 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
 
 Start from a clean slate in the shell:
 
 ```
-rm -f state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.md state/log/* state/PAUSED state/STALLED.md
+rm -f .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/*.md .agent-guild/state/disputes/*.md .agent-guild/state/notes/*.md .agent-guild/state/log/* .agent-guild/state/PAUSED .agent-guild/state/STALLED.md
 ```
 
 ## Part A: The Four Hook Gates
@@ -32,9 +32,9 @@ rm -f state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.m
 
 - Shell: seed one open task.
   ```
-  scripts/new-task.py "smoke gate probe"
+  .agent-guild/scripts/new-task.py "smoke gate probe"
   ```
-  (This creates `state/tasks/T-001.md` at status `pending`, which counts as open.)
+  (This creates `.agent-guild/state/tasks/T-001.md` at status `pending`, which counts as open.)
 - Session: `> How many open tasks are there right now?`
 - Expect: the session cannot end the turn. `stop-gate` blocks and hands back the next move for `T-001` (assign and dispatch its executor). The session relays that instead of stopping clean.
 
@@ -45,13 +45,13 @@ rm -f state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.m
 
 ### A5. PAUSED lifts every gate
 
-- Shell: `touch state/PAUSED`
+- Shell: `touch .agent-guild/state/PAUSED`
 - Session: `> Now add the line "smoke test" to the top of README.md.`
-- Expect: the edit goes through, and the turn ends without the stop gate blocking, even though `T-001` is still open. Every hook stands down while `state/PAUSED` exists.
+- Expect: the edit goes through, and the turn ends without the stop gate blocking, even though `T-001` is still open. Every hook stands down while `.agent-guild/state/PAUSED` exists.
 - Shell cleanup: undo the README edit and clear the probe state.
   ```
   git checkout README.md
-  rm -f state/PAUSED state/tasks/T-001.md state/log/*
+  rm -f .agent-guild/state/PAUSED .agent-guild/state/tasks/T-001.md .agent-guild/state/log/*
   ```
 
 ## Part B: The Lifecycle Loop
@@ -63,23 +63,23 @@ This drives a tiny real job so you watch a FAIL, a dispute, and an escalation ha
 Run this whole block in the shell:
 
 ```
-cat > state/spec.md <<'EOF'
+cat > .agent-guild/state/spec.md <<'EOF'
 # Spec
 Produce guild-motto.txt: a single line, all uppercase, containing the word GUILD.
 EOF
 
-cat > state/constitution.md <<'EOF'
+cat > .agent-guild/state/constitution.md <<'EOF'
 # Constitution: smoke
 ## Clauses
 ### C-1: motto shouts the guild
 - text: guild-motto.txt contains the exact uppercase word GUILD.
-- check: scripts/check-build.sh "grep -q GUILD guild-motto.txt"
+- check: .agent-guild/scripts/check-build.sh "grep -q GUILD guild-motto.txt"
 - severity: blocker
 - failing example: a file reading "the guild endures" (lowercase).
 EOF
 
 # A passing constitution audit, so dispatch-guard unblocks workers.
-cat > state/verdicts/CON-audit-r0.md <<'EOF'
+cat > .agent-guild/state/verdicts/CON-audit-r0.md <<'EOF'
 ---
 task: CON-audit
 tier: orchestrator
@@ -93,16 +93,16 @@ checked_at: 2026-01-01T00:00:00Z
 | C-1 | falsifiable + scripted | has a failing example and a grep check | falsifiable | falsifiable | PASS |
 EOF
 
-scripts/new-task.py "write the guild motto"
+.agent-guild/scripts/new-task.py "write the guild motto"
 ```
 
-Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields: `clauses: [C-1]`, `executor: worker-standard`, `executor_model: sonnet`, `checker: checker-deterministic`, `check_method: scripts/check-build.sh "grep -q GUILD guild-motto.txt"`, `status: assigned`. In the `## Spec excerpt` section write: `Write guild-motto.txt containing exactly one line: GUILD ENDURES`.
+Then open `.agent-guild/state/tasks/T-001.md` in your editor and set these frontmatter fields: `clauses: [C-1]`, `executor: worker-standard`, `executor_model: sonnet`, `checker: checker-deterministic`, `check_method: .agent-guild/scripts/check-build.sh "grep -q GUILD guild-motto.txt"`, `status: assigned`. In the `## Spec excerpt` section write: `Write guild-motto.txt containing exactly one line: GUILD ENDURES`.
 
 ### B1. Happy path to complete
 
 - Session: `> Dispatch the executor for T-001. Its Task-ID is T-001.`
-- Expect: worker-standard runs, writes `guild-motto.txt`, sets `artifacts` and `status: needs-check`, drops a note in `state/notes/T-001.md`. `subagent-return` lets it finish because the state file proves the protocol. The stop gate then blocks the turn until the orchestrator sets `T-001` to `checking` and dispatches `checker-deterministic`. The checker runs the grep, it passes, and a PASS verdict lands at `state/verdicts/T-001-sonnet-r0.md`. The orchestrator sets `T-001` complete.
-- Shell check: `cat state/verdicts/T-001-sonnet-r0.md` shows `verdict: PASS`.
+- Expect: worker-standard runs, writes `guild-motto.txt`, sets `artifacts` and `status: needs-check`, drops a note in `.agent-guild/state/notes/T-001.md`. `subagent-return` lets it finish because the state file proves the protocol. The stop gate then blocks the turn until the orchestrator sets `T-001` to `checking` and dispatches `checker-deterministic`. The checker runs the grep, it passes, and a PASS verdict lands at `.agent-guild/state/verdicts/T-001-sonnet-r0.md`. The orchestrator sets `T-001` complete.
+- Shell check: `cat .agent-guild/state/verdicts/T-001-sonnet-r0.md` shows `verdict: PASS`.
 
 ### B2. A forced FAIL and rework
 
@@ -112,14 +112,14 @@ Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields
   ```
   In the editor set `T-001` back to `status: checking`, `retries: 0`.
 - Session: `> Dispatch checker-deterministic for T-001.`
-- Expect: the checker runs the grep, it fails (exit 1), and it writes `state/verdicts/T-001-sonnet-r0.md` as `verdict: FAIL` with a `## Diagnosis` naming the file and C-1. The orchestrator copies that diagnosis into the task's `## Rework diagnosis`, sets `status: assigned`, `retries: 1`, and re-dispatches the worker, which uppercases the file. A re-check passes.
+- Expect: the checker runs the grep, it fails (exit 1), and it writes `.agent-guild/state/verdicts/T-001-sonnet-r0.md` as `verdict: FAIL` with a `## Diagnosis` naming the file and C-1. The orchestrator copies that diagnosis into the task's `## Rework diagnosis`, sets `status: assigned`, `retries: 1`, and re-dispatches the worker, which uppercases the file. A re-check passes.
 
 ### B3. A forced dispute and ruling
 
 - Shell: make the artifact actually correct, then plant a wrong FAIL and a dispute, as if a checker misread valid work.
   ```
   printf 'GUILD ENDURES\n' > guild-motto.txt
-  cat > state/verdicts/T-001-sonnet-r1.md <<'EOF'
+  cat > .agent-guild/state/verdicts/T-001-sonnet-r1.md <<'EOF'
   ---
   task: T-001
   tier: sonnet
@@ -130,10 +130,10 @@ Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields
   ## Diagnosis
   - file: guild-motto.txt:1 / clause C-1 / expected GUILD / actual "not found"
   EOF
-  cat > state/disputes/T-001-sonnet-r1.md <<'EOF'
+  cat > .agent-guild/state/disputes/T-001-sonnet-r1.md <<'EOF'
   ---
   task: T-001
-  verdict_ref: state/verdicts/T-001-sonnet-r1.md
+  verdict_ref: .agent-guild/state/verdicts/T-001-sonnet-r1.md
   filed_by: worker-standard
   claim: The file already contains GUILD; the check was misread.
   status: open
@@ -150,8 +150,8 @@ Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields
 
 - Shell / editor: set `T-001` to `status: rework`, `executor_model: sonnet`, `retries: 2` (the sonnet tier's budget is spent).
 - Session: `> T-001 has exhausted its retry budget at the sonnet tier. Proceed per the retry ladder.`
-- Expect: the orchestrator escalates. It sets `executor_model: opus`, resets `retries: 0`, appends an entry to `escalations`, and writes a line to `state/log/escalations.log`. When it re-dispatches, it passes `model: opus` so the dispatch matches the new tier; `dispatch-guard` would block a sonnet dispatch here.
-- Shell check: `cat state/log/escalations.log` shows the sonnet-to-opus bump.
+- Expect: the orchestrator escalates. It sets `executor_model: opus`, resets `retries: 0`, appends an entry to `escalations`, and writes a line to `.agent-guild/state/log/escalations.log`. When it re-dispatches, it passes `model: opus` so the dispatch matches the new tier; `dispatch-guard` would block a sonnet dispatch here.
+- Shell check: `cat .agent-guild/state/log/escalations.log` shows the sonnet-to-opus bump.
 
 ### B5. Retrospective
 
@@ -159,14 +159,14 @@ Then open `state/tasks/T-001.md` in your editor and set these frontmatter fields
 - Expect: `summarize.py` reports the FAIL you forced as a catch, the escalation, and the upheld dispute. The write-up names them.
 - Shell cleanup:
   ```
-  rm -f guild-motto.txt state/tasks/T-*.md state/verdicts/*.md state/disputes/*.md state/notes/*.md state/log/* state/spec.md state/constitution.md
+  rm -f guild-motto.txt .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/*.md .agent-guild/state/disputes/*.md .agent-guild/state/notes/*.md .agent-guild/state/log/* .agent-guild/state/spec.md .agent-guild/state/constitution.md
   ```
 
 ## Part C: Two Things That Look Like Breakage But Aren't
 
-- **The first accessibility check is slow and needs the network.** `scripts/check-a11y.mjs` installs Playwright and axe into `scripts/node_modules` on its first run, which takes a couple of minutes and a connection. That's expected, once. Run offline, it can't bootstrap and exits 3, which a checker reports as an ERROR verdict (the check couldn't run), never a PASS or a clause FAIL.
-- **If a session ever ends with tasks still open, look for `state/STALLED.md`.** The stop gate writes it when the same unfinished state blocked it three times running, then stands down so you aren't stuck. It names the tasks that jammed: a checker owing a verdict, a dispute needing a ruling, or a task that should be abandoned. Resolve by hand and delete the file. A fixture in `hooks/test_hooks.py` already exercises this path, so you don't need to provoke it live.
+- **The first accessibility check is slow and needs the network.** `.agent-guild/scripts/check-a11y.mjs` installs Playwright and axe into `.agent-guild/scripts/node_modules` on its first run, which takes a couple of minutes and a connection. That's expected, once. Run offline, it can't bootstrap and exits 3, which a checker reports as an ERROR verdict (the check couldn't run), never a PASS or a clause FAIL.
+- **If a session ever ends with tasks still open, look for `.agent-guild/state/STALLED.md`.** The stop gate writes it when the same unfinished state blocked it three times running, then stands down so you aren't stuck. It names the tasks that jammed: a checker owing a verdict, a dispute needing a ruling, or a task that should be abandoned. Resolve by hand and delete the file. A fixture in `.agent-guild/hooks/test_hooks.py` already exercises this path, so you don't need to provoke it live.
 
 ## Fresh-Copy Portability
 
-To confirm the kit travels: copy `CLAUDE.md .claude/ hooks/ scripts/ templates/` into a throwaway project, add `state/` to that project's `.gitignore`, create the `state/` subdirs, start `claude` there, and rerun Part A. The one new thing you'll see is Claude Code's trust prompt for the project's hooks on first launch. Accept it. That prompt is the kit working as designed, not a fault.
+To confirm the kit travels: copy `.claude/` and `.agent-guild/` into a throwaway project, add the `@.agent-guild/CLAUDE.md` import line to a root `CLAUDE.md` there, add `.agent-guild/state/` to that project's `.gitignore`, create the `.agent-guild/state/` subdirs, start `claude` there, and rerun Part A. The one new thing you'll see is Claude Code's trust prompt for the project's hooks on first launch. Accept it. That prompt is the kit working as designed, not a fault.

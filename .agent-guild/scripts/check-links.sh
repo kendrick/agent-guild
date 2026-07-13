@@ -3,7 +3,7 @@
 # don't resolve to a 2xx/3xx. Catches link rot and hallucinated citations —
 # a worker can claim a source exists; this proves it.
 #
-#   scripts/check-links.sh <file> [file...]
+#   .agent-guild/scripts/check-links.sh <file> [file...]
 #
 # Exit codes: 0 all reachable; 1 one or more dead links; 3 usage/infra error.
 set -euo pipefail

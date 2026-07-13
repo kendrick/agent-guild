@@ -5,7 +5,7 @@
 # Host projects build differently, so the command is an argument, not baked in.
 # A clause names its own: e.g. `check-build.sh "npm run build"`.
 #
-#   scripts/check-build.sh "<command>"
+#   .agent-guild/scripts/check-build.sh "<command>"
 #
 # Exit codes: passthrough from the command (0 pass, non-zero = build failure,
 # surfaced to the checker as clause FAIL); 3 if no command is given, so a

@@ -2,9 +2,9 @@
 """PreToolUse(Write|Edit|MultiEdit): keep the orchestrator out of deliverables.
 
 The main session is the boss. It writes specs, constitutions, task files, and
-dispute rulings—all under state/—and dispatches workers for everything
+dispute rulings—all under .agent-guild/state/—and dispatches workers for everything
 else. This turns that contract from prompt language into mechanism: while a job
-is active, a main-session write outside state/ is blocked with an instruction,
+is active, a main-session write outside .agent-guild/state/ is blocked with an instruction,
 not a bare denial.
 
 Parent hooks do not fire for tool calls made inside subagents (a verified Claude
@@ -45,11 +45,11 @@ def main(data):
         f"{rel}.\n"
         "A job is active, so the boss orchestrates—it does not build. To make "
         "this change:\n"
-        "  - create a task (scripts/new-task.py) and dispatch a worker to write "
+        "  - create a task (.agent-guild/scripts/new-task.py) and dispatch a worker to write "
         "it, or\n"
-        "  - if this really is orchestration state, put it under state/, or\n"
+        "  - if this really is orchestration state, put it under .agent-guild/state/, or\n"
         "  - if you genuinely must edit it yourself, the user can `touch "
-        "state/PAUSED` to lift every gate."
+        ".agent-guild/state/PAUSED` to lift every gate."
     )
 
 

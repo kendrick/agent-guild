@@ -19,7 +19,7 @@ Recompute a hash after editing a passage (paste the text on stdin, end with
 Ctrl-D):
   python3 -c 'import sys,hashlib; print(hashlib.sha256(sys.stdin.read().rstrip("\n").encode()).hexdigest())'
 Or let the checker regenerate the manifest from live source with:
-  scripts/check-protected.py <manifest> --rehash
+  .agent-guild/scripts/check-protected.py <manifest> --rehash
 -->
 
 ## PP-1

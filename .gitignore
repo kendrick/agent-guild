@@ -1,14 +1,14 @@
 # Run state is a per-job message bus, never committed. Keep the dirs, drop the
-# contents. The !state/**/ line re-includes directories so the .gitkeep
+# contents. The !.agent-guild/state/**/ line re-includes directories so the .gitkeep
 # negations below can take effect (git won't re-include a file whose parent
 # dir is still excluded).
-state/**
-!state/**/
-!state/**/.gitkeep
+.agent-guild/state/**
+!.agent-guild/state/**/
+!.agent-guild/state/**/.gitkeep
 
 # check-a11y self-bootstraps these on first run; they're heavy and host-specific.
-scripts/node_modules/
-scripts/package-lock.json
+.agent-guild/scripts/node_modules/
+.agent-guild/scripts/package-lock.json
 
 # The audition log is the one piece of state we DO track—it accumulates across jobs.
 !.claude/skills/audition/results/results.jsonl

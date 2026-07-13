@@ -1,11 +1,11 @@
 ---
 name: retrospective
-description: Phase 3 of a guild job. Read the run state and write state/retrospective.md—what the checkers caught, where retries and escalations clustered, how disputes were ruled. Use at the end of a job, or when reviewing how a build went and what the constitution missed.
+description: Phase 3 of a guild job. Read the run state and write .agent-guild/state/retrospective.md—what the checkers caught, where retries and escalations clustered, how disputes were ruled. Use at the end of a job, or when reviewing how a build went and what the constitution missed.
 ---
 
 # Write the retrospective
 
-A finished job leaves a full record in `state/`, and the point of reading it back is the **catches**: every FAIL a checker turned back is a defect that would have shipped without the paired check. The retrospective counts them, finds where the work strained, and feeds the next job a sharper constitution and routing table.
+A finished job leaves a full record in `.agent-guild/state/`, and the point of reading it back is the **catches**: every FAIL a checker turned back is a defect that would have shipped without the paired check. The retrospective counts them, finds where the work strained, and feeds the next job a sharper constitution and routing table.
 
 ## 1. Summarize the state
 
@@ -19,7 +19,7 @@ It reports verdict counts (PASS/FAIL/ERROR), FAILs grouped by checker, retries a
 
 ## 2. Write the report
 
-Write `state/retrospective.md` covering:
+Write `.agent-guild/state/retrospective.md` covering:
 - **Catches**: how many FAILs, and what they were—the defects verification stopped.
 - **Strain**: which tasks needed retries or escalated, and why. A task that climbed three tiers is a routing or spec problem, not just a hard task.
 - **Disputes**: each one and how it was ruled. A checker overruled more than once points at a weak clause.
@@ -28,4 +28,4 @@ Write `state/retrospective.md` covering:
 
 ## 3. Offer to archive
 
-The next job reuses `state/`. Offer to move this run's state to `state/archive/<date>/` (get the date from the environment) so the record survives without colliding with the next constitution and task set.
+The next job reuses `.agent-guild/state/`. Offer to move this run's state to `.agent-guild/state/archive/<date>/` (get the date from the environment) so the record survives without colliding with the next constitution and task set.

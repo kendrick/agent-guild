@@ -90,7 +90,7 @@ def main(data):
         if vpath is None:
             return _lib.block(
                 f"Auditor finished without writing a verdict for {ident}. Write "
-                f"state/verdicts/{ident}-r0.md (or the next round) with a "
+                f".agent-guild/state/verdicts/{ident}-r0.md (or the next round) with a "
                 "verdict of PASS/FAIL/ERROR before finishing."
             )
         ok, reason = _verdict_ok(vpath)
@@ -128,7 +128,7 @@ def main(data):
     if not ok:
         return _lib.block(
             f"Checker for {ident} isn't done: {reason}. Write the verdict at "
-            f"state/verdicts/{ident}-{tier}-r{retries}.md (tier + retries from "
+            f".agent-guild/state/verdicts/{ident}-{tier}-r{retries}.md (tier + retries from "
             "the task file), with PASS/FAIL/ERROR and, for a FAIL, a Diagnosis "
             "naming file, clause, and expected vs actual."
         )

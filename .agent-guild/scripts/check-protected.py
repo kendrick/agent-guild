@@ -6,7 +6,7 @@ substring of its `source` file AND that sha256(text) matches the declared hash.
 On drift, prints a character-level diff that calls out the usual silent
 corruptions: straight-for-curly quotes, hyphen-for-dash, space-for-nbsp.
 
-    scripts/check-protected.py <manifest> [--file PATH] [--rehash]
+    .agent-guild/scripts/check-protected.py <manifest> [--file PATH] [--rehash]
 
     --file PATH   only check passages whose `source` equals PATH
     --rehash      recompute each sha256 from the fenced text and rewrite the

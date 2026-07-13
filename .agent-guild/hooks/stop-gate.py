@@ -9,7 +9,7 @@ gate refuses to let the turn end until the checker is dispatched and its verdict
 acted on.
 
 Livelock guard: if the same open-task state blocks three times in a row while
-stop_hook_active is set, the gate gives up loudly—it writes state/STALLED.md
+stop_hook_active is set, the gate gives up loudly—it writes .agent-guild/state/STALLED.md
 naming the stuck tasks and lets the turn end, rather than spinning forever. Any
 real progress (a status or retry change) resets the counter.
 """
@@ -107,7 +107,7 @@ def main(data):
         "for each:\n"
         f"{body}\n"
         "Do the next move, then stop again. If you need to hand control back to "
-        "the user mid-job, the user can `touch state/PAUSED`."
+        "the user mid-job, the user can `touch .agent-guild/state/PAUSED`."
     )
 
 

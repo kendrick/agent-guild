@@ -1,13 +1,13 @@
 ---
 task: T-000
-verdict_ref: state/verdicts/T-000-sonnet-r1.md
+verdict_ref: .agent-guild/state/verdicts/T-000-sonnet-r1.md
 filed_by: worker-standard
 claim: One sentence—the verdict fails valid work because <reason>.
 status: open
 ---
 
 <!--
-FILENAME: state/disputes/<task>-<tier>-r<retries>.md, the same stem as the
+FILENAME: .agent-guild/state/disputes/<task>-<tier>-r<retries>.md, the same stem as the
 verdict you are disputing (e.g. T-001-sonnet-r1.md).
 
 A dispute is not an appeal for leniency. You are asserting the artifact ALREADY

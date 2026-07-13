@@ -8,7 +8,7 @@ checked_at: 2026-01-01T00:00:00Z
 ---
 
 <!--
-FILENAME: state/verdicts/<task>-<tier>-r<retries>.md  (e.g. T-001-sonnet-r1.md)
+FILENAME: .agent-guild/state/verdicts/<task>-<tier>-r<retries>.md  (e.g. T-001-sonnet-r1.md)
   Task verdicts embed tier + the task's `retries` value at check time, so a
   per-tier retry reset never overwrites an earlier tier's verdict.
 AUDIT verdicts use ids CON-audit-rN.md / DEC-audit-rN.md with tier: orchestrator.
@@ -25,7 +25,7 @@ verdict field:
 
 | clause | method               | evidence (command output / quoted artifact / fetched page) | expected | actual | result |
 | ------ | -------------------- | ---------------------------------------------------------- | -------- | ------ | ------ |
-| C-1    | scripts/check-foo.sh | `exit 0`                                                   | exit 0   | exit 0 | PASS   |
+| C-1    | .agent-guild/scripts/check-foo.sh | `exit 0`                                                   | exit 0   | exit 0 | PASS   |
 
 ## Diagnosis
 

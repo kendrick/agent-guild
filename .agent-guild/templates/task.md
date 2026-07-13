@@ -1,14 +1,14 @@
 ---
 id: T-000
 title: One-line task title
-spec: state/spec.md#section-anchor
+spec: .agent-guild/state/spec.md#section-anchor
 clauses: [C-1]
 executor: worker-standard
 executor_model: sonnet
 checker: checker-deterministic
 check_method: >-
   How this task is verified. Name each clause's check: a script invocation
-  (scripts/check-foo.sh <args>) or "checker-judgment: <one-line rubric>".
+  (.agent-guild/scripts/check-foo.sh <args>) or "checker-judgment: <one-line rubric>".
   Every clause in `clauses` must appear here.
 status: pending
 retries: 0

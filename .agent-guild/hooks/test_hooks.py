@@ -46,7 +46,7 @@ def check(label, cond, detail=""):
 def fresh_proj():
     d = tempfile.mkdtemp(prefix="ag-hooktest-")
     for sub in ("tasks", "verdicts", "disputes", "notes", "log"):
-        os.makedirs(os.path.join(d, "state", sub))
+        os.makedirs(os.path.join(d, ".agent-guild", "state", sub))
     return d
 
 
@@ -58,7 +58,7 @@ def write_task(proj, tid, **fields):
     arts = defaults.pop("artifacts")
     fm = [f"{k}: {v}" for k, v in defaults.items()]
     body = "---\n" + f"id: {tid}\n" + "\n".join(fm) + f"\nartifacts: {arts}\n---\n"
-    with open(os.path.join(proj, "state", "tasks", f"{tid}.md"), "w") as f:
+    with open(os.path.join(proj, ".agent-guild", "state", "tasks", f"{tid}.md"), "w") as f:
         f.write(body)
 
 
@@ -68,7 +68,7 @@ def write_verdict(proj, name, verdict="PASS", diagnosis=False):
         body += "## Diagnosis\n\n- file: x.html:1\n  clause: C-1\n"
     else:
         body += "## Diagnosis\n\n<!-- placeholder only -->\n"
-    with open(os.path.join(proj, "state", "verdicts", name), "w") as f:
+    with open(os.path.join(proj, ".agent-guild", "state", "verdicts", name), "w") as f:
         f.write(body)
 
 
@@ -77,7 +77,7 @@ def con_pass(proj):
 
 
 def transcript(proj, text, role="user", content_list=False):
-    path = os.path.join(proj, "state", "log", "tx.jsonl")
+    path = os.path.join(proj, ".agent-guild", "state", "log", "tx.jsonl")
     if content_list:
         content = [{"type": "text", "text": text}]
     else:
@@ -101,10 +101,10 @@ check("open task → exit 2", rc == 2, f"rc={rc}")
 check("open task → names next move (checker)", "checker" in err, err)
 
 # PAUSED overrides
-open(os.path.join(proj, "state", "PAUSED"), "w").close()
+open(os.path.join(proj, ".agent-guild", "state", "PAUSED"), "w").close()
 rc, out, err = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
 check("PAUSED + open task → exit 0", rc == 0, f"rc={rc}")
-os.remove(os.path.join(proj, "state", "PAUSED"))
+os.remove(os.path.join(proj, ".agent-guild", "state", "PAUSED"))
 
 # all complete
 write_task(proj, "T-001", status="complete")
@@ -117,14 +117,14 @@ write_task(proj, "T-001", status="rework", retries=1)
 rc1, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
 rc2, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 rc3, _, e3 = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
-stalled = os.path.exists(os.path.join(proj, "state", "STALLED.md"))
+stalled = os.path.exists(os.path.join(proj, ".agent-guild", "state", "STALLED.md"))
 check("livelock strikes 1,2 block", rc1 == 2 and rc2 == 2, f"{rc1},{rc2}")
 check("livelock strike 3 → exit 0", rc3 == 0, f"rc={rc3}")
 check("livelock strike 3 → STALLED.md written", stalled)
 
 # malformed task file → treated as open (fail closed)
 proj = fresh_proj()
-with open(os.path.join(proj, "state", "tasks", "T-009.md"), "w") as f:
+with open(os.path.join(proj, ".agent-guild", "state", "tasks", "T-009.md"), "w") as f:
     f.write("this file has no frontmatter at all\n")
 rc, out, err = run_hook("stop-gate.py", {}, proj)
 check("malformed task → exit 2 (fail closed)", rc == 2, f"rc={rc}")
@@ -175,7 +175,7 @@ check("wrong executor agent → exit 2", rc == 2 and "names executor" in err, er
 # happy worker dispatch logs
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-001"}}, proj)
-logged = os.path.exists(os.path.join(proj, "state", "log", "dispatches.log"))
+logged = os.path.exists(os.path.join(proj, ".agent-guild", "state", "log", "dispatches.log"))
 check("legal worker dispatch → exit 0", rc == 0, f"rc={rc} err={err}")
 check("legal worker dispatch → logged", logged)
 
@@ -210,7 +210,7 @@ check("auditor w/o Audit-ID → exit 2", rc == 2, f"rc={rc}")
 proj_aud = fresh_proj()
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-bulk", "prompt": "Audition-ID: A-001\nSort these lines."}}, proj_aud)
-audlog = os.path.exists(os.path.join(proj_aud, "state", "log", "dispatches.log"))
+audlog = os.path.exists(os.path.join(proj_aud, ".agent-guild", "state", "log", "dispatches.log"))
 check("audition dispatch (Audition-ID, no Task-ID) → exit 0", rc == 0, f"rc={rc} err={err}")
 check("audition dispatch → logged", audlog)
 
@@ -257,7 +257,7 @@ rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
 check("checker wrote PASS verdict → exit 0", rc == 0, f"rc={rc} err={err}")
 
-os.remove(os.path.join(proj, "state", "verdicts", "T-002-sonnet-r0.md"))
+os.remove(os.path.join(proj, ".agent-guild", "state", "verdicts", "T-002-sonnet-r0.md"))
 tx = transcript(proj, "Task-ID: T-002")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
@@ -309,14 +309,14 @@ check("no job → any write allowed (exit 0)", rc == 0, f"rc={rc}")
 
 write_task(proj, "T-001", status="assigned")
 rc, out, err = run_hook("orchestrator-write-guard.py",
-                        {"tool_input": {"file_path": os.path.join(proj, "state", "spec.md")}}, proj)
-check("job active, write under state/ → exit 0", rc == 0, f"rc={rc} err={err}")
+                        {"tool_input": {"file_path": os.path.join(proj, ".agent-guild", "state", "spec.md")}}, proj)
+check("job active, write under .agent-guild/state/ → exit 0", rc == 0, f"rc={rc} err={err}")
 
 rc, out, err = run_hook("orchestrator-write-guard.py",
                         {"tool_input": {"file_path": os.path.join(proj, "README.md")}}, proj)
-check("job active, write outside state/ → exit 2", rc == 2 and "orchestrator contract" in err.lower(), err)
+check("job active, write outside .agent-guild/state/ → exit 2", rc == 2 and "orchestrator contract" in err.lower(), err)
 
-open(os.path.join(proj, "state", "PAUSED"), "w").close()
+open(os.path.join(proj, ".agent-guild", "state", "PAUSED"), "w").close()
 rc, out, err = run_hook("orchestrator-write-guard.py",
                         {"tool_input": {"file_path": os.path.join(proj, "README.md")}}, proj)
 check("PAUSED lifts write-guard → exit 0", rc == 0, f"rc={rc}")

@@ -10,7 +10,7 @@ Design rules every hook here obeys:
   No-job gate. With no open task, every hook exits 0 immediately, so plain Q&A
   sessions and work on the kit itself run without friction.
 
-  Escape hatch. If state/PAUSED exists, every hook exits 0—checked before any
+  Escape hatch. If .agent-guild/state/PAUSED exists, every hook exits 0—checked before any
   logic that could throw, so a genuinely broken hook is still escapable.
 
 Stdlib only: this runs wherever python3 does, with no install step, so the kit
@@ -49,12 +49,16 @@ def project_dir():
     d = os.environ.get("CLAUDE_PROJECT_DIR")
     if d and os.path.isdir(d):
         return d
-    # _lib.py lives in hooks/, so the repo root is one level up.
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # _lib.py lives in .agent-guild/hooks/, so the repo root is two dirs up.
+    return os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
 
 
 def state_path(*parts):
-    return os.path.join(project_dir(), "state", *parts)
+    # The whole runtime bus lives under .agent-guild/ so a copied-in kit leaves
+    # the user's repo root uncluttered. project_dir() is still the repo root.
+    return os.path.join(project_dir(), ".agent-guild", "state", *parts)
 
 
 def paused():
@@ -249,7 +253,7 @@ def run(name, fn):
         import traceback
         sys.stderr.write(
             f"HOOK ERROR in {name}: {traceback.format_exc()}\n"
-            "The verification gate did NOT run. Fix hooks/ before proceeding "
-            "(or `touch state/PAUSED` to override deliberately).\n"
+            "The verification gate did NOT run. Fix .agent-guild/hooks/ before proceeding "
+            "(or `touch .agent-guild/state/PAUSED` to override deliberately).\n"
         )
         sys.exit(2)

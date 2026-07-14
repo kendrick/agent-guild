@@ -8,7 +8,7 @@ Two terminals help: one running `claude` in the repo root (the **session**), one
 
 1. Start `claude` in the repo root. On a freshly copied-in kit, Claude Code asks you to trust the workspace before it will run the project's hooks. **Accept it.** Until you do, the hooks don't fire, and a session with no gates is not proof of anything, it just looks like it passed.
 2. Type `/hooks`. Expect four registered: `stop-gate` (Stop), `subagent-return` (SubagentStop), `dispatch-guard` and `orchestrator-write-guard` (PreToolUse).
-3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `44 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
+3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `48 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
 
 Start from a clean slate in the shell:
 
@@ -100,7 +100,7 @@ Then open `.agent-guild/state/tasks/T-001.md` in your editor and set these front
 
 ### B1. Happy path to complete
 
-- Session: `> Dispatch the executor for T-001. Its Task-ID is T-001.`
+- Session: `> Dispatch the executor for T-001. Task-ID: T-001.`
 - Expect: worker-standard runs, writes `guild-motto.txt`, sets `artifacts` and `status: needs-check`, drops a note in `.agent-guild/state/notes/T-001.md`. `subagent-return` lets it finish because the state file proves the protocol. The stop gate then blocks the turn until the orchestrator sets `T-001` to `checking` and dispatches `checker-deterministic`. The checker runs the grep, it passes, and a PASS verdict lands at `.agent-guild/state/verdicts/T-001-sonnet-r0.md`. The orchestrator sets `T-001` complete.
 - Shell check: `cat .agent-guild/state/verdicts/T-001-sonnet-r0.md` shows `verdict: PASS`.
 

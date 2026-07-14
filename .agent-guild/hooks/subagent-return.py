@@ -14,8 +14,10 @@ subagent keeps working.
 
 Identifying which task finished means reading the subagent's transcript for its
 Task-ID/Audit-ID. That parsing depends on Claude Code's transcript format, which
-is not a stable contract—so any failure to read it, or a missing id, is the
-loud fail-closed path (HOOK ERROR, exit 2), never a quiet pass. This is the kit's
+is not a stable contract. When identification fails we do NOT block: blocking a
+subagent over something it can't fix only hangs it (this gate has no stall backstop
+the way stop-gate does), so an id failure fails loud and lets the subagent finish,
+leaving the task open for the main-session stop-gate to catch. This is the kit's
 most version-fragile point; the fixture tests pin the expected shape.
 """
 import os
@@ -64,6 +66,28 @@ def _latest_audit_verdict(audit_id):
     return os.path.join(vdir, matches[-1]) if matches else None
 
 
+def _unidentifiable(reason):
+    """We can't tell which task this subagent ran. Blocking it can't help—it can't
+    fix a bad transcript by trying again—and this gate has no stall backstop, so a
+    block here hangs the subagent forever (a worker once had to write PAUSED to
+    break exactly this loop). Fail LOUD but let it finish: the task stays open, so
+    the main-session stop-gate still forces the orchestrator to verify it, which is
+    where enforcement lives anyway. Never silent—the reason hits stderr and the log."""
+    msg = (
+        "subagent-return could not identify this subagent's task: " + reason
+        + ". Letting it finish instead of hanging; the stop-gate will catch the "
+        "still-open task on the main side. If this recurs, Claude Code's transcript "
+        "shape probably changed—see id_from_transcript and its fixtures."
+    )
+    try:
+        with open(_lib.state_path("log", "return-gate.log"), "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+    sys.stderr.write(msg + "\n")
+    return 0
+
+
 def main(data):
     agent = data.get("agent_type", "")
     if agent not in _lib.GUILD_AGENTS:
@@ -71,14 +95,12 @@ def main(data):
 
     transcript = data.get("transcript_path")
     if not transcript or not os.path.exists(transcript):
-        # Fail closed: we can't identify the work, so we can't clear it.
-        raise ValueError(
-            f"transcript_path missing or unreadable ({transcript!r}); cannot "
-            "identify which task this subagent ran"
-        )
+        return _unidentifiable(f"transcript_path missing or unreadable ({transcript!r})")
 
-    # Raises on unreadable / unparseable / no-id—the fail-closed path.
-    ident = _lib.id_from_transcript(transcript)
+    try:
+        ident = _lib.id_from_transcript(transcript)
+    except Exception as exc:
+        return _unidentifiable(f"no id readable from the transcript ({exc})")
 
     # Audition runs have no task file and no verdict; the battery scorer judges
     # them, not this gate. Nothing to validate, so let the subagent finish.
@@ -100,7 +122,7 @@ def main(data):
 
     task = _lib.read_task(ident)
     if task is None:
-        raise ValueError(f"{ident} has no task file; cannot validate the return")
+        return _unidentifiable(f"{ident} has no task file")
 
     if agent in _lib.WORKER_AGENTS:
         status = str(task.get("status", "")).strip()

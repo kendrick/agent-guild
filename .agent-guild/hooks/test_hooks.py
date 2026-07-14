@@ -89,6 +89,25 @@ def transcript(proj, text, role="user", content_list=False):
     return path
 
 
+def dispatch_transcript(proj, prompt, user_text=None, tool="Task"):
+    """The shape CC actually hands SubagentStop: the PARENT transcript, where the
+    dispatch is an assistant tool_use(Task|Agent) whose input.prompt carries the
+    id. `user_text`, if given, is a role:user turn that does NOT carry a matchable
+    id (the human's chatter), proving the gate reads the dispatch, not the human."""
+    path = os.path.join(proj, ".agent-guild", "state", "log", "tx.jsonl")
+    with open(path, "w") as f:
+        f.write('{"type":"system","message":{"role":"system","content":"boot"}}\n')
+        if user_text is not None:
+            f.write(json.dumps({"type": "user", "message": {
+                "role": "user", "content": [{"type": "text", "text": user_text}]}}) + "\n")
+        f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Dispatching now."},
+            {"type": "tool_use", "name": tool, "input": {
+                "subagent_type": "worker-standard", "prompt": prompt}},
+        ]}}) + "\n")
+    return path
+
+
 # ---------------------------------------------------------------- stop-gate
 print("stop-gate.py")
 proj = fresh_proj()
@@ -237,6 +256,21 @@ rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "worker-standard", "transcript_path": tx}, proj)
 check("worker, list-content transcript → exit 0", rc == 0, f"rc={rc} err={err}")
 
+# REAL CC shape: id lives only in the assistant tool_use(Task) dispatch, and the
+# human's own turn says "Task-ID is T-001" (no colon, unmatchable). This is the
+# exact case that infinite-hung the worker before the id-extraction fix.
+tx = dispatch_transcript(proj, "Task-ID: T-001\n\nYou are the worker. Build it.",
+                         user_text="Dispatch the executor for T-001. Its Task-ID is T-001.")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj)
+check("worker, tool_use-dispatch transcript → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# same, via the Agent tool name
+tx = dispatch_transcript(proj, "Task-ID: T-001\nGo.", tool="Agent")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj)
+check("worker, Agent-tool dispatch transcript → exit 0", rc == 0, f"rc={rc} err={err}")
+
 write_task(proj, "T-001", status="assigned", artifacts="[]")
 tx = transcript(proj, "Task-ID: T-001")
 rc, out, err = run_hook("subagent-return.py",
@@ -275,16 +309,28 @@ rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
 check("checker FAIL w/ diagnosis → exit 0", rc == 0, f"rc={rc} err={err}")
 
-# fail-closed: transcript has no id
+# no id in transcript: fail loud but don't hang (exit 0), same as the block above
 tx = transcript(proj, "I did the work but never mention the id")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "worker-standard", "transcript_path": tx}, proj)
-check("no id in transcript → exit 2 loud (HOOK ERROR)", rc == 2 and "HOOK ERROR" in err, err)
+check("no id in transcript → exit 0 loud, no hang", rc == 0 and "could not identify" in err, err)
 
-# fail-closed: transcript path unreadable
+# Identification failure must NOT hang the subagent. A SubagentStop block only
+# helps when the subagent can act on it, and it can't fix a bad transcript—so an
+# id failure fails loud and exits 0, leaving the still-open task to the stop-gate.
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "worker-standard", "transcript_path": "/no/such/file.jsonl"}, proj)
-check("missing transcript → exit 2 loud", rc == 2 and "HOOK ERROR" in err, err)
+check("missing transcript → exit 0 loud, no hang", rc == 0 and "could not identify" in err, err)
+
+tx = transcript(proj, "worker chatter with no id anywhere")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj)
+check("transcript with no id → exit 0 loud, no hang", rc == 0 and "could not identify" in err, err)
+
+tx = dispatch_transcript(proj, "Task-ID: T-777\nwork", tool="Agent")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj)
+check("id resolves but no task file → exit 0 loud, no hang", rc == 0 and "could not identify" in err, err)
 
 # auditor return
 con_pass(proj)

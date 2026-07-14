@@ -184,16 +184,42 @@ def con_audit_passed():
     return False
 
 
+# Claude Code records a subagent dispatch as an assistant tool_use block for one
+# of these tool names; the id we need rides in that block's `input.prompt`.
+_DISPATCH_TOOLS = {"Task", "Agent"}
+
+
+def _id_in(text):
+    """First Task-ID / Audit-ID / Audition-ID in a blob of text, or None."""
+    if not isinstance(text, str):
+        return None
+    m = (TASK_ID_RE.search(text) or AUDIT_ID_RE.search(text)
+         or AUDITION_ID_RE.search(text))
+    return m.group(1) if m else None
+
+
 def id_from_transcript(transcript_path):
-    """Extract the Task-ID / Audit-ID a subagent was dispatched with, by
-    reading its transcript. FRAGILE: depends on Claude Code's transcript JSONL
-    shape, which is not a stable public contract. Any failure to read, parse,
-    or find an id raises—the caller turns that into a loud fail-closed block.
-    The hook fixture tests pin the expected format; update them here if a CC
-    release changes it."""
+    """Extract the Task-ID / Audit-ID / Audition-ID a subagent was dispatched
+    with. FRAGILE: depends on Claude Code's transcript JSONL shape, which is not
+    a stable public contract. Any failure to find an id raises, and the caller
+    turns that into a loud fail-closed block.
+
+    Where the id actually lives: SubagentStop hands us the PARENT session
+    transcript (verified on CC 2.1.x—there is no separate subagent transcript
+    carrying the dispatch prompt as a user turn). So the authoritative record is
+    the orchestrator's assistant tool_use(Task|Agent) call, whose `input.prompt`
+    holds the `Task-ID: T-NNN` line—NOT a role:user message. Under the guild's
+    serial dispatch (one subagent dispatched and awaited at a time) the LAST such
+    dispatch is the one that just finished. We still scan role:user text as a
+    fallback, so a CC version that records the prompt as the subagent's own
+    opening turn keeps working. The fixture tests pin both shapes; update them
+    here if CC changes the format again.
+    """
     with open(transcript_path, encoding="utf-8") as f:
         raw_lines = f.readlines()
 
+    tool_ids = []  # from assistant Task/Agent dispatches, in document order
+    user_ids = []  # from role:user message text, in document order
     for line in raw_lines:
         line = line.strip()
         if not line:
@@ -202,20 +228,33 @@ def id_from_transcript(transcript_path):
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        msg = obj.get("message", obj) if isinstance(obj, dict) else {}
-        role = None
-        if isinstance(obj, dict):
-            role = msg.get("role") or obj.get("role") or obj.get("type")
-        if role != "user":
+        if not isinstance(obj, dict):
             continue
-        text = _text_of(msg.get("content"))
-        m = (TASK_ID_RE.search(text) or AUDIT_ID_RE.search(text)
-             or AUDITION_ID_RE.search(text))
-        if m:
-            return m.group(1)
+        msg = obj.get("message", obj)
+        content = msg.get("content") if isinstance(msg, dict) else None
+
+        if isinstance(content, list):
+            for b in content:
+                if (isinstance(b, dict) and b.get("type") == "tool_use"
+                        and b.get("name") in _DISPATCH_TOOLS):
+                    got = _id_in((b.get("input") or {}).get("prompt", ""))
+                    if got:
+                        tool_ids.append(got)
+
+        role = msg.get("role") if isinstance(msg, dict) else None
+        role = role or obj.get("role") or obj.get("type")
+        if role == "user":
+            got = _id_in(_text_of(content))
+            if got:
+                user_ids.append(got)
+
+    if tool_ids:
+        return tool_ids[-1]
+    if user_ids:
+        return user_ids[-1]
     raise ValueError(
-        f"no Task-ID/Audit-ID/Audition-ID found in any user message of "
-        f"{transcript_path}"
+        f"no Task-ID/Audit-ID/Audition-ID found in any Task/Agent dispatch or "
+        f"user message of {transcript_path}"
     )
 
 

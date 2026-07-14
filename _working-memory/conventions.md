@@ -18,6 +18,7 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - Hooks are Python 3, stdlib only, and fail loud / fail closed. Never add a dependency. (`.agent-guild/hooks/`)
 - Check scripts are dependency-free (Bash or Python) with one exception: `check-a11y.mjs` self-installs its Node deps on first run into a gitignored `node_modules`. (`.agent-guild/scripts/`)
 - Checkers ship without an Edit tool—a tool-allowlist backstop so a verifier can't quietly rewrite the artifact it's judging. (`.claude/agents/checker-*.md`)
+- Main-session-only gates (chiefly `orchestrator-write-guard`) no-op inside subagents via the `agent_id` CC stamps on subagent hook input (`_lib.in_subagent`); PreToolUse *does* fire in subagents. (`.agent-guild/hooks/`)
 
 ## Commit Messages
 

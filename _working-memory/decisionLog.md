@@ -22,6 +22,21 @@ Each entry follows this shape:
 **Decision:** Scope main-session-only gates by the `agent_id` Claude Code stamps on subagent hook input (absent in the main session). Added `_lib.in_subagent(data)`; `orchestrator-write-guard` no-ops when it's true. Corrected the docstring, README, projectOverview, and AGENTS.
 **Alternatives considered:** A settings.json scope option (none exists); branching on `agent_type` (present in the main session under `--agent`, so it would wrongly disable the gate). Left open: the guard still ignores `Bash`, so the orchestrator could bypass it via shell redirection — tracked as a separate gap.
 
+## 2026-07-14: Read the dispatch id from the tool_use block, and backstop SubagentStop
+
+**Source:** commit ed29c54, PR #17
+
+**Context:** `subagent-return` couldn't tell which task a subagent ran. `id_from_transcript` scanned `role:user` messages, but CC hands SubagentStop the PARENT transcript, where the dispatch is an assistant `tool_use(Task|Agent)` block. The id was never found, the gate failed closed, and with no backstop on SubagentStop the worker hung indefinitely.
+**Decision:** Read the id from the assistant `tool_use(Task|Agent)` `input.prompt` (last dispatch, the one that just finished), with `role:user` text as a fallback. Add a stall backstop to `subagent-return` mirroring the Stop gate's.
+**Alternatives considered:** PAUSED (lifts every gate); loosening the regex (the id was well-formed, just where the parser never looked).
+
+## 2026-07-14: Commit the working-memory kit into the guild repo
+
+**Source:** commit e5f6ac0
+
+**Context:** The WM overlay (see the 2026-07-13 entry below) went in untracked, leaving open whether it belonged in this repo or should stay local.
+**Decision:** Committed it (e5f6ac0), so the guild ships the working-memory kit bundled in. Closes the corresponding open question, now removed from openQuestions.
+
 ## 2026-07-13: Install the working-memory kit as an untracked overlay
 
 **Source:** working tree (untracked `_working-memory/`, `scripts/`, `.github/`, `AGENTS.md`; modified `CLAUDE.md`, `.gitignore`)

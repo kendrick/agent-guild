@@ -362,6 +362,13 @@ rc, out, err = run_hook("orchestrator-write-guard.py",
                         {"tool_input": {"file_path": os.path.join(proj, "README.md")}}, proj)
 check("job active, write outside .agent-guild/state/ → exit 2", rc == 2 and "orchestrator contract" in err.lower(), err)
 
+# The same forbidden write, but from a SUBAGENT (agent_id present). PreToolUse
+# fires inside subagents, so the gate must pass a worker writing its deliverable.
+rc, out, err = run_hook("orchestrator-write-guard.py",
+                        {"agent_id": "sub-xyz", "agent_type": "worker-standard",
+                         "tool_input": {"file_path": os.path.join(proj, "guild-motto.txt")}}, proj)
+check("job active, subagent (agent_id) writes deliverable → exit 0", rc == 0, f"rc={rc} err={err}")
+
 open(os.path.join(proj, ".agent-guild", "state", "PAUSED"), "w").close()
 rc, out, err = run_hook("orchestrator-write-guard.py",
                         {"tool_input": {"file_path": os.path.join(proj, "README.md")}}, proj)

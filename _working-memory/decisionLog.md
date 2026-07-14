@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-14: Scope orchestrator gates to the main session via `agent_id`
+
+**Source:** SMOKE.md B2 run in a copied-in kit; confirmed against the CC hooks docs.
+
+**Context:** The kit assumed "parent hooks do not fire for tool calls made inside subagents," so `orchestrator-write-guard` treated any trip as the orchestrator overreaching. False on CC 2.1.x — PreToolUse fires inside subagents too, so the guard was blocking workers from writing their own deliverables. The guild only appeared to work because workers fell back to `Bash`, which the guard's `Write|Edit|MultiEdit` matcher never covered.
+**Decision:** Scope main-session-only gates by the `agent_id` Claude Code stamps on subagent hook input (absent in the main session). Added `_lib.in_subagent(data)`; `orchestrator-write-guard` no-ops when it's true. Corrected the docstring, README, projectOverview, and AGENTS.
+**Alternatives considered:** A settings.json scope option (none exists); branching on `agent_type` (present in the main session under `--agent`, so it would wrongly disable the gate). Left open: the guard still ignores `Bash`, so the orchestrator could bypass it via shell redirection — tracked as a separate gap.
+
 ## 2026-07-13: Install the working-memory kit as an untracked overlay
 
 **Source:** working tree (untracked `_working-memory/`, `scripts/`, `.github/`, `AGENTS.md`; modified `CLAUDE.md`, `.gitignore`)

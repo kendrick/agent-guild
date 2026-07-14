@@ -36,7 +36,7 @@ The idea it's built on: a cheap model doing well-specified work under an indepen
 
 ## Where the Enforcement Actually Is
 
-Be clear-eyed about this, because it decides how much the kit guarantees versus asks for good behavior. Claude Code hooks fire on the main session's actions, not on tool calls made inside a subagent. So everything mechanical lives at a main-session boundary:
+Be clear-eyed about this, because it decides how much the kit guarantees versus asks for good behavior. The gates constrain the main session only. Claude Code *does* fire PreToolUse inside subagents, so each orchestrator-scoped gate stands down when it sees the `agent_id` Claude Code stamps on a subagent call—that's what leaves a worker free to build. Everything mechanical lives at that main-session boundary:
 
 - **dispatch-guard** blocks an illegal or untagged dispatch before it starts.
 - **subagent-return** refuses to let a subagent finish until the state file proves it followed protocol.
@@ -44,6 +44,8 @@ Be clear-eyed about this, because it decides how much the kit guarantees versus 
 - **orchestrator-write-guard** keeps the orchestrator out of deliverables while a job runs.
 
 Everything a subagent does internally is guided by its prompt, not a hook. A checker is told to re-derive claims and never open `.agent-guild/state/notes/`; the auditor is told to hold the orchestrator to the constitution. Those are prompt rules, backstopped by tool allowlists (checkers ship without an Edit tool, so they can't quietly rewrite an artifact). Strong, but not the same as a gate. The fence runs along the main session; know which side of it a given guarantee sits on.
+
+One known limit: the write-guard matches `Write`, `Edit`, and `MultiEdit`, not `Bash`. A shell redirect like `printf … > deliverable.txt` slips past it, so on that path the orchestrator's restraint rests on the contract rather than the gate. Detecting writes in arbitrary shell can't be done statically without both false alarms and misses, so the guard covers the tools an agent reaches for first and leaves the shell to the prompt. The stakes are low: the orchestrator is a cooperative agent following the contract, not an adversary.
 
 One fragile spot worth naming: `subagent-return` identifies which task a subagent ran by parsing its transcript, and the transcript format is not a stable Claude Code contract. If a CC release changes it, the hook fails closed (blocks loudly) rather than passing silently. The expected shape is pinned in `.agent-guild/hooks/test_hooks.py`; that's the one place to update if a version bump breaks it.
 

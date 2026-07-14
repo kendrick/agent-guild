@@ -47,7 +47,7 @@ This project uses a two-tier working memory at `_working-memory/`.
 Full detail in `_working-memory/conventions.md`. The load-bearing few:
 
 - Every guild dispatch prompt carries its id: `Task-ID: T-NNN` (worker/checker), `Audit-ID:` (auditor), `Audition-ID:` (audition). Untagged dispatches are blocked.
-- Enforcement fires at the main-session boundary only, never inside a subagent. Subagent behavior is prompt-guided plus tool-allowlist-backstopped.
+- Orchestrator-scoped gates constrain the main session only — but PreToolUse *does* fire inside subagents, so those gates no-op on the `agent_id` CC stamps on subagent calls (`_lib.in_subagent`). Subagent behavior is otherwise prompt-guided plus tool-allowlist-backstopped.
 - Hooks stay Python stdlib-only and fail loud. Don't add a dependency.
 - State files name their attempt: `T-NNN-<tier>-r<retries>.md` for verdicts and disputes.
 - Conventional-commit messages with a scope; docs use unspaced chained em dashes, no hard wraps, Title Case headings.

@@ -74,6 +74,17 @@ def read_input():
     return json.loads(raw) if raw.strip() else {}
 
 
+def in_subagent(data):
+    """True if this hook fired for a tool call INSIDE a subagent rather than the
+    main session. Claude Code stamps an `agent_id` on subagent hook input and
+    leaves it off main-session input, so a gate meant to constrain only the
+    orchestrator no-ops when it's present. Load-bearing: PreToolUse DOES fire
+    inside subagents on CC 2.1.x (an earlier assumption that it didn't was
+    wrong), so without this the write-guard blocks workers from writing the very
+    deliverables they were dispatched to produce."""
+    return bool(data.get("agent_id"))
+
+
 # --- tiny frontmatter parser (no pyyaml dependency) -----------------------
 
 def _coerce(v):

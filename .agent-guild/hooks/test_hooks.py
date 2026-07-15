@@ -455,5 +455,30 @@ rc, out, err = run_hook("orchestrator-write-guard.py",
                         {"tool_input": {"file_path": os.path.join(proj, "README.md")}}, proj)
 check("PAUSED lifts write-guard → exit 0", rc == 0, f"rc={rc}")
 
+# --------------------------------------------------------- session-nudge.py
+print("session-nudge.py")
+
+zero_evidence = tempfile.mkdtemp(prefix="ag-nudge-zero-")
+rc, out, err = run_hook("session-nudge.py", {}, zero_evidence)
+check("no .agent-guild/ at all → silent, exit 0", rc == 0 and out == "", f"rc={rc} out={out!r}")
+
+partial_no_state_dirs = tempfile.mkdtemp(prefix="ag-nudge-nostate-")
+os.makedirs(os.path.join(partial_no_state_dirs, ".agent-guild"))
+rc, out, err = run_hook("session-nudge.py", {}, partial_no_state_dirs)
+check("state dirs missing → nudges, mentions init", rc == 0 and "init" in out, f"rc={rc} out={out!r}")
+check("state dirs missing → exactly one stdout line", out.count("\n") == 1, f"out={out!r}")
+
+# fresh_proj() makes every state/ subdir but no root CLAUDE.md—exactly the
+# "state complete, import line missing" case.
+no_import_line = fresh_proj()
+rc, out, err = run_hook("session-nudge.py", {}, no_import_line)
+check("CLAUDE.md missing → nudges, mentions init", rc == 0 and "init" in out, f"rc={rc} out={out!r}")
+
+fully_init = fresh_proj()
+with open(os.path.join(fully_init, "CLAUDE.md"), "w") as f:
+    f.write("See @.agent-guild/CLAUDE.md for the orchestrator contract.\n")
+rc, out, err = run_hook("session-nudge.py", {}, fully_init)
+check("fully initialized → silent, exit 0", rc == 0 and out == "", f"rc={rc} out={out!r}")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

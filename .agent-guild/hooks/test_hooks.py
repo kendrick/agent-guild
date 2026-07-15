@@ -274,6 +274,51 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-bulk", "prompt": "just sort the lines"}}, proj_aud)
 check("no Task-ID and no Audition-ID → exit 2", rc == 2 and "no id line" in err, err)
 
+# ---------------------------------------- dispatch-guard: namespaced subagent_type
+# Issue #27: a plugin-installed guild ships subagent_type as `<plugin>:<name>`
+# (e.g. `agent-guild:worker-standard`), and a bare-name GUILD_AGENTS membership
+# test used to miss it entirely, waving the dispatch through with none of the
+# gates below applied.
+print("dispatch-guard.py: namespaced subagent_type (issue #27)")
+proj_ns = fresh_proj()
+
+# Same block as the bare-name case above, now with a namespaced subagent_type:
+# proves normalization happens before the id-line check, not after it.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "agent-guild:worker-standard",
+                                        "prompt": "do it, no id line"}}, proj_ns)
+check("namespaced worker w/o Task-ID → exit 2, blocked like bare form",
+      rc == 2 and "has no id line" in err, err)
+
+# Fully legal namespaced dispatch, no model override: effective_model falls
+# back to DEFAULT_MODEL[agent], which KeyErrors if `agent` were left raw
+# instead of normalized, and the executor comparison (`agent != executor`)
+# fails the same way against the task's bare `executor:` field. Both traps
+# only fire when the dispatch is otherwise legal enough to reach them.
+con_pass(proj_ns)
+write_task(proj_ns, "T-010", status="assigned", executor="worker-standard", executor_model="sonnet")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "agent-guild:worker-standard",
+                                        "prompt": "Task-ID: T-010"}}, proj_ns)
+check("namespaced worker, fully legal (no DEFAULT_MODEL KeyError, no executor mismatch) → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+# The audit trail must show what actually ran, not the normalized form: a
+# strip-in-_log bug would collapse this back to "worker-standard" and the log
+# could no longer distinguish a plugin dispatch from an in-repo one.
+with open(os.path.join(proj_ns, ".agent-guild", "state", "log", "dispatches.log"), encoding="utf-8") as f:
+    dispatch_log = f.read()
+check("dispatch log records the RAW namespaced string, not the bare name",
+      "agent-guild:worker-standard" in dispatch_log, dispatch_log)
+
+# Bare-name regression: the same fully-legal shape, un-namespaced, must still
+# pass now that the entry seam runs bare_agent() on every subagent_type.
+write_task(proj_ns, "T-011", status="assigned", executor="worker-standard", executor_model="sonnet")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-011"}}, proj_ns)
+check("bare-name worker, fully legal (regression after normalization) → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
 # --------------------------------------------------------- subagent-return
 print("subagent-return.py")
 proj = fresh_proj()

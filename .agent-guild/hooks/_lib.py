@@ -38,6 +38,20 @@ GUILD_AGENTS = set(DEFAULT_MODEL)
 WORKER_AGENTS = {"worker-bulk", "worker-standard", "worker-craft"}
 CHECKER_AGENTS = {"checker-deterministic", "checker-judgment"}
 
+
+def bare_agent(subagent_type):
+    """Normalize a dispatched subagent_type to the bare name GUILD_AGENTS and
+    DEFAULT_MODEL key on. Once the kit ships inside a Claude Code plugin,
+    subagent_type arrives namespaced (`agent-guild:worker-standard`,
+    `agent-guild:auditor`, ...); a bare-name membership test against that raw
+    string misses, and dispatch-guard's `agent not in GUILD_AGENTS` check waves
+    every guild dispatch through ungated—no Task-ID requirement, no CON-audit
+    precondition, no tier match. Taking the suffix after the LAST colon keeps
+    this rename-robust: any future `<ns>:` prefix normalizes the same way with
+    no update here, and a bare name (no colon) passes through unchanged."""
+    return subagent_type.rsplit(":", 1)[-1]
+
+
 TASK_ID_RE = re.compile(r"\bTask-ID:\s*(T-\d+)", re.IGNORECASE)
 AUDIT_ID_RE = re.compile(r"\bAudit-ID:\s*(CON-audit|DEC-audit)", re.IGNORECASE)
 # Auditions run outside the task lifecycle—no task file, no tier, no verdict

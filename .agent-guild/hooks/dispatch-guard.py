@@ -39,7 +39,8 @@ def _log(agent, task, model):
 
 def main(data):
     ti = data.get("tool_input", {}) or {}
-    agent = ti.get("subagent_type", "")
+    raw = ti.get("subagent_type", "")
+    agent = _lib.bare_agent(raw)
     if agent not in _lib.GUILD_AGENTS:
         return 0
 
@@ -51,7 +52,7 @@ def main(data):
     # battery's score.py judges the output, not this gate.
     aud = _lib.AUDITION_ID_RE.search(prompt)
     if aud:
-        _log(agent, aud.group(1), override or _lib.DEFAULT_MODEL[agent])
+        _log(raw, aud.group(1), override or _lib.DEFAULT_MODEL[agent])
         return 0
 
     # 1. The dispatch must name what it's working on.
@@ -66,7 +67,7 @@ def main(data):
 
     # Auditor path: id is CON-audit / DEC-audit, no task file, no tier logic.
     if agent == "auditor":
-        _log(agent, am.group(1), override or _lib.DEFAULT_MODEL[agent])
+        _log(raw, am.group(1), override or _lib.DEFAULT_MODEL[agent])
         return 0
 
     tid = tm.group(1) if tm else None
@@ -92,7 +93,7 @@ def main(data):
                 f"{tid} is '{status}', not 'checking'. Set status to checking "
                 "and update the task before dispatching its checker."
             )
-        _log(agent, tid, effective_model)
+        _log(raw, tid, effective_model)
         return 0
 
     # Worker path.
@@ -147,7 +148,7 @@ def main(data):
             "entry to `escalations`, and log it to .agent-guild/state/log/escalations.log."
         )
 
-    _log(agent, tid, effective_model)
+    _log(raw, tid, effective_model)
     return 0
 
 

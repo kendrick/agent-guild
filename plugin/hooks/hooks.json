@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/stop-gate.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "worker-bulk|worker-standard|worker-craft|checker-deterministic|checker-judgment|auditor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/subagent-return.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/dispatch-guard.py",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/orchestrator-write-guard.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-nudge.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

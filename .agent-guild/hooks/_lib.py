@@ -49,9 +49,23 @@ def project_dir():
     d = os.environ.get("CLAUDE_PROJECT_DIR")
     if d and os.path.isdir(d):
         return d
-    # _lib.py lives in .agent-guild/hooks/, so the repo root is two dirs up.
-    return os.path.dirname(
+    # _lib.py lives in .agent-guild/hooks/, so the repo root is two dirs up—
+    # true while the kit is copied straight into a repo, but false the moment
+    # this file ships inside a Claude Code plugin: two-up from the plugin's
+    # hooks/ lands beside the plugin, not in the user's project. Fail loud
+    # (per the module's own top-of-file rule) rather than let state silently
+    # land in the wrong tree.
+    candidate = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    if os.path.isdir(os.path.join(candidate, ".agent-guild")):
+        return candidate
+    raise RuntimeError(
+        f"project_dir(): CLAUDE_PROJECT_DIR is unset/invalid and the "
+        f"two-dirs-up fallback candidate {candidate!r} has no .agent-guild/ "
+        f"directory. This is likely _lib.py running from inside a plugin "
+        f"install, where two-up is the plugin's parent, not the user's "
+        f"project—set CLAUDE_PROJECT_DIR instead of trusting the guess."
     )
 
 

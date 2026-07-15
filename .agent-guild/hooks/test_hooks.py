@@ -108,6 +108,42 @@ def dispatch_transcript(proj, prompt, user_text=None, tool="Task"):
     return path
 
 
+# --------------------------------------------------------- _lib.project_dir
+print("_lib.py project_dir() fallback")
+sys.path.insert(0, HOOKS)
+import _lib as lib_mod  # noqa: E402  (needs sys.path set up first)
+
+_orig_file = lib_mod.__file__
+_orig_env = os.environ.pop("CLAUDE_PROJECT_DIR", None)
+try:
+    # Candidate WITH .agent-guild/ present (the copied-into-a-repo case) →
+    # accepted. Point __file__ at a fake .../pkg/hooks/_lib.py so the
+    # two-dirs-up math lands on our scratch tree instead of the real repo.
+    scratch_ok = tempfile.mkdtemp(prefix="ag-projdir-ok-")
+    os.makedirs(os.path.join(scratch_ok, ".agent-guild"))
+    lib_mod.__file__ = os.path.join(scratch_ok, "pkg", "hooks", "_lib.py")
+    got = lib_mod.project_dir()
+    check("fallback: candidate with .agent-guild/ → accepted",
+          os.path.realpath(got) == os.path.realpath(scratch_ok), f"got={got}")
+
+    # Candidate WITHOUT .agent-guild/ (the plugin case: two-up lands beside
+    # the plugin, not in the user's project) → raises RuntimeError naming it.
+    scratch_bad = tempfile.mkdtemp(prefix="ag-projdir-bad-")
+    lib_mod.__file__ = os.path.join(scratch_bad, "pkg", "hooks", "_lib.py")
+    raised_right = False
+    try:
+        lib_mod.project_dir()
+    except RuntimeError as e:
+        raised_right = ".agent-guild" in str(e)
+    check("fallback: candidate without .agent-guild/ → raises RuntimeError",
+          raised_right)
+    shutil.rmtree(scratch_ok, ignore_errors=True)
+    shutil.rmtree(scratch_bad, ignore_errors=True)
+finally:
+    lib_mod.__file__ = _orig_file
+    if _orig_env is not None:
+        os.environ["CLAUDE_PROJECT_DIR"] = _orig_env
+
 # ---------------------------------------------------------------- stop-gate
 print("stop-gate.py")
 proj = fresh_proj()

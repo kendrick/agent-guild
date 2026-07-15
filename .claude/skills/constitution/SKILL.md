@@ -11,7 +11,13 @@ Work through these steps in order. The output is `.agent-guild/state/constitutio
 
 ## 1. Interview
 
-Load the question bank in [interview.md](interview.md) and work the user through it: the job's goal, its quality bars, any words that must ship verbatim, the target environments, and what's explicitly out of scope. Ask; don't assume. A constitution written from guesses fails the audit or, worse, passes and misdirects every worker.
+**If `.agent-guild/state/spec.md` exists** (typically written by the `/job` intake skill, carrying a provenance header), collapse the interview instead of running the full question bank:
+1. Read the spec end to end, including its provenance header (`source`, `ref`, `fetched_at`, and `issue`/`title` when the source is a GitHub issue).
+2. Derive candidate quality bars straight from the spec's own content: its stated goal, Definition of Done, deliverables, constraints, and non-goals. Each candidate becomes a clause draft per steps 2-3 below.
+3. Present the candidates to the user for confirmation and adjustment. Ask only what the spec leaves genuinely open — severity rankings, protected words, or target environments the spec doesn't name.
+4. Never re-ask a question the spec already answers. If the spec states the goal, the audience, a constraint, or a non-goal, treat it as settled and move on to drafting.
+
+**If no `.agent-guild/state/spec.md` exists**, run the full interview: load the question bank in [interview.md](interview.md) and work the user through it: the job's goal, its quality bars, any words that must ship verbatim, the target environments, and what's explicitly out of scope. Ask; don't assume. A constitution written from guesses fails the audit or, worse, passes and misdirects every worker.
 
 Done when you can state the job's quality bars in the user's own terms, not generic ones.
 

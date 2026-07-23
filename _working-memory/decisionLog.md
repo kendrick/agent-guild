@@ -14,6 +14,30 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-23: Ship the guild as a public Claude Code plugin (v0.3.1)
+
+**Source:** commits b294bf7, e7058df, edba55b; epic #19; issues #24, #25
+
+**Context:** Plugin packaging was deferred since the kit began (a standing open question), the blocker being that a plugin can't ship an always-on `CLAUDE.md`.
+**Decision:** Published. The repo is its own marketplace (`.claude-plugin/marketplace.json` sources `./plugin`); `scripts/build-plugin.py` assembles `plugin/` from in-repo sources; `/agent-guild:init` finishes each install by copying the per-project payload (contract, scripts, templates) and adding the `@.agent-guild/CLAUDE.md` import; a SessionStart nudge catches partial installs. Verified end to end by SMOKE Part C in a real project (add, install, init, and the plugin's own dispatch-guard denying an untagged dispatch). Tagged v0.3.1, not v0.3.0—see the hooks-load antipattern in [[antipatterns]].
+**Alternatives considered:** A SessionStart hook injecting the contract (rejected—`additionalContext` persistence is undocumented, so the one-line import is the reliable path).
+
+## 2026-07-23: Version the roadmap with v0.X.0 milestones, checker lane first
+
+**Source:** the multi-provider planning session; the (now retired) backlog.md; GitHub milestones v0.3.1–v0.8.0
+
+**Context:** The repo had no versions and a loose multi-provider backlog that overlapped the existing codex-lane issues.
+**Decision:** Six milestones (v0.3.1 through v0.8.0) tracking `plugin.json`, git-tagged at close. The multi-provider arc ships the cross-family **checker** lane before any external worker lane, gated on a 10-task dual-check evaluation that decides whether external workers get built at all. External vendors are always parallel lanes, never rungs on the Claude-only escalation ladder.
+**Alternatives considered:** The existing epic #9's worker-first order (rejected—the checker is read-only, has no write-guard collision surface, is cheaper to build, and produces the go/no-go data the worker lanes depend on).
+
+## 2026-07-22: `/job` flows into `/constitution` instead of stopping at a handoff
+
+**Source:** commit 1c0dfee; issue #26
+
+**Context:** Intake ended by pointing the user at `/constitution`, which read as the guild stalling—especially in auto mode, where the stop gate can't help because intake is pre-Phase-0 and no task exists yet.
+**Decision:** Step 5 of the `job` skill invokes `/constitution` in the same turn once `check-provenance.py` passes. Every failure path still stops with an honest message and never invokes `/constitution`; the collapsed interview's confirm-and-adjust step stays the user's touchpoint.
+**Alternatives considered:** Leaving the handoff and documenting it (rejected—the stall was the whole complaint).
+
 ## 2026-07-14: Scope orchestrator gates to the main session via `agent_id`
 
 **Source:** SMOKE.md B2 run in a copied-in kit; confirmed against the CC hooks docs.

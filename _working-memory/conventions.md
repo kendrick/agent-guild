@@ -24,6 +24,12 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 
 - Conventional-commit style with a scope: `feat(agents):`, `fix(hooks):`, `refactor(packaging):`, `docs:`, `style(docs):`, `chore:`. (see `git log`)
 
+## Plugin Packaging
+
+- The plugin is built, never hand-edited: authored sources live in-repo, `scripts/build-plugin.py` assembles `plugin/`, and `--check` rebuilds into a temp dir, diffs both ways, and runs `claude plugin validate --strict`. A hand-added file in `plugin/` fails `--check` as "missing from a fresh build."
+- Bump the version in the authored manifest `scripts/plugin-src/plugin.json`, never the build output `plugin/.claude-plugin/plugin.json`—a rebuild reverts the output, so a bump there ships nothing. The version field is the only update signal installed copies watch. (`docs/publishing.md`)
+- `/agent-guild:init` never touches `.claude/settings.json`; plugin installs get their gates from the plugin's own `hooks/hooks.json`. Registering them again would double-fire every gate. (`.claude/skills/init/SKILL.md`)
+
 ## Prose Voice (docs and comments)
 
 - Em dashes chain directly to the text on both sides—like this—never wrapped in spaces. Don't hard-wrap prose lines; let the display wrap. Headings are Title Case. Comments explain the why, not the what.

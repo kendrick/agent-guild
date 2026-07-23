@@ -14,6 +14,13 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-07-23: Don't declare `hooks/hooks.json` in a plugin's `manifest.hooks`
+
+**Tried:** `scripts/plugin-src/plugin.json` declared `"hooks": "./hooks/hooks.json"` (correct when first designed; the plan doc's "hooks have no auto-discovery" platform fact backed it).
+**What broke:** The plugin installed but failed to load—current Claude Code auto-loads a plugin's `hooks/hooks.json`, so declaring that standard path is rejected as a duplicate ("manifest.hooks should only reference additional hook files"). Caught by the first live SMOKE Part C run.
+**Why we backed out:** Platform behavior changed; the standard path loads on its own now. Fixed in 0.3.1 by dropping the key and rebuilding.
+**Don't suggest:** adding a `hooks` key to `scripts/plugin-src/plugin.json` for the standard path, or teaching `build-plugin.py` to emit one. `manifest.hooks` is only for *additional* hook files beyond `hooks/hooks.json`.
+
 ## 2026-07-14: Don't assume parent hooks skip subagent tool calls
 
 **Tried:** Building orchestrator-write-guard (and the docs' mental model) on "parent PreToolUse hooks don't fire for tool calls made inside a subagent."

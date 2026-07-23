@@ -11,7 +11,7 @@ The design reference for the Job 2 epic. Job 1 (the `/job` intake skill, the pro
 
 ## Verified Platform Facts
 
-- Hooks have no auto-discovery: `plugin.json` must declare `"hooks": "./hooks/hooks.json"`. `${CLAUDE_PLUGIN_ROOT}` substitutes in hook commands and skill content. `${CLAUDE_PROJECT_DIR}` still points at the user's project inside plugin hooks, so state stays project-side.
+- ~~Hooks have no auto-discovery: `plugin.json` must declare `"hooks": "./hooks/hooks.json"`.~~ Stale as of 2026-07-23: Claude Code now auto-loads a plugin's `hooks/hooks.json`, and declaring that standard path in `manifest.hooks` fails the plugin load as a duplicate ("manifest.hooks should only reference additional hook files"). Caught by the first live SMOKE Part C run; fixed in 0.3.1 by dropping the key. `${CLAUDE_PLUGIN_ROOT}` still substitutes in hook commands and skill content, and `${CLAUDE_PROJECT_DIR}` still points at the user's project inside plugin hooks, so state stays project-side.
 - Plugins cannot ship an always-on CLAUDE.md, and `@`-imports don't expand env vars, so the orchestrator contract must be copied into each project. That is what `/agent-guild:init` is for. SessionStart `additionalContext` persistence is undocumented, so the contract never rides on it.
 - SessionStart hooks take matchers (`startup|resume|clear|compact`); a nudge is one stdout line with exit 0.
 - `plugin.json`'s `version` field drives update detection; bump it to publish.

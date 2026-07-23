@@ -1,0 +1,14 @@
+{
+  "name": "agent-guild",
+  "owner": {
+    "name": "Kendrick Arnett"
+  },
+  "description": "Runs Claude Code as an org chart: an orchestrator plans and rules, worker subagents build, and independent checker agents verify the work without trusting a self-report.",
+  "plugins": [
+    {
+      "name": "agent-guild",
+      "source": "./plugin",
+      "description": "Runs Claude Code as an org chart: an orchestrator plans and rules, worker subagents build, and independent checker agents verify the work without trusting a self-report."
+    }
+  ]
+}

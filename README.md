@@ -65,7 +65,19 @@ Every step is a file written under `.agent-guild/state/`. Nothing here required 
 
 ## Install
 
-Copy two directories into your project:
+The guild ships as a Claude Code plugin, and this repo is its marketplace. Add the marketplace, install from it, then run init inside whatever project you want to run jobs in:
+
+```
+/plugin marketplace add kendrick/agent-guild
+/plugin install agent-guild
+/agent-guild:init
+```
+
+The plugin carries the agents, skills, and gate hooks. What it can't carry is the orchestrator contract. A plugin contributes context on demand, through skills and hooks that load when something triggers them, but the contract has to be always-on project instructions, and no plugin can ship those. So `/agent-guild:init` finishes the install in place: it drops the contract into `.agent-guild/`, adds the `@.agent-guild/CLAUDE.md` import to your project's `CLAUDE.md`, and creates the runtime state directories with a `.gitignore` already covering them. After it runs, confirm the gates load with `python3 .agent-guild/hooks/test_hooks.py`—it should report all pass.
+
+### Manual Copy-In
+
+If you'd rather skip the plugin, copy two directories into your project by hand:
 
 ```
 .claude/  .agent-guild/
@@ -83,10 +95,4 @@ Then:
 
 The hooks reference `$CLAUDE_PROJECT_DIR`, so they work wherever the repo lands. `.agent-guild/scripts/check-a11y.mjs` installs its own Node dependencies on first run; everything else is Python or Bash with no dependencies.
 
-Walk through `SMOKE.md` once in a fresh session to watch every gate fire before it guards real work.
-
-## Later: A Plugin
-
-Most of the kit would package as a Claude Code plugin: agents, skills, and hooks move under a `.claude-plugin/plugin.json`, with hook commands rewired to `$CLAUDE_PLUGIN_ROOT`. The hooks are the clean part, since they already read state from `$CLAUDE_PROJECT_DIR`, so a plugin's gates would keep `.agent-guild/state/` in your project untouched.
-
-The catch is the orchestrator contract. Plugins can't ship an always-on CLAUDE.md; they contribute context through skills, agents, and hooks that load on demand, not persistent project instructions. So a plugin would still need a per-project way to make the contract law: the same one-line `@.agent-guild/CLAUDE.md` import used above, or a SessionStart hook that injects it. Expect a hybrid (static tooling as a plugin, the contract and `.agent-guild/state/` staying in the project), not a one-command install. Worth it once you're running the kit across many projects, not before.
+Whichever way you install, walk through `SMOKE.md` once in a fresh session to watch every gate fire before it guards real work.

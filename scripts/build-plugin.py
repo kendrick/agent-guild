@@ -35,6 +35,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLAUDE_DIR = os.path.join(ROOT, ".claude")
 GUILD_DIR = os.path.join(ROOT, ".agent-guild")
 PLUGIN_SRC_MANIFEST = os.path.join(ROOT, "scripts", "plugin-src", "plugin.json")
+PLUGIN_SRC_README = os.path.join(ROOT, "docs", "plugin-readme.md")
 DEFAULT_OUT = os.path.join(ROOT, "plugin")
 
 GUILD_AGENTS = [
@@ -272,8 +273,8 @@ def _rewrite_invocations(text, names_to_namespaced):
 
 def apply_namespacing(out_dir, shipped_skills):
     """Rewrite bare guild invocations to their namespaced plugin form, in the
-    packaged skill SKILL.md files and the packaged project-template
-    CLAUDE.md -- the only plugin-bound prose that names them. The map only
+    packaged skill SKILL.md files, the packaged project-template CLAUDE.md, and
+    the packaged README -- the plugin-bound prose that names them. The map only
     includes skills that actually shipped, so an absent `init` never gets
     rewritten into a token nothing in the package defines."""
     names_to_namespaced = {
@@ -283,6 +284,7 @@ def apply_namespacing(out_dir, shipped_skills):
         os.path.join(out_dir, "skills", name, "SKILL.md") for name in shipped_skills
     ]
     targets.append(os.path.join(out_dir, "project-template", ".agent-guild", "CLAUDE.md"))
+    targets.append(os.path.join(out_dir, "README.md"))
     for path in targets:
         with open(path, encoding="utf-8") as f:
             text = f.read()
@@ -290,6 +292,16 @@ def apply_namespacing(out_dir, shipped_skills):
         if rewritten != text:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(rewritten)
+
+
+def copy_readme(out_dir):
+    """Copy the authored plugin README (docs/plugin-readme.md) to README.md.
+    apply_namespacing rewrites its bare guild invocations in place right after,
+    the same path the SKILL.md bodies take -- so the source may name the skills
+    either way and the packaged README always lands namespaced."""
+    if not os.path.isfile(PLUGIN_SRC_README):
+        raise BuildError(f"missing plugin README source: {PLUGIN_SRC_README}")
+    shutil.copy2(PLUGIN_SRC_README, os.path.join(out_dir, "README.md"))
 
 
 def write_plugin_manifest(out_dir):
@@ -306,8 +318,8 @@ def write_plugin_manifest(out_dir):
 def build(out_dir):
     """Run the full build into out_dir, replacing whatever was there. Steps
     run in dependency order: hooks.json needs the hook files already copied
-    (to validate against), namespacing needs the skills and project-template
-    already assembled (it edits the copies in place)."""
+    (to validate against), namespacing needs the skills, project-template, and
+    README already assembled (it edits the copies in place)."""
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(out_dir)
@@ -316,6 +328,7 @@ def build(out_dir):
     shipped_hooks = copy_hooks(out_dir)
     generate_hooks_json(out_dir, shipped_hooks)
     assemble_project_template(out_dir)
+    copy_readme(out_dir)
     apply_namespacing(out_dir, shipped_skills)
     write_plugin_manifest(out_dir)
 

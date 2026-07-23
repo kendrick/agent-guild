@@ -162,7 +162,46 @@ Then open `.agent-guild/state/tasks/T-001.md` in your editor and set these front
   rm -f guild-motto.txt .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/*.md .agent-guild/state/disputes/*.md .agent-guild/state/notes/*.md .agent-guild/state/log/* .agent-guild/state/spec.md .agent-guild/state/constitution.md
   ```
 
-## Part C: Two Things That Look Like Breakage But Aren't
+## Part C: The Plugin-Install Drill
+
+This is the path most users will actually take: add the marketplace, install the plugin, initialize a project, and confirm the gates are live. Run it in a separate target project, not here.
+
+### C0. Run this drill somewhere else
+
+**Do this in a separate target project, not in agent-guild itself.** Enabling the plugin inside this repo double-registers every gate: the plugin's hooks fire alongside the ones already wired through `.claude/settings.json`, so each one fires twice. If you trip this, you'll see the tell: `/hooks` lists two entries for `stop-gate` and `dispatch-guard` instead of one, and a single blocked action produces two copies of the same deny message. That's the repo being both the kit and its own dev environment, not a bug to chase down.
+
+### C1. Add the marketplace
+
+- In a fresh `claude` session, in the target project: `> /plugin marketplace add kendrick/agent-guild`
+- Expect: the marketplace registers, and `agent-guild` shows up when you list it.
+
+### C2. Install the plugin
+
+- Session: `> /plugin install agent-guild`
+- Expect: the install succeeds, and namespaced skills like `/agent-guild:job` become available in that session.
+
+### C3. Initialize the project
+
+- Session: `> /agent-guild:init`
+- Expect: the orchestrator contract lands at `.agent-guild/CLAUDE.md`, the project's own `CLAUDE.md` gains the `@.agent-guild/CLAUDE.md` import, and the `.agent-guild/state/` subdirectories exist and are gitignored.
+- Shell checks:
+  ```
+  test -f .agent-guild/CLAUDE.md && echo "contract present"
+  grep -q '@.agent-guild/CLAUDE.md' CLAUDE.md && echo "import present"
+  test -d .agent-guild/state/tasks && echo "state dirs present"
+  git check-ignore -q .agent-guild/state && echo "state dir gitignored"
+  ```
+
+### C4. The gates fire in the new project
+
+Mirrors drill A2: prove `dispatch-guard` is live in the new project before you trust anything else about it.
+
+- Session: `> Use the Agent tool to dispatch subagent_type worker-standard with the prompt "write a limerick". Send it exactly like that.`
+- Expect: `dispatch-guard` blocks before the subagent starts, with a message containing `has no id line`. The orchestrator relays that it needs a `Task-ID`.
+
+Cleanup is up to you: uninstall with `/plugin uninstall agent-guild` if the target project was throwaway, or leave it installed if you're keeping it. Either way, this drill is the live test of the marketplace path, the one part of SMOKE.md that exercises a real install instead of a seeded one.
+
+## Part D: Two Things That Look Like Breakage But Aren't
 
 - **The first accessibility check is slow and needs the network.** `.agent-guild/scripts/check-a11y.mjs` installs Playwright and axe into `.agent-guild/scripts/node_modules` on its first run, which takes a couple of minutes and a connection. That's expected, once. Run offline, it can't bootstrap and exits 3, which a checker reports as an ERROR verdict (the check couldn't run), never a PASS or a clause FAIL.
 - **If a session ever ends with tasks still open, look for `.agent-guild/state/STALLED.md`.** The stop gate writes it when the same unfinished state blocked it three times running, then stands down so you aren't stuck. It names the tasks that jammed: a checker owing a verdict, a dispute needing a ruling, or a task that should be abandoned. Resolve by hand and delete the file. A fixture in `.agent-guild/hooks/test_hooks.py` already exercises this path, so you don't need to provoke it live.

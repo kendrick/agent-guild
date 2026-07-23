@@ -1,11 +1,11 @@
 ---
 name: job
-description: Phase 0 intake for a guild job. Turns an existing GitHub issue or a BYO spec ($ARGUMENTS — issue number, owner/repo#N, issue URL, local file path, or other URL) into .agent-guild/state/spec.md with a provenance header, ready for /agent-guild:constitution. Use when starting a job from an issue or an existing document — "start a job from issue 15", "kick off a job from this spec", "build issue #12".
+description: Phase 0 intake for a guild job. Turns an existing GitHub issue or a BYO spec ($ARGUMENTS — issue number, owner/repo#N, issue URL, local file path, or other URL) into .agent-guild/state/spec.md with a provenance header, then flows straight into /agent-guild:constitution. Use when starting a job from an issue or an existing document — "build issue #12", "kick off a job from this spec".
 ---
 
 # Intake a spec or issue
 
-`/agent-guild:job` is the guild's front door for work that already exists somewhere — a GitHub issue, a doc on disk, a page at a URL — instead of being authored fresh in the constitution interview. Its only output is one file, `.agent-guild/state/spec.md`, and its governing rule is **never fabricate**: every byte of spec content comes verbatim from the source, and a fetch failure produces an honest error, not a guess.
+`/agent-guild:job` is the guild's front door for work that already exists somewhere — a GitHub issue, a doc on disk, a page at a URL — instead of being authored fresh in the constitution interview. Its only artifact is one file, `.agent-guild/state/spec.md`, and its governing rule is **never fabricate**: every byte of spec content comes verbatim from the source, and a fetch failure produces an honest error, not a guess.
 
 ## 1. Classify `$ARGUMENTS`
 
@@ -67,7 +67,7 @@ Content, after the closing `---`:
 - **Issues**: the issue title as a Markdown heading (`# <title>`), a blank line, then the full issue body exactly as `gh` returned it — its own Markdown (code fences, lists, links) preserved untouched. Do not summarize, trim, or editorialize.
 - **File and URL sources**: the fetched/read content as-is, with no synthesized heading and no edits.
 
-## 4. Self-check before you tell the user you're done
+## 4. Self-check the header
 
 Run the validator against what you just wrote:
 
@@ -77,6 +77,10 @@ Run the validator against what you just wrote:
 
 Add `--issue N` when intake came from an issue (forms 1–3), so the validator also confirms the recorded `issue` matches the one you fetched. A nonzero exit means the header you wrote doesn't match the contract — fix it and re-run the check before moving on; don't leave a spec.md that fails its own validator.
 
-## 5. Hand off
+## 5. Flow into `/agent-guild:constitution`
 
-Tell the user `.agent-guild/state/spec.md` is ready and point them at `/agent-guild:constitution` — it collapses its interview into a confirm-and-adjust step when `spec.md` already exists, instead of running the full question bank.
+Once step 4's validator exits `0`, tell the user in one line that `.agent-guild/state/spec.md` is ready and validated — then, in that same turn, invoke `/agent-guild:constitution` yourself via the Skill tool. The turn that validates the spec is the turn that starts Phase 0.
+
+`/agent-guild:constitution` collapses its interview into a confirm-and-adjust step when `spec.md` already exists. That step belongs to the user: invoke the skill and let its interview run as designed — carry the baton to the confirm step, not past it.
+
+This flow-through is conditional on a successful, validated write. Every failure path in steps 1–2 already stops with an honest message and no `spec.md` on disk; none of them reaches this step or invokes `/agent-guild:constitution`.

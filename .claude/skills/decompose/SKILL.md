@@ -31,6 +31,8 @@ Set the frontmatter per the routing table in `CLAUDE.md`:
 
 Optional: a constitution may designate select high-severity clauses cross-vendor—checker must run on a different vendor than the executor. Honor that designation when assigning `checker`, once a courier lane is eligible as checker of record; today `checker-courier` only produces second opinions, so no clause can be assigned to it yet.
 
+A task that changes a shared contract—a schema, a template shape, a hook-visible format—cites the constitution's consumer-suite clause in its `check_method`, so the checker runs every suite that consumes the contract, not just the contract's own tests. Tasks that don't touch a shared contract carry no such citation.
+
 Done when every task names an executor, a checker, a check method covering each cited clause, and a spec excerpt a worker could act on cold.
 
 ## 4. Send it to audit

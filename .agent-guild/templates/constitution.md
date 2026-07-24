@@ -16,7 +16,9 @@ CHECK METHOD is one of:
   - a script: .agent-guild/scripts/check-foo.sh <args>  (exit 0 = pass; deterministic)
   - a judgment call: "checker-judgment: <one-line rubric the checker applies>"
 Deterministic checks route to checker-deterministic (haiku); judgment checks
-route to checker-judgment (opus).
+route to checker-judgment (opus). A scoped-diff clause ("touch only these
+paths") has a standard script—don't hand-roll it as judgment prose:
+.agent-guild/scripts/check-diff-scope.py <allowed>... [--ignore <path>].
 -->
 
 ## Clauses

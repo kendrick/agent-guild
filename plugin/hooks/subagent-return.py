@@ -9,8 +9,20 @@ subagent keeps working.
   artifacts they produced. "I'm done" in prose doesn't count; the state file
   has to say so.
 
-  Checkers/auditor must have written the verdict file for the attempt they were
-  checking, with a real verdict, and a Diagnosis section when it's a FAIL.
+  Checkers must have written a verdict of record at
+  state/verdicts/T-NNN-<tier>-r<retries>.json that conforms to
+  verdict.schema.json (checked via validate-verdict.py, not hand-parsed here—
+  one schema, one validator, no drift between what the hook accepts and what
+  the checker agents are told to produce). The auditor still writes the older
+  Markdown verdict shape (audit verdicts are out of scope for the JSON
+  migration; see the constitution's non-goals), so its check is unchanged.
+
+  We deliberately do NOT require the rendered `.md` sibling to exist here.
+  The JSON is the record of record; the renderer is the checker's documented
+  obligation, and the orchestrator can re-render it from the JSON at any
+  time. Gating a subagent's return on a cosmetic artifact that's trivially
+  reproducible from the one that matters would make this gate brittle for no
+  safety gain.
 
 Identifying which task finished means reading the subagent's transcript for its
 Task-ID/Audit-ID. That parsing depends on Claude Code's transcript format, which
@@ -22,6 +34,7 @@ most version-fragile point; the fixture tests pin the expected shape.
 """
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +66,29 @@ def _verdict_ok(path, require_diagnosis_on_fail=True):
     if verdict == "FAIL" and require_diagnosis_on_fail and not _has_diagnosis(text):
         return False, "verdict is FAIL but has no actionable ## Diagnosis section"
     return True, verdict
+
+
+def _validate_verdict_json(path):
+    """(ok, reason) for a checker's verdict-of-record JSON. reason is None on
+    success; on failure it's a message naming the failing path—either this
+    file's own path (missing/unreadable) or the JSON path within it that
+    validate-verdict.py rejected (e.g. "findings[0].evidence").
+
+    Runs validate-verdict.py as a subprocess rather than importing it: the
+    script's filename has a hyphen (not import-able without importlib
+    surgery), its CLI is the documented contract, and invoking it the same
+    way test_verdict_tools.py does means this gate can never drift from what
+    that contract actually enforces."""
+    if not os.path.exists(path):
+        return False, f"no verdict JSON at {os.path.relpath(path, _lib.project_dir())}"
+    validator = os.path.join(_lib.project_dir(), ".agent-guild", "scripts", "validate-verdict.py")
+    proc = subprocess.run(
+        [sys.executable, validator, path], capture_output=True, text=True,
+    )
+    if proc.returncode == 0:
+        return True, None
+    detail = proc.stderr.strip() or f"validate-verdict.py exited {proc.returncode}"
+    return False, detail
 
 
 def _latest_audit_verdict(audit_id):
@@ -142,17 +178,20 @@ def main(data):
             )
         return 0
 
-    # Checker.
+    # Checker. The verdict of record is JSON; validate-verdict.py is the one
+    # place schema + semantic rules live, so this gate defers to it entirely
+    # rather than re-deriving conformance itself.
     tier = str(task.get("executor_model", "")).strip().lower()
     retries = str(task.get("retries", "0")).strip() or "0"
-    vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}.md")
-    ok, reason = _verdict_ok(vpath)
+    rel = f".agent-guild/state/verdicts/{ident}-{tier}-r{retries}.json"
+    vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}.json")
+    ok, reason = _validate_verdict_json(vpath)
     if not ok:
         return _lib.block(
-            f"Checker for {ident} isn't done: {reason}. Write the verdict at "
-            f".agent-guild/state/verdicts/{ident}-{tier}-r{retries}.md (tier + retries from "
-            "the task file), with PASS/FAIL/ERROR and, for a FAIL, a Diagnosis "
-            "naming file, clause, and expected vs actual."
+            f"Checker for {ident} isn't done: verdict JSON at {rel} is missing or "
+            f"invalid ({reason}). Write a conforming verdict per "
+            ".agent-guild/schemas/verdict.schema.json, self-check it with "
+            "python3 .agent-guild/scripts/validate-verdict.py, then finish."
         )
     return 0
 

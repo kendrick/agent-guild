@@ -76,6 +76,44 @@ def con_pass(proj):
     write_verdict(proj, "CON-audit-r0.md", "PASS")
 
 
+KIT_ROOT = os.path.dirname(HOOKS)  # .agent-guild/, this repo's own real kit tree
+
+
+def seed_verdict_toolchain(proj):
+    """The checker branch of subagent-return.py shells out to the real
+    validate-verdict.py (see _validate_verdict_json)—not a stub—so any
+    scratch project exercising that path needs the actual script and schema
+    copied in, mirroring what a real copied-in kit provides."""
+    dst_scripts = os.path.join(proj, ".agent-guild", "scripts")
+    os.makedirs(dst_scripts, exist_ok=True)
+    shutil.copy(os.path.join(KIT_ROOT, "scripts", "validate-verdict.py"),
+                os.path.join(dst_scripts, "validate-verdict.py"))
+    dst_schemas = os.path.join(proj, ".agent-guild", "schemas")
+    os.makedirs(dst_schemas, exist_ok=True)
+    shutil.copy(os.path.join(KIT_ROOT, "schemas", "verdict.schema.json"),
+                os.path.join(dst_schemas, "verdict.schema.json"))
+
+
+def write_verdict_json(proj, name, **overrides):
+    """A checker verdict JSON per verdict.schema.json, conforming by default;
+    callers override fields to build each fixture (bad enum, empty findings,
+    a blocked outcome, ...). Mirrors PASS_VERDICT in test_verdict_tools.py."""
+    data = {
+        "task_id": "T-002",
+        "checker": "checker-deterministic",
+        "vendor": "anthropic",
+        "model": "claude-haiku-4",
+        "verdict": "pass",
+        "findings": [],
+        "timestamp": "2026-07-22T18:00:00Z",
+    }
+    data.update(overrides)
+    path = os.path.join(proj, ".agent-guild", "state", "verdicts", name)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    return path
+
+
 def transcript(proj, text, role="user", content_list=False):
     path = os.path.join(proj, ".agent-guild", "state", "log", "tx.jsonl")
     if content_list:
@@ -364,31 +402,54 @@ rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "worker-standard", "transcript_path": tx}, proj)
 check("worker needs-check but no artifacts → exit 2", rc == 2 and "artifacts" in err, err)
 
-# checker paths
+# checker paths: the verdict of record is JSON at T-NNN-<tier>-r<retries>.json,
+# gated by running it through validate-verdict.py (the same CLI contract
+# test_verdict_tools.py exercises directly). Six fixture cases per issue #29's
+# C-5: a conforming pass, a missing file, malformed JSON, a schema violation,
+# a semantic violation (fail with no findings), and a conforming blocked.
+seed_verdict_toolchain(proj)
 write_task(proj, "T-002", status="checking", executor_model="sonnet", retries=0)
-write_verdict(proj, "T-002-sonnet-r0.md", "PASS")
-tx = transcript(proj, "Task-ID: T-002")
-rc, out, err = run_hook("subagent-return.py",
-                        {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
-check("checker wrote PASS verdict → exit 0", rc == 0, f"rc={rc} err={err}")
+vjson = os.path.join(proj, ".agent-guild", "state", "verdicts", "T-002-sonnet-r0.json")
 
-os.remove(os.path.join(proj, ".agent-guild", "state", "verdicts", "T-002-sonnet-r0.md"))
+write_verdict_json(proj, "T-002-sonnet-r0.json", verdict="pass")
 tx = transcript(proj, "Task-ID: T-002")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
-check("checker, no verdict file → exit 2", rc == 2 and "isn't done" in err, err)
+check("checker wrote conforming JSON verdict → exit 0", rc == 0, f"rc={rc} err={err}")
 
-write_verdict(proj, "T-002-sonnet-r0.md", "FAIL", diagnosis=False)
+os.remove(vjson)
 tx = transcript(proj, "Task-ID: T-002")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
-check("checker FAIL w/o diagnosis → exit 2", rc == 2 and "Diagnosis" in err, err)
+check("checker, missing verdict JSON → exit 2, names the path",
+      rc == 2 and "T-002-sonnet-r0.json" in err, err)
 
-write_verdict(proj, "T-002-sonnet-r0.md", "FAIL", diagnosis=True)
+with open(vjson, "w", encoding="utf-8") as f:
+    f.write("{not valid json")
 tx = transcript(proj, "Task-ID: T-002")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
-check("checker FAIL w/ diagnosis → exit 0", rc == 0, f"rc={rc} err={err}")
+check("checker, malformed verdict JSON → exit 2", rc == 2 and "T-002-sonnet-r0.json" in err, err)
+
+write_verdict_json(proj, "T-002-sonnet-r0.json", verdict="maybe")
+tx = transcript(proj, "Task-ID: T-002")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
+check("checker, schema violation (bad verdict enum) → exit 2, names the field",
+      rc == 2 and "verdict" in err, err)
+
+write_verdict_json(proj, "T-002-sonnet-r0.json", verdict="fail", findings=[])
+tx = transcript(proj, "Task-ID: T-002")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
+check("checker, fail verdict with empty findings → exit 2, names findings",
+      rc == 2 and "findings" in err, err)
+
+write_verdict_json(proj, "T-002-sonnet-r0.json", verdict="blocked", findings=[])
+tx = transcript(proj, "Task-ID: T-002")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-deterministic", "transcript_path": tx}, proj)
+check("checker, conforming blocked verdict → exit 0", rc == 0, f"rc={rc} err={err}")
 
 # no id in transcript: fail loud but don't hang (exit 0), same as the block above
 tx = transcript(proj, "I did the work but never mention the id")

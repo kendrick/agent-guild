@@ -229,7 +229,7 @@ def generate_hooks_json(out_dir, shipped_hooks):
 def assemble_project_template(out_dir):
     """Build project-template/.agent-guild/ -- the per-project payload the
     future init skill copies into a user's repo: the orchestrator contract,
-    the check scripts, and the task/verdict templates."""
+    the check scripts, the task/verdict templates, and the verdict schema."""
     dst_root = os.path.join(out_dir, "project-template", ".agent-guild")
     os.makedirs(dst_root, exist_ok=True)
     shutil.copy2(
@@ -243,6 +243,11 @@ def assemble_project_template(out_dir):
     shutil.copytree(
         os.path.join(GUILD_DIR, "templates"),
         os.path.join(dst_root, "templates"),
+        ignore=_IGNORE_BUILD_BYPRODUCTS,
+    )
+    shutil.copytree(
+        os.path.join(GUILD_DIR, "schemas"),
+        os.path.join(dst_root, "schemas"),
         ignore=_IGNORE_BUILD_BYPRODUCTS,
     )
 

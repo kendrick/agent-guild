@@ -63,10 +63,10 @@ The loop:
 
 1. Move a `pending` task to `assigned` and dispatch its executor. **Every worker/checker dispatch prompt must contain a `Task-ID: T-NNN` line** (auditor: `Audit-ID:`). `dispatch-guard` blocks any dispatch that omits it.
 2. The worker returns with the task at `needs-check`. Set it to `checking` and dispatch its checker.
-3. Read the checker's verdict at `.agent-guild/state/verdicts/T-NNN-<tier>-r<retries>.md`:
-   - **PASS** → set `complete`.
-   - **FAIL** → rework (below).
-   - **ERROR** → the check itself broke. Fix the check (or the clause's `check_method`), then re-dispatch the checker. This does not count against the worker.
+3. A checker's verdict of record is JSON at `.agent-guild/state/verdicts/T-NNN-<tier>-r<retries>.json` (schema: `.agent-guild/schemas/verdict.schema.json`), with a rendered `.md` sibling at the same stem for you to read:
+   - **pass** → set `complete`.
+   - **fail** → rework (below).
+   - **blocked** → the check itself couldn't complete (script crashed, tool unreachable, vendor quota hit). Fix the check (or the clause's `check_method`), then re-dispatch the checker. This does not count against the worker.
 4. The `Stop` gate will not let your turn end while any task is non-terminal. It hands you the exact next move for each open task, which is what compels step 2's checker dispatch after a worker returns.
 
 ## Retry ladder

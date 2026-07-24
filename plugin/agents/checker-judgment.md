@@ -21,15 +21,19 @@ For each cited clause:
 2. Judge the artifact against the clause text and the rubric.
 3. Record the evidence you derived. A clause with no evidence line cannot PASS. "Looks fine" is not evidence; a quoted line, a command's output, or a fetched response is.
 
-Verdict: PASS if every cited clause is satisfied on evidence you derived; FAIL if any is violated; ERROR if you genuinely couldn't examine the artifact (missing build, unreachable URL).
+Verdict: `pass` if every cited clause is satisfied on evidence you derived; `fail` if any is violated; `blocked` if you genuinely couldn't examine the artifact (missing build, unreachable URL). `blocked` is the couldn't-run outcome, not a third flavor of pass/fail: it doesn't count against the worker, and the orchestrator fixes the check (or the clause's `check_method`) and re-dispatches you rather than sending the task back for rework.
 
 ## What you write
-Exactly one file: `.agent-guild/state/verdicts/<Task-ID>-<tier>-r<retries>.md`, from `.agent-guild/templates/verdict.md`.
-- Per-clause table, with the evidence you derived in the evidence column.
-- Every FAIL needs a `## Diagnosis` the worker can act on without guessing: file, line, the clause id and its quoted text, expected vs actual. If you can't say specifically what's wrong and where, you haven't finished checking.
-- Set the `verdict` field.
+Exactly one JSON file: `.agent-guild/state/verdicts/<Task-ID>-<tier>-r<retries>.json`, conforming to `.agent-guild/schemas/verdict.schema.json`.
+- `vendor: anthropic`; `model` is your own model.
+- One `findings[]` entry per cited clause, with the evidence you derived — a quoted line, a command's output, a fetched response — in the finding's `evidence` field: a file path plus line range, or a command-output excerpt. A `fail` verdict needs at least one finding; if you can't point at specific evidence, you haven't finished checking.
+- If you're returning `blocked`, put the reason in `findings[0].description` with the failing command's or fetch's output as its `evidence`.
 
-Write nothing else. Do not edit artifacts or fix problems yourself; you have no Edit tool by design. You judge, you don't repair.
+Then, in order:
+1. Self-check the file: run `.agent-guild/scripts/validate-verdict.py <path-to-your-.json>`. Fix anything it names — it prints the failing JSON path — before moving on. Never leave a verdict you haven't validated clean.
+2. Render the Markdown sibling: run `.agent-guild/scripts/render-verdict.py <path-to-your-.json>`. This writes `<Task-ID>-<tier>-r<retries>.md` beside the JSON. Never hand-write the `.md` — the renderer refuses to render a JSON file that doesn't validate, so a clean render is itself proof step 1 passed.
+
+The JSON is the verdict of record; the rendered `.md` is what humans read. Write nothing else. Do not edit artifacts or fix problems yourself; you have no Edit tool by design. You judge, you don't repair.
 
 ## Disputes
 A worker may dispute your verdict, and on judgment calls you can be the one who's wrong. That's the system working. If the orchestrator returns a correction, re-examine and issue a fresh, superseding verdict. The constitution's clause text decides, not your first read.

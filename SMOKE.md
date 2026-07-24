@@ -8,7 +8,7 @@ Two terminals help: one running `claude` in the repo root (the **session**), one
 
 1. Start `claude` in the repo root. On a freshly copied-in kit, Claude Code asks you to trust the workspace before it will run the project's hooks. **Accept it.** Until you do, the hooks don't fire, and a session with no gates is not proof of anything, it just looks like it passed.
 2. Type `/hooks`. Expect four registered: `stop-gate` (Stop), `subagent-return` (SubagentStop), `dispatch-guard` and `orchestrator-write-guard` (PreToolUse).
-3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `49 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
+3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `62 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
 
 Start from a clean slate in the shell:
 

@@ -29,6 +29,8 @@ Set the frontmatter per the routing table in `CLAUDE.md`:
 - `deps`: task ids that must complete first.
 - `## Spec excerpt`: the self-contained slice of spec the worker needs. Write it so the worker never has to open the full spec.
 
+Optional: a constitution may designate select high-severity clauses cross-vendor—checker must run on a different vendor than the executor. Honor that designation when assigning `checker`, once a courier lane is eligible as checker of record; today `checker-courier` only produces second opinions, so no clause can be assigned to it yet.
+
 Done when every task names an executor, a checker, a check method covering each cited clause, and a spec excerpt a worker could act on cold.
 
 ## 4. Send it to audit

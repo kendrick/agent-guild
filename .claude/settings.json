@@ -13,7 +13,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "worker-bulk|worker-standard|worker-craft|checker-deterministic|checker-judgment|auditor",
+        "matcher": "worker-bulk|worker-standard|worker-craft|checker-deterministic|checker-judgment|checker-courier|auditor",
         "hooks": [
           {
             "type": "command",

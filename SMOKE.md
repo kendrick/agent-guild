@@ -8,7 +8,7 @@ Two terminals help: one running `claude` in the repo root (the **session**), one
 
 1. Start `claude` in the repo root. On a freshly copied-in kit, Claude Code asks you to trust the workspace before it will run the project's hooks. **Accept it.** Until you do, the hooks don't fire, and a session with no gates is not proof of anything, it just looks like it passed.
 2. Type `/hooks`. Expect four registered: `stop-gate` (Stop), `subagent-return` (SubagentStop), `dispatch-guard` and `orchestrator-write-guard` (PreToolUse).
-3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `79 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
+3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `89 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
 
 Start from a clean slate in the shell:
 
@@ -162,6 +162,72 @@ Then open `.agent-guild/state/tasks/T-001.md` in your editor and set these front
 - Shell cleanup:
   ```
   rm -f guild-motto.txt .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/*.md .agent-guild/state/disputes/*.md .agent-guild/state/notes/*.md .agent-guild/state/log/* .agent-guild/state/spec.md .agent-guild/state/constitution.md
+  ```
+
+### B6. Cross-vendor second opinion
+
+Same B0 setup, but skipped straight to a checking-status task with a correct artifact already in place, so there's no need to run the worker first. This one needs a live, authed `codex-cli` (issue #2's verified environment); skip it and come back once that's set up.
+
+- Shell: seed the toy constitution and a checking task with a passing artifact.
+  ```
+  cat > .agent-guild/state/spec.md <<'EOF'
+  # Spec
+  Produce guild-motto.txt: a single line, all uppercase, containing the word GUILD.
+  EOF
+
+  cat > .agent-guild/state/constitution.md <<'EOF'
+  # Constitution: smoke
+  ## Clauses
+  ### C-1: motto shouts the guild
+  - text: guild-motto.txt contains the exact uppercase word GUILD.
+  - check: .agent-guild/scripts/check-build.sh "grep -q GUILD guild-motto.txt"
+  - severity: blocker
+  - failing example: a file reading "the guild endures" (lowercase).
+  EOF
+
+  cat > .agent-guild/state/verdicts/CON-audit-r0.md <<'EOF'
+  ---
+  task: CON-audit
+  tier: orchestrator
+  retry: 0
+  checker: auditor
+  verdict: PASS
+  checked_at: 2026-01-01T00:00:00Z
+  ---
+  ## Per-clause results
+  | clause | method | evidence | expected | actual | result |
+  | C-1 | falsifiable + scripted | has a failing example and a grep check | falsifiable | falsifiable | PASS |
+  EOF
+
+  printf 'GUILD ENDURES\n' > guild-motto.txt
+  .agent-guild/scripts/new-task.py "write the guild motto"
+  ```
+  In the editor, set `T-001`'s frontmatter: `clauses: [C-1]`, `executor: worker-standard`, `executor_model: sonnet`, `checker: checker-deterministic`, `check_method: .agent-guild/scripts/check-build.sh "grep -q GUILD guild-motto.txt"`, `artifacts: [guild-motto.txt]`, `status: checking`, `retries: 0`.
+- Session: `> Dispatch checker-courier for T-001.`
+- Expect: the courier reads the task and the artifact, calls the lane's CLI, and writes a second-opinion verdict. The standard stem stays untouched, since this is comparison data, not the verdict of record.
+- Shell checks:
+  ```
+  test -f .agent-guild/state/verdicts/T-001-sonnet-r0-codex.json && echo "suffixed verdict present"
+  test -f .agent-guild/state/verdicts/T-001-sonnet-r0-codex.md && echo "rendered sibling present"
+  python3 .agent-guild/scripts/validate-verdict.py .agent-guild/state/verdicts/T-001-sonnet-r0-codex.json
+  tail -n1 .agent-guild/state/log/vendor-calls.jsonl | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); assert d['brief_tokens'] is not None; print('brief_tokens:', d['brief_tokens'])"
+  ```
+  Expect `validate-verdict.py` to print `OK: ... is a conforming verdict` and exit 0, and the ledger check to print a number rather than raising.
+
+### B7. Quota drill
+
+- Shell: seed the courier's quota sentinel.
+  ```
+  mkdir -p .agent-guild/state/exhausted && touch .agent-guild/state/exhausted/codex
+  ```
+- Session: `> Dispatch checker-courier for T-001.`
+- Expect: `dispatch-guard` blocks before the subagent starts, with a message naming the in-family fallback (`checker-deterministic`, read off T-001's own `checker` field) and noting the sentinel is user-cleared, like PAUSED.
+- Session: `> Dispatch checker-deterministic for T-001.`
+- Expect: the checker of record runs normally and writes the standard-stem verdict—the sentinel blocks only the courier's second opinion, never the in-family check it's compared against.
+- Shell check: `cat .agent-guild/state/verdicts/T-001-sonnet-r0.md` shows `verdict: PASS`. The in-family path never noticed the sentinel.
+- Shell cleanup: the sentinel is user-cleared, the same contract as PAUSED. Remove it by hand once you're satisfied, along with the rest of this drill's state.
+  ```
+  rm -f .agent-guild/state/exhausted/codex guild-motto.txt .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/* .agent-guild/state/log/* .agent-guild/state/spec.md .agent-guild/state/constitution.md
   ```
 
 ## Part C: The Plugin-Install Drill

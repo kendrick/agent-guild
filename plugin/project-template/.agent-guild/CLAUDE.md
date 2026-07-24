@@ -23,12 +23,13 @@ Workers build. Checkers verify workers, re-deriving every claim rather than trus
 The agent frontmatter defaults match this table; escalation overrides the model
 on the Agent call without changing the agent. -->
 
-| Tier   | Agent(s)                                | Use for                                                                               |
-| ------ | --------------------------------------- | ------------------------------------------------------------------------------------- |
-| haiku  | worker-bulk, checker-deterministic      | Mechanical, zero-judgment work; and all deterministic checks (they only run scripts). |
-| sonnet | worker-standard                         | Clear-spec implementation judged on correctness.                                      |
-| opus   | worker-craft, checker-judgment, auditor | User-facing/taste work; judgment checks; auditing your own work.                      |
-| fable  | (override only)                         | The final escalation rung, and genuinely hard, ambiguous problems. Reserved.          |
+| Tier              | Agent(s)                                | Use for                                                                                                                                                            |
+| ----------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| haiku              | worker-bulk, checker-deterministic      | Mechanical, zero-judgment work; and all deterministic checks (they only run scripts).                                                                             |
+| sonnet             | worker-standard                         | Clear-spec implementation judged on correctness.                                                                                                                  |
+| opus               | worker-craft, checker-judgment, auditor | User-facing/taste work; judgment checks; auditing your own work.                                                                                                  |
+| fable              | (override only)                         | The final escalation rung, and genuinely hard, ambiguous problems. Reserved.                                                                                      |
+| courier (lane: codex) | checker-courier                     | A haiku courier relaying a judgment check to an external vendor CLI (lane `codex`, far side currently `gpt-5.6-terra`). Auto-dispatched for a second opinion after every checker of record returns, not assigned via a task's `checker` field. Never a rung on the escalation ladder; if the lane's exhausted, the fallback is the task's in-family checker, not the next tier up. |
 
 Route a task by the work, not the default: a mechanical task goes to worker-bulk even inside a taste-heavy job. A clause checked by a script routes to checker-deterministic; a clause checked by a rubric routes to checker-judgment.
 
@@ -69,6 +70,10 @@ The loop:
    - **blocked** → the check itself couldn't complete (script crashed, tool unreachable, vendor quota hit). Fix the check (or the clause's `check_method`), then re-dispatch the checker. This does not count against the worker.
 4. The `Stop` gate will not let your turn end while any task is non-terminal. It hands you the exact next move for each open task, which is what compels step 2's checker dispatch after a worker returns.
 
+### Dual-check regime
+
+Until the #34 evaluation closes, every task gets a second opinion on top of step 2 above: once its checker of record returns, dispatch `checker-courier` on the same Task-ID too (status stays `checking` for both dispatches). The courier's verdict lands at the lane-suffixed stem, `T-NNN-<tier>-r<retries>-codex.json`, rather than the standard one — comparison data, not a second gate. The standard-stem verdict is never outvoted by it; it alone decides `complete` or rework. Where the two disagree, that disagreement is dispute-grade input: read both directly and record the comparison for #34, rather than routing it through the dispute flow above.
+
 ## Retry ladder
 
 A FAIL is not "try again." It's "here is precisely what's wrong."
@@ -100,4 +105,5 @@ If one checker keeps producing bad verdicts, the fault is usually the clause, no
 - `.agent-guild/state/tasks/`, `.agent-guild/state/verdicts/`, `.agent-guild/state/disputes/`, `.agent-guild/state/notes/`—the message bus. Workers write notes; you never read them (they're the worker's self-report, off-limits to keep verification honest).
 - `.agent-guild/state/log/`—dispatches, escalations, and the stop-gate's livelock counter.
 - `.agent-guild/state/PAUSED`—if this file exists, every hook stands down. Only the user creates it, to hand control back or work around a broken gate.
+- `.agent-guild/state/exhausted/codex`—the courier's quota sentinel, created by `checker-courier` itself on a quota or rate-limit signal from the lane. While it exists, `dispatch-guard` denies further courier dispatches. Cleared only by the user, the same contract as PAUSED. The checker of record is unaffected—a denied second opinion costs nothing, so no substitution is needed.
 - `.agent-guild/state/STALLED.md`—the stop gate writes this when the same open-task state blocked it three times running. It means the loop is stuck: a checker owes a verdict, a dispute needs a ruling, or a task should be abandoned. Resolve by hand and delete it.

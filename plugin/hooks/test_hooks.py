@@ -119,6 +119,26 @@ def seed_verdict_toolchain(proj):
                 os.path.join(dst_schemas, "verdict.schema.json"))
 
 
+def seed_ledger_line(proj, task_id, quota_event=True):
+    """Append one real vendor-ledger line for task_id via the actual
+    ledger-append.py (not hand-formatted JSON)—the quota fixture needs a
+    genuinely conforming line, and ledger-append.py is the only sanctioned
+    way to write one. Runs the repo's own script (it takes --ledger
+    explicitly, so it needs no copy-in the way seed_verdict_toolchain's
+    validate-verdict.py does)."""
+    ledger = os.path.join(proj, ".agent-guild", "state", "log", "vendor-calls.jsonl")
+    subprocess.run(
+        [sys.executable, os.path.join(KIT_ROOT, "scripts", "ledger-append.py"),
+         "--task-id", task_id, "--vendor", "openai", "--model", "gpt-5.6-terra",
+         "--started-at", "2026-07-22T18:00:00Z", "--duration-ms", "4100",
+         "--exit-code", "1", "--artifacts",
+         *(["--quota-event"] if quota_event else []),
+         "--ledger", ledger],
+        check=True, capture_output=True, text=True,
+    )
+    return ledger
+
+
 def write_verdict_json(proj, name, **overrides):
     """A checker verdict JSON per verdict.schema.json, conforming by default;
     callers override fields to build each fixture (bad enum, empty findings,
@@ -131,6 +151,8 @@ def write_verdict_json(proj, name, **overrides):
         "verdict": "pass",
         "findings": [],
         "timestamp": "2026-07-22T18:00:00Z",
+        "duration_ms": 1200,
+        "cost_usd": 0.02,
     }
     data.update(overrides)
     path = os.path.join(proj, ".agent-guild", "state", "verdicts", name)
@@ -429,6 +451,49 @@ rc, out, err = run_hook("dispatch-guard.py",
 check("bare-name worker, fully legal (regression after normalization) → exit 0",
       rc == 0, f"rc={rc} err={err}")
 
+# ------------------------------------------- dispatch-guard: checker-courier
+# Issue #8: checker-courier is the second-opinion lane—dispatchable on any
+# checking task regardless of the task's own `checker` field—so these
+# fixtures pin its three extra denials on top of that already-legal path.
+print("dispatch-guard.py: checker-courier (issue #8)")
+proj_courier = fresh_proj()
+con_pass(proj_courier)
+write_task(proj_courier, "T-020", status="checking", checker="checker-judgment")
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020"}}, proj_courier)
+check("checker-courier on checking task named for checker-judgment → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020", "model": "opus"}}, proj_courier)
+check("checker-courier with a model override → exit 2, says drop the override",
+      rc == 2 and "Drop the override" in err, err)
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-020\nRun it with workspace-write access."}}, proj_courier)
+check("checker-courier requesting workspace-write → exit 2, read-only by contract",
+      rc == 2 and "read-only" in err, err)
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-020\nRun with danger-full-access."}}, proj_courier)
+check("checker-courier requesting danger-full-access → exit 2, read-only by contract",
+      rc == 2 and "read-only" in err, err)
+
+os.makedirs(os.path.join(proj_courier, ".agent-guild", "state", "exhausted"), exist_ok=True)
+open(os.path.join(proj_courier, ".agent-guild", "state", "exhausted", "codex"), "w").close()
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020"}}, proj_courier)
+check("checker-courier dispatch under exhausted/codex → exit 2, names in-family fallback",
+      rc == 2 and "checker-judgment" in err and "PAUSED" in err, err)
+os.remove(os.path.join(proj_courier, ".agent-guild", "state", "exhausted", "codex"))
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020"}}, proj_courier)
+check("checker-courier dispatch once sentinel is cleared → exit 0", rc == 0, f"rc={rc} err={err}")
+
 # --------------------------------------------------------- subagent-return
 print("subagent-return.py")
 proj = fresh_proj()
@@ -581,6 +646,60 @@ rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj_scope)
 check("checker valid return on T-001 while T-002 has no verdict → exit 0, no T-002 demand",
       rc == 0 and "T-002" not in out and "T-002" not in err, f"rc={rc} out={out!r} err={err!r}")
+
+# ------------------------------------------- subagent-return: checker-courier
+print("subagent-return.py: checker-courier (issue #8)")
+
+# Valid lane-suffixed verdict accepted; the in-family checker's OWN return on
+# the same task still validates at the standard (unsuffixed) stem—the lane
+# suffix is courier-only, never a change to what checker-judgment writes.
+proj_lane = fresh_proj()
+seed_verdict_toolchain(proj_lane)
+write_task(proj_lane, "T-021", status="checking", checker="checker-judgment",
+           executor_model="sonnet", retries=0)
+
+write_verdict_json(proj_lane, "T-021-sonnet-r0-codex.json",
+                    task_id="T-021", checker="checker-courier", vendor="openai",
+                    model="gpt-5.6-terra", verdict="pass")
+tx = transcript(proj_lane, "Task-ID: T-021")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-courier", "transcript_path": tx}, proj_lane)
+check("checker-courier valid lane-suffixed verdict (T-NNN-<tier>-r<retries>-codex.json) → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+write_verdict_json(proj_lane, "T-021-sonnet-r0.json",
+                    task_id="T-021", checker="checker-judgment", verdict="pass")
+tx = transcript(proj_lane, "Task-ID: T-021")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-judgment", "transcript_path": tx}, proj_lane)
+check("in-family checker return on the same task still validated at the standard stem → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+# Quota return: sentinel + a ledger line (real ledger-append.py) carrying
+# quota_event: true + no suffixed verdict file at all → accepted.
+proj_quota = fresh_proj()
+seed_verdict_toolchain(proj_quota)
+write_task(proj_quota, "T-022", status="checking", checker="checker-deterministic",
+           executor_model="sonnet", retries=0)
+os.makedirs(os.path.join(proj_quota, ".agent-guild", "state", "exhausted"), exist_ok=True)
+open(os.path.join(proj_quota, ".agent-guild", "state", "exhausted", "codex"), "w").close()
+seed_ledger_line(proj_quota, "T-022", quota_event=True)
+tx = transcript(proj_quota, "Task-ID: T-022")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-courier", "transcript_path": tx}, proj_quota)
+check("checker-courier quota return (ledger quota_event + sentinel, no verdict) → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+# Negative: neither a valid suffixed verdict nor quota evidence present → denied.
+proj_noquota = fresh_proj()
+seed_verdict_toolchain(proj_noquota)
+write_task(proj_noquota, "T-023", status="checking", checker="checker-deterministic",
+           executor_model="sonnet", retries=0)
+tx = transcript(proj_noquota, "Task-ID: T-023")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-courier", "transcript_path": tx}, proj_noquota)
+check("checker-courier return with neither verdict nor quota evidence → exit 2",
+      rc == 2 and "quota bailout" in err, err)
 
 # --------------------------------------------------- orchestrator-write-guard
 print("orchestrator-write-guard.py")

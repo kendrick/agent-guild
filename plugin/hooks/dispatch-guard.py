@@ -99,6 +99,36 @@ def main(data):
                 f"{tid} is '{status}', not 'checking'. Set status to checking "
                 "and update the task before dispatching its checker."
             )
+        # Deliberate: this branch never reads the task's `checker` field, so
+        # a dispatch is legal on ANY checking-status task regardless of which
+        # in-family checker is named as checker of record. That's exactly
+        # what the second-opinion contract needs—checker-courier below rides
+        # this same allowance to run alongside the checker of record rather
+        # than in place of it.
+        if agent == "checker-courier":
+            if override:
+                return _lib.block(
+                    f"Dispatch to checker-courier for {tid} carries a model "
+                    f"override ({override!r}). Drop the override—the courier "
+                    "runs its own default; there is no Claude model named codex."
+                )
+            if "workspace-write" in prompt or "danger-full-access" in prompt:
+                return _lib.block(
+                    f"Dispatch to checker-courier for {tid} requests "
+                    "workspace-write or danger-full-access. The lane is "
+                    "read-only by contract; drop the request."
+                )
+            lane = _lib.DEFAULT_MODEL[agent]
+            if _lib.lane_exhausted(lane):
+                in_family = str(task.get("checker", "")).strip() or "its checker of record"
+                return _lib.block(
+                    f"checker-courier's '{lane}' lane is exhausted "
+                    f"(.agent-guild/state/exhausted/{lane} exists). Re-dispatch "
+                    f"{tid}'s in-family checker ('{in_family}') instead—a "
+                    "second-opinion denial costs nothing, the verdict of "
+                    "record is unaffected. The sentinel is user-cleared, "
+                    "like PAUSED."
+                )
         _log(raw, tid, effective_model)
         return 0
 

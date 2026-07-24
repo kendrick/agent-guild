@@ -17,6 +17,14 @@ subagent keeps working.
   Markdown verdict shape (audit verdicts are out of scope for the JSON
   migration; see the constitution's non-goals), so its check is unchanged.
 
+  checker-courier, the cross-vendor second-opinion lane, writes its verdict
+  at the SAME stem plus a lane suffix (…-codex.json)—comparison data, never
+  the verdict of record—and validates through the same validate-verdict.py
+  call at that path. It has one other legal way to finish: the documented
+  quota bailout (ledger line with quota_event: true, then the lane's
+  exhaustion sentinel, no verdict written), which this gate accepts in place
+  of a verdict file.
+
   We deliberately do NOT require the rendered `.md` sibling to exist here.
   The JSON is the record of record; the renderer is the checker's documented
   obligation, and the orchestrator can re-render it from the JSON at any
@@ -32,6 +40,7 @@ the way stop-gate does), so an id failure fails loud and lets the subagent finis
 leaving the task open for the main-session stop-gate to catch. This is the kit's
 most version-fragile point; the fixture tests pin the expected shape.
 """
+import json
 import os
 import re
 import subprocess
@@ -89,6 +98,33 @@ def _validate_verdict_json(path):
         return True, None
     detail = proc.stderr.strip() or f"validate-verdict.py exited {proc.returncode}"
     return False, detail
+
+
+def _quota_return_ok(task_id, lane):
+    """True if a courier's quota bailout (constitution C-3) is evidenced for
+    this task: the lane's exhaustion sentinel is set AND the vendor ledger's
+    LAST line for this task carries quota_event: true. Callers only reach
+    this after confirming no suffixed verdict file exists—the third leg of
+    the documented combination (ledger line, then sentinel, then no verdict,
+    in that order) is absence, not something this function re-checks."""
+    if not _lib.lane_exhausted(lane):
+        return False
+    ledger_path = _lib.state_path("log", "vendor-calls.jsonl")
+    if not os.path.exists(ledger_path):
+        return False
+    last_for_task = None
+    with open(ledger_path, encoding="utf-8") as f:
+        for raw in f:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except json.JSONDecodeError:
+                continue  # a courier crash mid-write can't poison a later line
+            if rec.get("task_id") == task_id:
+                last_for_task = rec
+    return bool(last_for_task) and last_for_task.get("quota_event") is True
 
 
 def _latest_audit_verdict(audit_id):
@@ -189,6 +225,34 @@ def main(data):
     # rather than re-deriving conformance itself.
     tier = str(task.get("executor_model", "")).strip().lower()
     retries = str(task.get("retries", "0")).strip() or "0"
+
+    if agent == "checker-courier":
+        # A second-opinion return writes a LANE-suffixed stem, never the
+        # verdict of record—same schema, different path, same validator.
+        lane = _lib.DEFAULT_MODEL["checker-courier"]
+        rel = f".agent-guild/state/verdicts/{ident}-{tier}-r{retries}-{lane}.json"
+        vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}-{lane}.json")
+        if os.path.exists(vpath):
+            ok, reason = _validate_verdict_json(vpath)
+            if ok:
+                return 0
+            return _lib.block(
+                f"checker-courier for {ident} wrote a verdict at {rel} but it "
+                f"doesn't validate ({reason}). Fix it per "
+                ".agent-guild/schemas/verdict.schema.json, or—if this was meant "
+                "to be a quota bailout (C-3)—remove the file and finish per "
+                "that protocol instead (ledger line, then sentinel, no verdict)."
+            )
+        if _quota_return_ok(ident, lane):
+            return 0
+        return _lib.block(
+            f"checker-courier for {ident} isn't done: no verdict JSON at {rel}, "
+            f"and no quota bailout evidence either (needs "
+            f".agent-guild/state/exhausted/{lane} plus a vendor-ledger line for "
+            f"{ident} with quota_event: true). Write a conforming verdict, or "
+            "complete the quota protocol, then finish."
+        )
+
     rel = f".agent-guild/state/verdicts/{ident}-{tier}-r{retries}.json"
     vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}.json")
     ok, reason = _validate_verdict_json(vpath)

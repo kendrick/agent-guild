@@ -33,10 +33,17 @@ DEFAULT_MODEL = {
     "checker-deterministic": "haiku",
     "checker-judgment": "opus",
     "auditor": "opus",
+    # checker-courier's own brain is haiku (set in the agent file, same as
+    # every other checker); "codex" here is the LANE tier this entry exists
+    # for, not a Claude model—dispatch-guard needs an effective model per
+    # agent for its tier-match logic and the dispatch log, and there is no
+    # Claude model named codex, so courier dispatches carry no override at
+    # all. Read this value as dispatch-logging plumbing, never as a model.
+    "checker-courier": "codex",
 }
 GUILD_AGENTS = set(DEFAULT_MODEL)
 WORKER_AGENTS = {"worker-bulk", "worker-standard", "worker-craft"}
-CHECKER_AGENTS = {"checker-deterministic", "checker-judgment"}
+CHECKER_AGENTS = {"checker-deterministic", "checker-judgment", "checker-courier"}
 
 
 def bare_agent(subagent_type):
@@ -93,6 +100,18 @@ def paused():
     """True if the user has parked the gates. Must never raise."""
     try:
         return os.path.exists(state_path("PAUSED"))
+    except Exception:
+        return False
+
+
+def lane_exhausted(lane):
+    """True if a courier lane's quota sentinel is set (state/exhausted/<lane>,
+    the per-lane directory form, adopted now so a future second lane needs no
+    migration). Must never raise, same contract as paused(): a broken check
+    here can't be allowed to block the in-family fallback dispatch-guard
+    steers callers toward when a lane is exhausted."""
+    try:
+        return os.path.exists(state_path("exhausted", lane))
     except Exception:
         return False
 

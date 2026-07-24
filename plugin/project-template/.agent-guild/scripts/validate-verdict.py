@@ -98,6 +98,11 @@ def schema_violation(instance, schema, path=""):
     order, so the reported path is always the first field worth fixing."""
     types = schema.get("type")
     if types is not None:
+        # `type` can be a list, e.g. ["integer", "null"] — that's how
+        # verdict.schema.json marks duration_ms/cost_usd nullable while still
+        # listing them in `required` (OpenAI's strict structured-output mode
+        # rejects a schema that leaves any property out of `required`, so
+        # "optional" has to be expressed as a nullable type instead).
         expected = types if isinstance(types, list) else [types]
         if not any(_matches_type(instance, t) for t in expected):
             want = " or ".join(expected)

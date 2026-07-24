@@ -59,6 +59,8 @@ PASS_VERDICT = {
     "verdict": "pass",
     "findings": [],
     "timestamp": "2026-07-22T18:00:00Z",
+    "duration_ms": 1200,
+    "cost_usd": 0.02,
 }
 
 FAIL_VERDICT = {
@@ -76,7 +78,20 @@ FAIL_VERDICT = {
         }
     ],
     "timestamp": "2026-07-22T18:05:00Z",
+    "duration_ms": 4300,
+    "cost_usd": 0.11,
 }
+
+# The live probe output from issue #2 — the first real call against
+# --output-schema, which 400'd on the pre-fix schema ("'required' is
+# required ... Missing 'duration_ms'"). Kept as a raw string, not a dict fed
+# through json.dump, so the fixture is the exact bytes that round-tripped
+# clean from gpt-5.6-terra, not a reformatted lookalike.
+PROBE_JSON_RAW = (
+    '{"task_id":"T-000","checker":"checker-judgment-codex","vendor":"openai",'
+    '"model":"gpt-5.6-terra","verdict":"pass","findings":[],'
+    '"timestamp":"2026-07-24T04:00:00Z","duration_ms":null,"cost_usd":null}'
+)
 
 GOLDEN_MARKDOWN = (
     "---\n"
@@ -86,6 +101,8 @@ GOLDEN_MARKDOWN = (
     "model: claude-opus-4\n"
     "verdict: FAIL\n"
     "checked_at: 2026-07-22T18:05:00Z\n"
+    "duration_ms: 4300\n"
+    "cost_usd: 0.11\n"
     "---\n"
     "\n"
     "<!-- GENERATED FILE—do not hand-edit. Rendered by render-verdict.py\n"
@@ -117,6 +134,38 @@ with tempfile.TemporaryDirectory() as d:
     path = write_json(d, "fail.json", FAIL_VERDICT)
     rc, out, err = run_validate(path)
     check("fail verdict with one evidence-backed finding: exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    path = os.path.join(d, "probe.json")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(PROBE_JSON_RAW)
+    rc, out, err = run_validate(path)
+    check("issue #2 probe JSON validates clean: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# --------------------------------------------------------- strict-mode nullable fields
+print("strict-mode nullable fields (duration_ms, cost_usd)")
+
+with tempfile.TemporaryDirectory() as d:
+    omits_duration = dict(PASS_VERDICT)
+    del omits_duration["duration_ms"]
+    path = write_json(d, "omits_duration.json", omits_duration)
+    rc, out, err = run_validate(path)
+    check("omitted duration_ms: nonzero exit", rc != 0, f"rc={rc}")
+    check("omitted duration_ms: stderr names duration_ms", "duration_ms" in err, f"err={err!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    null_duration = dict(PASS_VERDICT)
+    null_duration["duration_ms"] = None
+    path = write_json(d, "null_duration.json", null_duration)
+    rc, out, err = run_validate(path)
+    check("null duration_ms alone: exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    null_cost = dict(PASS_VERDICT)
+    null_cost["cost_usd"] = None
+    path = write_json(d, "null_cost.json", null_cost)
+    rc, out, err = run_validate(path)
+    check("null cost_usd alone: exit 0", rc == 0, f"rc={rc} err={err}")
 
 # ------------------------------------------------------------------ schema violations
 print("schema violations (nonzero exit, failing path named)")

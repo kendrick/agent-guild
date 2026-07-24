@@ -25,6 +25,7 @@ Verdict: `pass` if every cited clause is satisfied on evidence you derived; `fai
 
 ## What you write
 Exactly one JSON file: `.agent-guild/state/verdicts/<Task-ID>-<tier>-r<retries>.json`, conforming to `.agent-guild/schemas/verdict.schema.json`.
+- Emit every field the schema lists, `duration_ms` and `cost_usd` included — set them to `null` when you don't know them. Omitting either key is nonconforming; the return gate will bounce it.
 - `vendor: anthropic`; `model` is your own model.
 - One `findings[]` entry per cited clause, with the evidence you derived — a quoted line, a command's output, a fetched response — in the finding's `evidence` field: a file path plus line range, or a command-output excerpt. A `fail` verdict needs at least one finding; if you can't point at specific evidence, you haven't finished checking.
 - If you're returning `blocked`, put the reason in `findings[0].description` with the failing command's or fetch's output as its `evidence`.

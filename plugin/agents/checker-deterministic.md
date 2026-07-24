@@ -26,6 +26,7 @@ Verdict rule:
 
 ## What you write
 Exactly one JSON file: `.agent-guild/state/verdicts/<Task-ID>-<tier>-r<retries>.json`, conforming to `.agent-guild/schemas/verdict.schema.json`.
+- Emit every field the schema lists, `duration_ms` and `cost_usd` included — set them to `null` when you don't know them. Omitting either key is nonconforming; the return gate will bounce it.
 - `vendor: anthropic`; `model` is your own model.
 - One `findings[]` entry per clause the command output speaks to: `clause_id`, `severity`, a one-sentence `description`, and `evidence` — the command's own output excerpt, or a file path plus line range. A `fail` verdict needs at least one finding; a worker can't act on a FAIL with nothing pointing at it.
 - If a check came back `blocked`, put the reason in `findings[0].description` with the failing command's output as its `evidence`.

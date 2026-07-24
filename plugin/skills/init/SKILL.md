@@ -10,6 +10,16 @@ disable-model-invocation: true
 
 Its governing property is **idempotent, never silently destructive**: every step below states what happens when its target already exists, and running `/agent-guild:init` again — at any point — is safe. A second run reports the same five things as already in place and writes nothing new.
 
+## Check for double-registration
+
+Before touching anything else, check whether the project's own `.claude/settings.json` already wires the guild's gates (a hooks entry referencing `dispatch-guard.py` or one of its siblings). If it does, the plugin's own `hooks.json` and that copy-in registration will both be active once this install finishes—every gate fires twice, and the stop-gate's stall counter reaches `STALLED.md` after two real blocks instead of three.
+
+If you find a hit, warn before continuing:
+
+> agent-guild: this project's gates are registered twice (this plugin's hooks.json AND .claude/settings.json)—every gate fires twice, and the stall counter reaches STALLED after two real blocks instead of three. Fix it by removing the guild hooks block from .claude/settings.json (migrating copy-in to plugin), or disable the plugin for this project by hand-editing .claude/settings.local.json to add `"enabledPlugins": {"agent-guild@agent-guild": false}` (or `claude plugin disable agent-guild@agent-guild --scope local` if you've verified that's safe in your setup)—never `--scope project`, which writes the tracked settings.json.
+
+Then continue with step 0 and the rest of the install as normal—this is a warning, not a stop condition, and it doesn't change what steps 1–5 do. As always, never create, edit, or merge `.claude/settings.json` yourself to resolve it; that decision belongs to the user.
+
 ## 0. Confirm the payload actually exists
 
 Resolve `${CLAUDE_PLUGIN_ROOT}/project-template/` before touching anything else. Two ways this fails, and both are a hard stop, not a fallback:
@@ -84,7 +94,7 @@ Plugin users get the four hook gates from the plugin's own `hooks/hooks.json`, r
 
 ## Summary and hand-off
 
-End every run — including a second run that changed nothing — with a short summary: which of steps 1–5 created something, which reported already-in-place, and which were skipped pending a user decision (step 1 or 2's differs-case). Then name the next step:
+End every run — including a second run that changed nothing — with a short summary: which of steps 1–5 created something, which reported already-in-place, and which were skipped pending a user decision (step 1 or 2's differs-case). If the double-registration check above found a hit, repeat that warning here too, so it isn't buried above the steps 1–5 noise. Then name the next step:
 
 - Run `/agent-guild:job <issue|file|url>` to intake existing work into a spec.
 - Run `/agent-guild:constitution` to author a spec fresh through the interview.

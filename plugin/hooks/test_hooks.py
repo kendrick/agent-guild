@@ -24,13 +24,38 @@ HOOKS = os.path.dirname(os.path.abspath(__file__))
 passed = failed = 0
 
 
-def run_hook(name, payload, proj):
+def run_hook_path(script_path, payload, proj):
     env = dict(os.environ, CLAUDE_PROJECT_DIR=proj)
     p = subprocess.run(
-        [sys.executable, os.path.join(HOOKS, name)],
+        [sys.executable, script_path],
         input=json.dumps(payload), capture_output=True, text=True, env=env,
     )
     return p.returncode, p.stdout, p.stderr
+
+
+def run_hook(name, payload, proj):
+    return run_hook_path(os.path.join(HOOKS, name), payload, proj)
+
+
+def copy_in_hooks(proj):
+    """Copy session-nudge.py + _lib.py into proj's own .agent-guild/hooks/,
+    mirroring a real copy-in install. run_hook() always execs the ORIGINAL
+    script under this repo's own .agent-guild/hooks/, which is never under a
+    scratch proj tempdir—so every existing fixture already sees a
+    plugin-rooted instance. Running THIS copy instead is the only way to get
+    a genuinely project-rooted instance for the negative-case fixture below."""
+    dst = os.path.join(proj, ".agent-guild", "hooks")
+    os.makedirs(dst, exist_ok=True)
+    for name in ("session-nudge.py", "_lib.py"):
+        shutil.copy(os.path.join(HOOKS, name), os.path.join(dst, name))
+    return os.path.join(dst, "session-nudge.py")
+
+
+def write_settings_json(proj, hooks_obj):
+    d = os.path.join(proj, ".claude")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "settings.json"), "w", encoding="utf-8") as f:
+        json.dump({"hooks": hooks_obj}, f)
 
 
 def check(label, cond, detail=""):
@@ -214,6 +239,30 @@ stalled = os.path.exists(os.path.join(proj, ".agent-guild", "state", "STALLED.md
 check("livelock strikes 1,2 block", rc1 == 2 and rc2 == 2, f"{rc1},{rc2}")
 check("livelock strike 3 → exit 0", rc3 == 0, f"rc={rc3}")
 check("livelock strike 3 → STALLED.md written", stalled)
+
+# double-registration proof (issue #41): with both the plugin's hooks.json and
+# a copy-in settings.json active, the SAME real main-session Stop event fires
+# stop-gate.py twice before the orchestrator resolves anything—so one real
+# blocked state costs two counts, not one, and STALLED.md fires after two
+# real blocks instead of three. Simulate that by invoking the hook twice on
+# an unchanged task state and asserting the counter lands on 2, not 1.
+proj = fresh_proj()
+write_task(proj, "T-001", status="rework", retries=1)
+state_file = os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")
+
+rc_a, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+with open(state_file, encoding="utf-8") as f:
+    count_after_one_fire = json.load(f)["count"]
+check("stall-counter double-invocation: one fire → count 1",
+      count_after_one_fire == 1, f"count={count_after_one_fire}")
+
+rc_b, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+with open(state_file, encoding="utf-8") as f:
+    count_after_two_fires = json.load(f)["count"]
+check("stall-counter double-invocation: same blocked state fired twice → counter advances by two total",
+      count_after_two_fires == 2, f"count={count_after_two_fires}")
+check("both fires individually blocked the turn (rc==2 each)",
+      rc_a == 2 and rc_b == 2, f"{rc_a},{rc_b}")
 
 # malformed task file → treated as open (fail closed)
 proj = fresh_proj()
@@ -585,6 +634,68 @@ with open(os.path.join(fully_init, "CLAUDE.md"), "w") as f:
     f.write("See @.agent-guild/CLAUDE.md for the orchestrator contract.\n")
 rc, out, err = run_hook("session-nudge.py", {}, fully_init)
 check("fully initialized → silent, exit 0", rc == 0 and out == "", f"rc={rc} out={out!r}")
+
+# ------------------------------------------- session-nudge.py: double-registration (issue #41)
+print("session-nudge.py: double-registration detection (issue #41)")
+
+# A real copy-in .claude/settings.json wires dispatch-guard.py under PreToolUse,
+# same shape as this repo's own .claude/settings.json.
+COPY_IN_GUILD_HOOKS = {
+    "PreToolUse": [
+        {"matcher": "Task|Agent", "hooks": [
+            {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.agent-guild/hooks/dispatch-guard.py\""}
+        ]},
+    ],
+}
+UNRELATED_HOOKS = {
+    "PreToolUse": [
+        {"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "python3 some-other-projects-linter.py"}
+        ]},
+    ],
+}
+
+# run_hook() always execs the real script under THIS repo's .agent-guild/hooks/,
+# never under the scratch proj dir, so every case below is already
+# plugin-rooted without any extra faking (see copy_in_hooks()'s docstring).
+plugin_rooted_hit = tempfile.mkdtemp(prefix="ag-nudge-dblreg-hit-")
+write_settings_json(plugin_rooted_hit, COPY_IN_GUILD_HOOKS)
+rc, out, err = run_hook("session-nudge.py", {}, plugin_rooted_hit)
+check("plugin-rooted + copy-in settings.json → one double-registration warning",
+      rc == 0 and "registered twice" in out, f"rc={rc} out={out!r}")
+check("plugin-rooted + copy-in settings.json → exactly one stdout line",
+      out.count("\n") == 1, f"out={out!r}")
+check("double-registration warning cites the verified stall-counter consequence",
+      "STALLED after two real blocks" in out, out)
+check("double-registration warning names --scope local, not --scope project, as the resolution",
+      "--scope local" in out and "never --scope project" in out, out)
+
+plugin_rooted_miss = tempfile.mkdtemp(prefix="ag-nudge-dblreg-miss-")
+write_settings_json(plugin_rooted_miss, UNRELATED_HOOKS)
+rc, out, err = run_hook("session-nudge.py", {}, plugin_rooted_miss)
+check("plugin-rooted + no copy-in registration → no double-registration warning",
+      rc == 0 and "registered twice" not in out, f"rc={rc} out={out!r}")
+
+malformed_settings = tempfile.mkdtemp(prefix="ag-nudge-dblreg-malformed-")
+os.makedirs(os.path.join(malformed_settings, ".claude"))
+with open(os.path.join(malformed_settings, ".claude", "settings.json"), "w") as f:
+    f.write("{not valid json")
+rc, out, err = run_hook("session-nudge.py", {}, malformed_settings)
+check("malformed settings.json → no crash, exit 0", rc == 0, f"rc={rc} err={err!r}")
+check("malformed settings.json → no HOOK ERROR", "HOOK ERROR" not in err, err)
+check("malformed settings.json → no double-registration warning",
+      "registered twice" not in out, out)
+
+# Project-rooted instance: run the COPY of session-nudge.py that lives inside
+# proj's own .agent-guild/hooks/, so __file__ is genuinely under root and
+# _running_from_plugin_root() is False—the copy-in half of the pair never
+# runs this check at all (see the module docstring's asymmetry note).
+project_rooted = tempfile.mkdtemp(prefix="ag-nudge-dblreg-projrooted-")
+write_settings_json(project_rooted, COPY_IN_GUILD_HOOKS)
+copied_script = copy_in_hooks(project_rooted)
+rc, out, err = run_hook_path(copied_script, {}, project_rooted)
+check("project-rooted + copy-in settings.json → no double-registration warning",
+      rc == 0 and "registered twice" not in out, f"rc={rc} out={out!r}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

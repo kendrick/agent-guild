@@ -36,6 +36,7 @@ CLAUDE_DIR = os.path.join(ROOT, ".claude")
 GUILD_DIR = os.path.join(ROOT, ".agent-guild")
 PLUGIN_SRC_MANIFEST = os.path.join(ROOT, "scripts", "plugin-src", "plugin.json")
 PLUGIN_SRC_README = os.path.join(ROOT, "docs", "plugin-readme.md")
+CHANGELOG_PATH = os.path.join(ROOT, "CHANGELOG.md")
 DEFAULT_OUT = os.path.join(ROOT, "plugin")
 
 GUILD_AGENTS = [
@@ -363,11 +364,46 @@ def diff_trees(built, committed):
     return diffs
 
 
+def check_changelog_section():
+    """Return None if the version in plugin-src/plugin.json has a matching
+    `## <version>` section in CHANGELOG.md, else the problem as a string.
+    Factored out from run_check so a test can call it directly against a
+    scratch tree instead of shelling out to the whole --check pipeline.
+
+    This is the backstop issue #42 exists for: a version bump landing
+    without release notes because nobody remembered the changelog step."""
+    try:
+        with open(PLUGIN_SRC_MANIFEST, encoding="utf-8") as f:
+            version = json.load(f)["version"]
+    except (OSError, KeyError, json.JSONDecodeError) as e:
+        return f"cannot read the version from {PLUGIN_SRC_MANIFEST}: {e}"
+
+    if os.path.isfile(CHANGELOG_PATH):
+        with open(CHANGELOG_PATH, encoding="utf-8") as f:
+            changelog_text = f.read()
+    else:
+        changelog_text = ""
+
+    if not re.search(rf"(?m)^## {re.escape(version)}\b", changelog_text):
+        return (
+            f"CHANGELOG.md has no section for {version} -- run "
+            f"`make-changelog.py {version}` to fix"
+        )
+    return None
+
+
 def run_check():
     """Rebuild into a temp dir and compare against the committed plugin/.
-    Exits 0 only when the trees match AND `claude plugin validate --strict`
-    passes -- a missing plugin/, a content drift, or a missing `claude` CLI
-    must all fail loudly rather than let a skipped check read as green."""
+    Exits 0 only when the changelog has caught up with the manifest version,
+    the trees match, AND `claude plugin validate --strict` passes -- a
+    missing plugin/, a content drift, a missing `claude` CLI, or a
+    forgotten changelog section must all fail loudly rather than let a
+    skipped check read as green."""
+    changelog_problem = check_changelog_section()
+    if changelog_problem:
+        sys.stderr.write(f"build-plugin.py --check: {changelog_problem}\n")
+        return 1
+
     committed = DEFAULT_OUT
     if not os.path.isdir(committed):
         sys.stderr.write(

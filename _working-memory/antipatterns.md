@@ -14,6 +14,13 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-07-24: Don't ask a read-only vendor to execute anything
+
+**Tried:** The courier's brief left a script-run check method for the far side to satisfy, so the vendor attempted to run a test suite itself.
+**What broke:** Its sandbox forbids temp-dir creation, so it returned `blocked` on both test-run clauses (issue #45's crossing) — a wasted #34 data point, since blocked is neither agreement nor a unique finding.
+**Why we backed out:** The lane is read-only by contract; execution was never the vendor's job. Arithmetic and comparison are judgment (fair game far-side); running commands is not.
+**Don't suggest:** composing a brief that expects the vendor to execute scripts, create files, or run suites. Run the check locally, inline the OUTPUT as evidence, and let the vendor judge results.
+
 ## 2026-07-24: Don't ship optional properties in a schema bound for strict structured output
 
 **Tried:** `verdict.schema.json` with `duration_ms`/`cost_usd` as optional properties, checked for codex compatibility by feature-subset inspection (no conditionals, conservative keywords) because no CLI existed to probe.

@@ -30,7 +30,15 @@ JSON is the verdict of record (since #29): `verdicts/T-NNN-<tier>-r<retries>.jso
 - `fail` — one or more clauses violated; at least one finding with concrete `evidence` is required (validator-enforced; the dispute protocol depends on it).
 - `blocked` — the check itself couldn't run (script crashed, tool unreachable, vendor quota). Carries the old ERROR semantics: fix the check, re-dispatch, doesn't count against the worker's tier budget.
 
-Pending amendment (#43): OpenAI strict structured output rejects optional properties, so `duration_ms`/`cost_usd` move to required-but-nullable before the codex checker lane (#8) can use `--output-schema`. Proven live 2026-07-24.
+All nine properties are required, with `duration_ms` and `cost_usd` typed nullable (#43): OpenAI strict structured output rejects optionality outright, so required-but-nullable is how an optional field is expressed to a vendor. Null means unreported, never zero, matching the ledger's convention.
+
+## Second-Opinion Verdicts
+
+The courier lane writes to a lane-suffixed stem: `verdicts/T-NNN-<tier>-r<retries>-codex.json` plus its rendered sibling, same schema, produced by `checker-courier` and validated by `subagent-return` at that stem. It is comparison data for the dual-check regime; the standard-stem verdict decides the task and is never outvoted by it.
+
+## Lane Exhaustion
+
+`state/exhausted/<lane>` — a per-lane sentinel (directory form, so one `ls` shows every downed lane), created by a courier on a quota signal *after* its ledger line lands, so the ledger always explains the sentinel. While it exists, `dispatch-guard` denies dispatches on that lane; only the user clears it, the same contract as PAUSED.
 
 ## Vendor Call Ledger
 

@@ -14,6 +14,30 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-24: External dispatch costs ~100x the in-family marginal
+
+**Source:** issue #33, `docs/handoff-cost.md`, measured over six courier dispatches
+
+**Context:** The multi-provider roadmap kept deferring to an economic number nobody had measured.
+**Decision:** Measured, not decided: serialized context for an external check runs 49.8x to 202.9x the orchestrator's in-family marginal (mean 99x, aggregate 102.5x)—99% of what a vendor receives is overhead the in-family path never pays, because an in-family checker reads artifacts from disk while a vendor must receive everything inline. Denominated in tokens; the lane reports no per-call dollars. The v0.7.0 write-granted-lane gate becomes numeric: ratio ≥ 100, with extrapolation assumptions labeled (worker briefs run larger, iteration multiplies calls, blind-diff retries re-pay full context). Cross-family checking is affordable at these rates; cross-family working re-pays the multiplier every loop.
+**Alternatives considered:** Waiting for worker-lane data before setting a gate (rejected—#36 needs the constraint now, and check-lane data plus labeled assumptions beats a vibe).
+
+## 2026-07-24: The cross-family lane ships as checker-courier under an auto-dual regime
+
+**Source:** issue #8 (commit 2be781f), amended by #44 (269a249)
+
+**Context:** An executor and checker from the same model family share correlated blind spots; breaking that correlation is the entire multi-provider premise.
+**Decision:** `checker-courier` — a haiku courier relaying judgment checks to an external vendor CLI over a lane (codex today, `gpt-5.6-terra` far side), producing a SECOND-OPINION verdict at a lane-suffixed stem that never decides a task. Named lane-neutral from birth so #11 adds lanes rather than renaming an agent. Until #34 closes, every task reaching `checking` also gets a courier crossing, so the evaluation fills through ordinary work. The compose step inlines everything the vendor needs (brief, artifacts, clause-referenced evidence); the vendor fetches and executes nothing.
+**Alternatives considered:** A codex-specific `checker-codex` (rejected per the standing #8 comment—renaming later is churn); making the second opinion able to fail a task (rejected—a second opinion is not a second gate).
+
+## 2026-07-24: Release cadence is minor-only while the user base is small
+
+**Source:** docs/publishing.md (commits f13e7c5, 3f43098)
+
+**Context:** Per-job patch releases (0.3.2 through 0.4.1) were becoming the de facto rule without anyone deciding they should be.
+**Decision:** Phase-dependent, not doctrine. In dev mode with barely an installed base, work accumulates across jobs and ships as one 0.X.0 cut at milestone close. Patch releases stay first-class for the cases that warrant them (security fixes, broken installs), and their importance grows with the user base.
+**Alternatives considered:** Ruling patch releases out entirely (rejected—sometimes crucial); keeping per-job releases (rejected—ceremony without readers).
+
 ## 2026-07-24: Releases are two-commit, tagged per bump, with generated changelogs
 
 **Source:** issue #42 (commit 952b82e), the tag-per-bump amendment (3c113c8), first live runs at v0.3.6 and v0.4.0

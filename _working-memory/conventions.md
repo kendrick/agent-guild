@@ -7,6 +7,7 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - Every worker or checker dispatch prompt must carry a `Task-ID: T-NNN` line; the auditor carries `Audit-ID: CON-audit` or `DEC-audit`; auditions carry `Audition-ID: A-NNN`. `dispatch-guard` blocks any guild dispatch missing its id. (`.agent-guild/hooks/dispatch-guard.py`)
 - Never pass a `model` override that disagrees with the task's `executor_model`. `dispatch-guard` blocks the mismatch—it's the backstop for a tier bump you recorded but forgot to apply.
 - A FAIL comes back to the same worker on the same model with the checker's verbatim diagnosis copied into the task's `## Rework diagnosis`. A tier gets `max_retries` (default 2) tries before escalation.
+- Dual-check regime: until #34 closes, every task reaching `checking` also gets a `checker-courier` second opinion after its checker of record returns. The suffixed verdict is comparison data — it never outvotes the standard stem — and a disagreement is dispute-grade input the orchestrator reads directly.
 
 ## State File Naming
 
@@ -20,6 +21,8 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - Checkers ship without an Edit tool—a tool-allowlist backstop so a verifier can't quietly rewrite the artifact it's judging. (`.claude/agents/checker-*.md`)
 - Main-session-only gates (chiefly `orchestrator-write-guard` and `stop-gate`) no-op inside subagents via the `agent_id` CC stamps on subagent hook input (`_lib.in_subagent`); PreToolUse *does* fire in subagents. Every hook carries an explicit in-subagent decision — a no-op or an intended-scope comment — so a gate's reach is never implicit. (`.agent-guild/hooks/`)
 - Checkers emit JSON verdicts, self-validate with `validate-verdict.py`, and render the `.md` sibling with `render-verdict.py` — never hand-written Markdown. (`.claude/agents/checker-*.md`)
+- Scoped-diff clauses use `.agent-guild/scripts/check-diff-scope.py <allowed>... [--ignore <path>]`, which routes them to checker-deterministic. Don't hand-roll the listing rule as judgment prose; thirteen jobs did, and the phrasing drifted every time.
+- A job changing a shared contract (a schema, a template shape, a hook-visible format) carries a clause running every consumer suite, not just the contract's own — `python3 .agent-guild/hooks/test_hooks.py` alongside the contract's tests. The falsify question is "who else parses this shape?" (`.claude/skills/constitution/SKILL.md`)
 
 ## Releases
 

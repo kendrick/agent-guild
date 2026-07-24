@@ -8,7 +8,7 @@ Two terminals help: one running `claude` in the repo root (the **session**), one
 
 1. Start `claude` in the repo root. On a freshly copied-in kit, Claude Code asks you to trust the workspace before it will run the project's hooks. **Accept it.** Until you do, the hooks don't fire, and a session with no gates is not proof of anything, it just looks like it passed.
 2. Type `/hooks`. Expect four registered: `stop-gate` (Stop), `subagent-return` (SubagentStop), `dispatch-guard` and `orchestrator-write-guard` (PreToolUse).
-3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `67 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
+3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `79 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
 
 Start from a clean slate in the shell:
 
@@ -201,7 +201,7 @@ Mirrors drill A2: prove `dispatch-guard` is live in the new project before you t
 - Session: `> Use the Agent tool to dispatch subagent_type worker-standard with the prompt "write a limerick". Send it exactly like that.`
 - Expect: `dispatch-guard` blocks before the subagent starts, with a message containing `has no id line`. The orchestrator relays that it needs a `Task-ID`.
 
-Cleanup is up to you: uninstall with `/plugin uninstall agent-guild` if the target project was throwaway, or leave it installed if you're keeping it. Either way, this drill is the live test of the marketplace path, the one part of SMOKE.md that exercises a real install instead of a seeded one.
+Cleanup is up to you: uninstall with `/plugin uninstall agent-guild` if the target project was throwaway, or leave it installed if you're keeping it. If you'd rather disable the plugin for just this project instead, hand-edit `.claude/settings.local.json` to add `"enabledPlugins": {"agent-guild@agent-guild": false}`, or run `claude plugin disable agent-guild@agent-guild --scope local` once you've confirmed that's what your version does. **Never `--scope project`**—that writes `enabledPlugins` into the target project's tracked `.claude/settings.json`, which is exactly the double-registration footgun this drill exists to avoid (observed 2026-07-23). Either way, this drill is the live test of the marketplace path, the one part of SMOKE.md that exercises a real install instead of a seeded one.
 
 ## Part D: Two Things That Look Like Breakage But Aren't
 

@@ -10,6 +10,8 @@ Bumping the build output instead is the classic mistake: it looks like it worked
 
 Ordinary work commits never touch this field. Only the release commit bumps it, in the checklist below.
 
+Cadence is the maintainer's call, and the current policy is minor releases only: work accumulates across jobs and ships as one 0.X.0 cut, typically at a milestone close, with the in-flight changelog picking up everything since the last release. Patch releases exist for urgent fixes that installed copies shouldn't wait for, not as a per-job routine.
+
 ## Release Checklist
 
 A release is one mechanical commit, separate from the work that earns it. Everything that changes plugin behavior lands as its own ordinary commit first, version untouched. Only when you're ready to cut a release do you run the five steps below, in order, to produce that one commit.

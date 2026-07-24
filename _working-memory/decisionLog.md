@@ -14,6 +14,22 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-24: Isolation strategy — patch-return default, worktrees only for workspace-write lanes
+
+**Source:** issue #32, closed with this decision
+
+**Context:** Claude Code supports `isolation: worktree` for subagents; #36 (per-lane write mode) needed a fed decision, and the question of native-worker isolation was open.
+**Decision:** Native guild workers get no worktrees — structurally blocked anyway, since the message bus is the gitignored `.agent-guild/state/` and worktrees materialize tracked files only, so a worktree'd worker can't see its own task file. External lanes default to patch-return (vendor emits a diff, the haiku courier applies it — the apply step is mechanically cheap; the real price is the vendor can't iterate against its own edits). Workspace-write is a measured per-lane exception that arrives worktree-required, because a write-granted foreign process is an untrusted writer that could otherwise reach the unrecoverable state bus. No task-scoped claims layer until a real collision happens.
+**Alternatives considered:** Worktrees everywhere (rejected — merge-back cost plus the state-bus incompatibility); "writes bypass hooks" as the justification (rejected as dishonest — native workers can Bash-write past the hooks too; the real differentials are writer trust and bus exposure).
+
+## 2026-07-24: Open-weight ships as lane config, never a privileged path; OpenCode rejected as universal shim
+
+**Source:** issue #31, closed with this decision
+
+**Context:** Two filed paths for open-weight models: pure-function tier zero (direct Ollama calls for mechanical subtasks) vs a harness-wrapped courier via OpenCode, with the side question of OpenCode replacing all vendor shims.
+**Decision:** The kit ships no open-weight slot; vendors are manifest lane recipes (the v0.6.0 substrate), and open-weight joins that way when the #34 evaluation justifies it. OpenCode is rejected as the forced universal shim — each vendor keeps a direct recipe — but adopted as this maintainer's personal lane recipe for open-weight, which the config-not-architecture design makes possible without imposing it on other guild users. Tier zero stays unbuilt for lack of measured need.
+**Alternatives considered:** OpenCode as the one shim for all vendors (rejected — a dependency on one project's abstraction before the first direct lane even ran); building tier zero now (rejected — no evidence of need).
+
 ## 2026-07-23: Ship the guild as a public Claude Code plugin (v0.3.1)
 
 **Source:** commits b294bf7, e7058df, edba55b; epic #19; issues #24, #25

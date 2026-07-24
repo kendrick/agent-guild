@@ -14,6 +14,20 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-07-24: Don't ship optional properties in a schema bound for strict structured output
+
+**Tried:** `verdict.schema.json` with `duration_ms`/`cost_usd` as optional properties, checked for codex compatibility by feature-subset inspection (no conditionals, conservative keywords) because no CLI existed to probe.
+**What broke:** The first live `codex exec --output-schema` probe (issue #2, 2026-07-24) got a 400: OpenAI strict mode requires `required` to include every key in `properties`. Optionality itself is the rejected feature.
+**Why we backed out:** Strict mode's contract is all-required; the expressive equivalent is required-but-nullable, which also matches the ledger's null-means-unreported convention. Proven live: the all-required variant round-tripped a conforming verdict from gpt-5.6-terra. Fix filed as #43.
+**Don't suggest:** optional properties in any schema a vendor's strict structured output will consume. Make every field required and type the optional ones nullable.
+
+## 2026-07-24: Don't inline derivable facts into task spec excerpts
+
+**Tried:** The #42 task excerpt hardcoded the version-boundary commit list as orientation for the worker.
+**What broke:** The list was wrong — it skipped the 0.2.0 and 0.3.0 bumps. Harmless only because the same excerpt instructed deriving boundaries from git, which the worker did; a checker taking the list literally would have computed wrong verification ranges (the r1 checker caught this).
+**Why we backed out:** Excerpts are copied prose; anything derivable drifts the moment it's inlined.
+**Don't suggest:** embedding git-derivable lists (boundaries, hashes, counts) in task excerpts. Name the derivation command and let workers and checkers run it.
+
 ## 2026-07-23: Don't declare `hooks/hooks.json` in a plugin's `manifest.hooks`
 
 **Tried:** `scripts/plugin-src/plugin.json` declared `"hooks": "./hooks/hooks.json"` (correct when first designed; the plan doc's "hooks have no auto-discovery" platform fact backed it).

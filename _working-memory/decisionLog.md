@@ -14,6 +14,22 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-24: Releases are two-commit, tagged per bump, with generated changelogs
+
+**Source:** issue #42 (commit 952b82e), the tag-per-bump amendment (3c113c8), first live runs at v0.3.6 and v0.4.0
+
+**Context:** Releases left no reader-facing record, nothing enforced remembering a changelog, and fix-level versions had no tags — half a record.
+**Decision:** `make-changelog.py` harvests commits between plugin.json version-bump boundaries into unwrapped conventional sections (group headings, bold scope leads, linked hashes); it never invents prose. Enforcement is mechanical: `build-plugin.py --check` fails a bumped-but-sectionless version, and `--notes` refuses to cut a noteless release. The ritual is two-commit — work commits never touch the version; one mechanical release commit carries bump + in-flight section + rebuild — and every release commit gets tagged with a GitHub release, patch bumps included; a milestone close is just the bump that closes it. Kit-payload jobs leave the version untouched; the release is the maintainer ritual at wrap.
+**Alternatives considered:** git-cliff/conventional-changelog tooling (rejected for now — tags-as-boundaries would add a forgettable parallel discipline; recorded as the exit ramp on #42 if the format ever needs to grow); milestone-only tags (rejected — the version field and changelog exist per bump, so taglessness left the record incomplete).
+
+## 2026-07-24: Verdicts are canonical JSON; blocked absorbs ERROR
+
+**Source:** issue #29 (commit 1594cf8)
+
+**Context:** A second checker family (#8) needs a contract to write against; Markdown verdicts could only be validated by parsing conventions that drift.
+**Decision:** JSON is the verdict of record, schema-validated, with Markdown rendered from it; `subagent-return` mechanically rejects nonconforming checker returns; a fail requires evidence-backed findings. The enum is `pass|fail|blocked`, with `blocked` carrying the old ERROR semantics (couldn't run, doesn't count against the worker) so one vocabulary covers broken checks and vendor quota alike. The schema stays structured-output-safe (no conditionals); semantic rules live in the validator. The migration dogfooded itself mid-run — the job's own later verdicts were gate-validated JSON.
+**Alternatives considered:** Adding `error` to the enum (rejected — two near-synonymous states); keeping ERROR outside the schema (rejected — broken checks would produce forever-nonconforming files).
+
 ## 2026-07-24: Isolation strategy — patch-return default, worktrees only for workspace-write lanes
 
 **Source:** issue #32, closed with this decision

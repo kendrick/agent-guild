@@ -15,11 +15,11 @@ The Agent Guild is a copy-in kit that runs Claude Code as an org chart: an expen
 ## Repository Structure
 
 - `.claude/` — the guild's agents, skills, and the `settings.json` hooks block. Claude Code discovers these here by location and nowhere else.
-- `.agent-guild/` — everything else the kit owns: `hooks/`, `scripts/`, `templates/`, the orchestrator contract at `.agent-guild/CLAUDE.md`, and the runtime `state/` bus (gitignored).
+- `.agent-guild/` — everything else the kit owns: `hooks/`, `scripts/`, `templates/`, `schemas/` (the verdict and vendor-call JSON contracts), the orchestrator contract at `.agent-guild/CLAUDE.md`, and the runtime `state/` bus (gitignored).
 - `CLAUDE.md` (root) — a one-line `@.agent-guild/CLAUDE.md` import that loads the contract every session.
 - `plugin/` — the committed, built plugin tree (agents, skills, hooks, and the per-project `project-template/` payload), assembled from in-repo sources by `scripts/build-plugin.py`. Never hand-edited (see [[conventions]]).
 - `.claude-plugin/marketplace.json` — makes this repo its own plugin marketplace, sourcing `./plugin`.
-- `scripts/build-plugin.py` — assembles and `--check`-validates `plugin/`. `docs/` — `roles.md` (the guild roster), `publishing.md` (the maintainer checklist), `plugin-readme.md` (built into `plugin/README.md`), and `plugin-publish-plan.md`.
+- `scripts/build-plugin.py` — assembles and `--check`-validates `plugin/`; `scripts/make-changelog.py` — generates `CHANGELOG.md` sections from version-bump boundaries. `docs/` — `roles.md` (the guild roster), `publishing.md` (the release ritual), `vendor-ledger.md` (the ledger contract), `plugin-readme.md` (built into `plugin/README.md`), and `plugin-publish-plan.md`.
 - `_working-memory/`, `scripts/`, `.github/`, `AGENTS.md` — the working-memory kit, a separate copy-in tool layered on top of the guild, committed into this repo (see [[decisionLog]]).
 
 ## Key Constraints

@@ -18,7 +18,14 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - Hooks are Python 3, stdlib only, and fail loud / fail closed. Never add a dependency. (`.agent-guild/hooks/`)
 - Check scripts are dependency-free (Bash or Python) with one exception: `check-a11y.mjs` self-installs its Node deps on first run into a gitignored `node_modules`. (`.agent-guild/scripts/`)
 - Checkers ship without an Edit tool—a tool-allowlist backstop so a verifier can't quietly rewrite the artifact it's judging. (`.claude/agents/checker-*.md`)
-- Main-session-only gates (chiefly `orchestrator-write-guard`) no-op inside subagents via the `agent_id` CC stamps on subagent hook input (`_lib.in_subagent`); PreToolUse *does* fire in subagents. (`.agent-guild/hooks/`)
+- Main-session-only gates (chiefly `orchestrator-write-guard` and `stop-gate`) no-op inside subagents via the `agent_id` CC stamps on subagent hook input (`_lib.in_subagent`); PreToolUse *does* fire in subagents. Every hook carries an explicit in-subagent decision — a no-op or an intended-scope comment — so a gate's reach is never implicit. (`.agent-guild/hooks/`)
+- Checkers emit JSON verdicts, self-validate with `validate-verdict.py`, and render the `.md` sibling with `render-verdict.py` — never hand-written Markdown. (`.claude/agents/checker-*.md`)
+
+## Releases
+
+- Two-commit pattern: work commits never touch the version; one mechanical release commit carries the bump (in `scripts/plugin-src/plugin.json`), the generated changelog section, and the rebuilt `plugin/`. Kit-payload jobs leave the version untouched — the release is the maintainer ritual at wrap, per `docs/publishing.md`.
+- Every release commit gets tagged with a GitHub release, patch bumps included; notes come from `make-changelog.py --notes`, never retyped. A milestone close is just the bump that closes it.
+- The changelog is generated, never hand-edited: `--check` fails a bumped-but-sectionless version, `--notes` refuses a noteless release.
 
 ## Commit Messages
 

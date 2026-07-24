@@ -125,6 +125,12 @@ def _unidentifiable(reason):
 
 
 def main(data):
+    # Intended scope: this hook fires on SubagentStop, so it only ever sees ONE
+    # subagent's return at a time, and `ident` below is that subagent's own
+    # Task-ID/Audit-ID, read from its own dispatch. There's no separate
+    # in-subagent no-op to add—the scoping is structural, not a data.get()
+    # check—and it's exactly what keeps this gate from ever demanding anything
+    # of a sibling task the returning subagent was never dispatched on.
     agent = data.get("agent_type", "")
     if agent not in _lib.GUILD_AGENTS:
         return 0  # matcher should exclude these, but don't assume

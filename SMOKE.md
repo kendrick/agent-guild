@@ -8,7 +8,7 @@ Two terminals help: one running `claude` in the repo root (the **session**), one
 
 1. Start `claude` in the repo root. On a freshly copied-in kit, Claude Code asks you to trust the workspace before it will run the project's hooks. **Accept it.** Until you do, the hooks don't fire, and a session with no gates is not proof of anything, it just looks like it passed.
 2. Type `/hooks`. Expect four registered: `stop-gate` (Stop), `subagent-return` (SubagentStop), `dispatch-guard` and `orchestrator-write-guard` (PreToolUse).
-3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `62 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
+3. In the shell: `python3 .agent-guild/hooks/test_hooks.py`. Expect `67 passed, 0 failed`. This proves the gate logic offline; the steps below prove it fires inside a live session.
 
 Start from a clean slate in the shell:
 
@@ -57,6 +57,8 @@ rm -f .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/*.md .agent-gu
 ## Part B: The Lifecycle Loop
 
 This drives a tiny real job so you watch a FAIL, a dispute, and an escalation happen. The check is deterministic (a `grep`), and you control the artifact, so each outcome is predictable rather than up to a model's mood.
+
+**A note on parallel dispatch.** Nothing here forces serial execution, and none of it needs to. Fan out several workers or checkers at once and the same guarantees hold: each subagent is judged only against the task it was dispatched on, never a sibling's; the orchestrator's stop gate is the one place that sees the whole open-task board; and the livelock counter only moves on a main-session Stop, so subagents finishing in quick succession can't trip a false STALLED.md.
 
 ### B0. Seed a toy constitution, a passing audit, and one task
 

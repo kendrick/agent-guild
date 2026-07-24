@@ -222,6 +222,29 @@ with open(os.path.join(proj, ".agent-guild", "state", "tasks", "T-009.md"), "w")
 rc, out, err = run_hook("stop-gate.py", {}, proj)
 check("malformed task → exit 2 (fail closed)", rc == 2, f"rc={rc}")
 
+# in-subagent scope: a subagent's own Stop is not the orchestrator's turn
+# ending, so this gate must no-op regardless of open tasks—and, since a
+# subagent Stop should never touch the livelock counter, stop-gate.state must
+# come out byte-identical. Seed the state file via a real main-session block
+# first (the way it'd exist in a live run), snapshot it, then fire the
+# subagent event and compare.
+proj = fresh_proj()
+write_task(proj, "T-001", status="needs-check")
+write_task(proj, "T-002", status="assigned")
+rc0, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+check("(setup) main-session block seeds stop-gate.state", rc0 == 2, f"rc={rc0}")
+state_file = os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")
+with open(state_file, "rb") as f:
+    state_before = f.read()
+rc, out, err = run_hook(
+    "stop-gate.py", {"agent_id": "sub-1", "stop_hook_active": False}, proj)
+check("subagent Stop, two open tasks → exit 0, empty output",
+      rc == 0 and out == "" and err == "", f"rc={rc} out={out!r} err={err!r}")
+with open(state_file, "rb") as f:
+    state_after = f.read()
+check("subagent Stop → stop-gate.state byte-identical",
+      state_before == state_after, f"before={state_before!r} after={state_after!r}")
+
 # ------------------------------------------------------------ dispatch-guard
 print("dispatch-guard.py")
 proj = fresh_proj()
@@ -487,6 +510,28 @@ tx = transcript(proj, "Audition-ID: A-001\nSort these lines.")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "worker-bulk", "transcript_path": tx}, proj)
 check("audition subagent (A-001 transcript) → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# in-subagent scope: this gate judges the returning subagent solely against the
+# task named in ITS OWN dispatch. A sibling task sitting incomplete must never
+# leak into the exit code or the message.
+proj_scope = fresh_proj()
+write_task(proj_scope, "T-001", status="needs-check", artifacts="[out.html]")
+write_task(proj_scope, "T-002", status="assigned")  # sibling: not this worker's task
+tx = transcript(proj_scope, "Task-ID: T-001\nGo build it.")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj_scope)
+check("worker clean return on T-001 while T-002 sits assigned → exit 0, no T-002 mention",
+      rc == 0 and "T-002" not in out and "T-002" not in err, f"rc={rc} out={out!r} err={err!r}")
+
+seed_verdict_toolchain(proj_scope)
+write_task(proj_scope, "T-001", status="checking", executor_model="sonnet", retries=0)
+write_task(proj_scope, "T-002", status="checking")  # sibling: verdict-less, not this checker's task
+write_verdict_json(proj_scope, "T-001-sonnet-r0.json", task_id="T-001", verdict="pass")
+tx = transcript(proj_scope, "Task-ID: T-001")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-deterministic", "transcript_path": tx}, proj_scope)
+check("checker valid return on T-001 while T-002 has no verdict → exit 0, no T-002 demand",
+      rc == 0 and "T-002" not in out and "T-002" not in err, f"rc={rc} out={out!r} err={err!r}")
 
 # --------------------------------------------------- orchestrator-write-guard
 print("orchestrator-write-guard.py")

@@ -44,6 +44,9 @@ def _missing_pieces(root):
 
 
 def main(data):
+    # Intended scope: SessionStart doesn't fire per-subagent, so there's nothing
+    # to no-op—but were that ever to change, this nudge is read-only and harmless
+    # wherever it runs.
     root = _lib.project_dir()
 
     # No .agent-guild/ at all: the project has shown no intent to use the

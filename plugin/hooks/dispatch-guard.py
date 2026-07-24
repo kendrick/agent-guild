@@ -38,6 +38,12 @@ def _log(agent, task, model):
 
 
 def main(data):
+    # Intended scope: no in_subagent no-op here, and none is needed. Unlike
+    # stop-gate or orchestrator-write-guard, this hook doesn't constrain the
+    # orchestrator's own turn—it constrains every Task/Agent dispatch, wherever
+    # it originates. A nested guild dispatch (one subagent spinning up another)
+    # has to carry the same Task-ID/Audit-ID and pass the same legality checks
+    # as a top-level one, so this gate deliberately fires inside subagents too.
     ti = data.get("tool_input", {}) or {}
     raw = ti.get("subagent_type", "")
     agent = _lib.bare_agent(raw)

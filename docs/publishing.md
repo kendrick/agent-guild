@@ -22,7 +22,9 @@ A release is one mechanical commit, separate from the work that earns it. Everyt
 
 ## Tagging a Release
 
-Once the release commit lands, tag it and cut a GitHub release with notes pulled from the changelog section instead of retyped by hand:
+Every release commit gets tagged — patch bumps included. The version field and the changelog section already exist for each bump, so the tag is what completes the record: a checkable ref and a GitHub release page carrying the same notes. Milestone closes need no separate ritual; the bump that closes a milestone (0.4.0, say) rides this exact flow, and its milestone-ness lives in the issue tracker.
+
+Once the release commit lands, tag it and cut the GitHub release with notes pulled from the changelog section instead of retyped by hand:
 
 ```sh
 git tag vX.Y.Z

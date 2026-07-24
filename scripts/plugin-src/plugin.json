@@ -1,7 +1,7 @@
 {
   "name": "agent-guild",
   "description": "Runs Claude Code as an org chart: an orchestrator plans and rules, worker subagents build, and independent checker agents verify the work without trusting a self-report.",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "author": {
     "name": "Kendrick Arnett"
   }

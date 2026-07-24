@@ -10,7 +10,7 @@ Bumping the build output instead is the classic mistake: it looks like it worked
 
 Ordinary work commits never touch this field. Only the release commit bumps it, in the checklist below.
 
-Cadence is the maintainer's call, and the current policy is minor releases only: work accumulates across jobs and ships as one 0.X.0 cut, typically at a milestone close, with the in-flight changelog picking up everything since the last release. Patch releases exist for urgent fixes that installed copies shouldn't wait for, not as a per-job routine.
+Cadence is the maintainer's call, and it's phase-dependent. Right now, in dev mode with barely any installed base, the policy is minor releases only: work accumulates across jobs and ships as one 0.X.0 cut, typically at a milestone close, with the in-flight changelog picking up everything since the last release. Patch releases are sometimes crucial—a security fix or a broken install that real users shouldn't wait a milestone for—so the ritual supports them at any time; they're just not a per-job routine, and their importance grows with the user base.
 
 ## Release Checklist
 

@@ -14,6 +14,22 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: First-Class Codex targets v0.5.1
+
+**Source:** maintainer direction during issue #52
+
+**Context:** The First-Class Codex roadmap was filed under a speculative v0.9.0 milestone after v0.5.0 shipped, but the release target changed before implementation began.
+**Decision:** Ship the First-Class Codex arc as v0.5.1, not v0.9.0. Work commits still leave the version untouched; the one mechanical release commit carries the 0.5.1 bump when the milestone wraps.
+**Alternatives considered:** Keeping v0.9.0 because the issue bodies and milestone already named it (rejected—the maintainer explicitly changed the release target, and tracking metadata does not outrank the release decision).
+
+## 2026-07-26: The reciprocal Claude lane requires a schema adapter and envelope validation
+
+**Source:** issue #52, live Claude Code 2.1.212 probes
+
+**Context:** The Codex-hosted second-opinion courier needs a concrete Claude CLI contract, including its read-only boundary, structured output, malformed output, authentication failures, and quota signals.
+**Decision:** Pin `claude-haiku-4-5-20251001` and invoke Claude in safe mode with no tools, no MCP servers, plan permissions, no persistence, closed stdin, and all evidence inline. Generate the Claude `--json-schema` argument by removing only the canonical verdict schema's top-level `$schema` declaration; require and independently validate `structured_output` because malformed provider output can exit zero without it. Treat `api_error_status: 429` as quota and impose a courier-owned wall-clock bound because the CLI otherwise retries silently up to 11 attempts.
+**Alternatives considered:** Passing the canonical Draft 2020-12 schema byte-for-byte (rejected—Claude CLI rejects its `$schema` URI before a model call); trusting exit code zero (rejected—a controlled malformed response exited zero with no `structured_output`); relying on the CLI's retry policy (rejected—it is silent, long, and ignored the tested retry-limit override).
+
 ## 2026-07-24: External dispatch costs ~100x the in-family marginal
 
 **Source:** issue #33, `docs/handoff-cost.md`, measured over six courier dispatches

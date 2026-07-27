@@ -69,9 +69,18 @@ The guild ships as a Claude Code plugin, and this repo is its marketplace. Add t
 
 ```
 /plugin marketplace add kendrick/agent-guild
-/plugin install agent-guild
+/plugin install agent-guild@kendrick
 /agent-guild:init
 ```
+
+If you installed 0.5.0 or earlier, remove the old identity before adding `kendrick`:
+
+```
+/plugin uninstall agent-guild@agent-guild
+/plugin marketplace remove agent-guild
+```
+
+Claude Code treats `agent-guild@agent-guild` and `agent-guild@kendrick` as separate plugins. Leaving both installed enables both copies in other projects and makes every gate fire twice.
 
 The plugin carries the agents, skills, and gate hooks. What it can't carry is the orchestrator contract. A plugin contributes context on demand, through skills and hooks that load when something triggers them, but the contract has to be always-on project instructions, and no plugin can ship those. So `/agent-guild:init` finishes the install in place: it drops the contract into `.agent-guild/`, adds the `@.agent-guild/CLAUDE.md` import to your project's `CLAUDE.md`, and creates the runtime state directories with a `.gitignore` already covering them. After it runs, confirm the gates load with `python3 .agent-guild/hooks/test_hooks.py`—it should report all pass.
 

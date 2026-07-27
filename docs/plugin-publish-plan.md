@@ -6,7 +6,7 @@ The design reference for the Job 2 epic. Job 1 (the `/job` intake skill, the pro
 
 - The plugin ships guild-only content: the lifecycle skills (constitution, decompose, retrospective, audition, job, init), the six guild agents, and the four hook gates plus a SessionStart nudge. Working-memory tooling stays out.
 - The published plugin lives in a committed `plugin/` directory at the repo root, generated from the in-repo sources by a build script with a deterministic drift check. The gitignored `dist/` staging area from the first packaging dogfood retires.
-- This repo is its own marketplace: `.claude-plugin/marketplace.json` at the repo root, `plugins[].source` pointing at `./plugin`. Colleagues install with `/plugin marketplace add kendrick/agent-guild` and `/plugin install`.
+- This repo is its own marketplace: `.claude-plugin/marketplace.json` at the repo root, named `kendrick`, with `plugins[].source` pointing at `./plugin`. Colleagues install with `/plugin marketplace add kendrick/agent-guild` and `/plugin install agent-guild@kendrick`.
 - Plugin components are always invoked namespaced (`/agent-guild:constitution`). Repo-local copies keep bare names; the build script rewrites the known invocation tokens in plugin-bound content only.
 
 ## Verified Platform Facts

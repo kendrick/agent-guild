@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: Claude Marketplace Identity Is `agent-guild@kendrick`
+
+**Source:** issue #48; isolated Claude Code 2.1.212 marketplace experiment
+
+**Context:** The plugin and marketplace were both named `agent-guild`, producing the typo-like qualified id `agent-guild@agent-guild`. Renaming the marketplace also creates a migration hazard if the old source remains configured.
+**Decision:** Keep the plugin name `agent-guild`, rename only the Claude marketplace to `kendrick`, and use the qualified id `agent-guild@kendrick` in every install, disable, and uninstall surface. Tell existing users to uninstall the old qualified plugin and remove the old marketplace before adding the renamed source. An isolated CLI run proved both marketplace names, cache trees, and qualified plugins can coexist and both are enabled in a neutral project, which would double-register every hook.
+**Alternatives considered:** Leaving the redundant identity (rejected—it obscures publisher ownership); relying on the unqualified plugin name (rejected—it is ambiguous once both marketplace sources coexist); asking users only to add the renamed marketplace (rejected—the stale installed copy stays independently enabled).
+
 ## 2026-07-26: Reciprocal couriers share one protocol and keep host commands in adapters
 
 **Source:** issue #54

@@ -54,8 +54,8 @@ DOUBLE_REGISTRATION_WARNING = (
     "three. Fix it by removing the guild hooks block from "
     ".claude/settings.json (migrating copy-in to plugin), or disable the "
     "plugin for this project by hand-editing .claude/settings.local.json to "
-    'add "enabledPlugins": {"agent-guild@agent-guild": false} (or `claude '
-    "plugin disable agent-guild@agent-guild --scope local` if you've "
+    'add "enabledPlugins": {"agent-guild@kendrick": false} (or `claude '
+    "plugin disable agent-guild@kendrick --scope local` if you've "
     "verified that's safe in your setup)—never --scope project, which "
     "writes the tracked settings.json."
 )

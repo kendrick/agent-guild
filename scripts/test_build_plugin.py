@@ -18,6 +18,9 @@ import tempfile
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 BUILD_PLUGIN_PATH = os.path.join(SCRIPTS_DIR, "build-plugin.py")
 VERSION_SOURCE = os.path.join(SCRIPTS_DIR, "plugin-src", "plugin.json")
+MARKETPLACE_PATH = os.path.join(
+    os.path.dirname(SCRIPTS_DIR), ".claude-plugin", "marketplace.json"
+)
 
 spec = importlib.util.spec_from_file_location("build_plugin", BUILD_PLUGIN_PATH)
 build_plugin = importlib.util.module_from_spec(spec)
@@ -55,6 +58,20 @@ print("dual-target build")
 with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     claude_out = os.path.join(tmp, "claude")
     codex_out = os.path.join(tmp, "codex")
+
+    with open(MARKETPLACE_PATH, encoding="utf-8") as f:
+        marketplace = json.load(f)
+    marketplace_plugins = marketplace.get("plugins", [])
+    qualified_plugin_id = (
+        f"{marketplace_plugins[0].get('name')}@{marketplace.get('name')}"
+        if len(marketplace_plugins) == 1
+        else ""
+    )
+    check(
+        "the Claude marketplace exposes agent-guild@kendrick",
+        qualified_plugin_id == "agent-guild@kendrick",
+        f"qualified_plugin_id={qualified_plugin_id!r}",
+    )
 
     core_dir = getattr(build_plugin, "CORE_DIR", None)
     core_role = (

@@ -24,7 +24,7 @@ The design reference for the Job 2 epic. Job 1 (the `/job` intake skill, the pro
 
 **Nudge** (`session-nudge.py`, `startup` matcher): speaks only on partial init — `.agent-guild/` exists but the state dirs or the import line are missing. Zero-evidence projects stay silent, because a user-scope install must never nag unrelated repos; fresh adopters find init through the READMEs.
 
-**Marketplace and docs**: generated Claude and Codex marketplace views, manifests with `author` as an object, one canonical build/install guide, a publishing checklist, host smoke drills, and a documented footgun: enabling a plugin alongside the same repo-local hooks double-registers the gates.
+**Marketplace and docs**: generated Claude and Codex marketplace views, manifests with `author` as an object, one canonical install guide, a separate maintainer build reference, a publishing checklist, one host-neutral smoke lifecycle with thin launch drills, and a documented footgun: enabling a plugin alongside the same repo-local hooks double-registers the gates.
 
 ## Standing Lessons From The Dogfoods
 

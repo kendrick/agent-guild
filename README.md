@@ -11,7 +11,7 @@
 
 # The Agent Guild
 
-A copy-in kit that runs Claude Code as an org chart. An expensive orchestrator plans and rules but never builds; cheap worker subagents build; independent checker agents verify the workers without trusting a word they say. It's a recipe, not a framework: nothing here but Claude Code's own primitives, so there's no runner to install and no service to keep alive.
+A copy-in kit and generated plugin that runs Claude Code or Codex as an org chart. An expensive orchestrator plans and rules but never builds; cheap worker subagents build; independent checker agents verify the workers without trusting a word they say. It's a recipe, not a framework: nothing here but each host's own primitives, so there's no runner to install and no service to keep alive.
 
 The idea it's built on: a cheap model doing well-specified work under an independent check is both cheaper and more reliable than one expensive model doing everything and grading itself.
 
@@ -21,7 +21,7 @@ The idea it's built on: a cheap model doing well-specified work under an indepen
                  /              |               \
           workers           checkers            auditor
        build deliverables   verify workers'     verifies the
-       haiku/sonnet/opus    work independently  orchestrator's own work
+       bulk/standard/craft  work independently  orchestrator's own work
 ```
 
 ## The Four Mechanisms
@@ -53,7 +53,7 @@ One fragile spot worth naming: `subagent-return` identifies which task a subagen
 
 Job: rewrite a pricing page. The constitution includes C-4, the tagline must ship verbatim (checked by `check-protected.py`), and C-9, the tone matches the brand voice (a `checker-judgment` rubric). The auditor has already passed the constitution, so workers are unblocked.
 
-1. `/decompose` writes `.agent-guild/state/tasks/T-007.md`: executor `worker-craft`, checker `checker-judgment`, citing C-4 and C-9. Status `pending`.
+1. The decompose skill writes `.agent-guild/state/tasks/T-007.md`: executor `worker-craft`, checker `checker-judgment`, citing C-4 and C-9. Status `pending`.
 2. The orchestrator sets it `assigned` and dispatches worker-craft with `Task-ID: T-007`. The worker writes the copy, sets `artifacts` and status `needs-check`, and drops its notes in `.agent-guild/state/notes/T-007.md`.
 3. `subagent-return` sees the task at `needs-check` with artifacts listed and lets the worker finish. The orchestrator can't end its turn (stop-gate), so it sets the task `checking` and dispatches the checker.
 4. The checker runs `check-protected.py`, which reports the tagline's em dash was swapped for a hyphen. It writes `.agent-guild/state/verdicts/T-007-opus-r0.md` as FAIL, diagnosis naming the file, the line, C-4, and the exact character. Status goes to `rework`.
@@ -65,47 +65,10 @@ Every step is a file written under `.agent-guild/state/`. Nothing here required 
 
 ## Install
 
-The guild ships as a Claude Code plugin, and this repo is its marketplace. Add the marketplace, install from it, then run init inside whatever project you want to run jobs in:
+Use [Install Agent Guild](docs/installing.md) as the one setup guide. It covers the Claude Code plugin, the Codex Git marketplace from the CLI or desktop app, repo-local Codex bootstrap for the IDE extension, hook trust, cross-vendor credentials and fallbacks, the older Claude marketplace migration, and the double-registration footgun.
 
-```
-/plugin marketplace add kendrick/agent-guild
-/plugin install agent-guild@kendrick
-/agent-guild:init
-```
+Every route follows the same shape: install once for the host, initialize once per project, start a fresh session, verify exactly one set of hooks, then walk [SMOKE.md](SMOKE.md).
 
-If you installed 0.5.0 or earlier, remove the old identity before adding `kendrick`:
+## Build The Generated Packages
 
-```
-/plugin uninstall agent-guild@agent-guild
-/plugin marketplace remove agent-guild
-```
-
-Claude Code treats `agent-guild@agent-guild` and `agent-guild@kendrick` as separate plugins. Leaving both installed enables both copies in other projects and makes every gate fire twice.
-
-The plugin carries the agents, skills, and gate hooks. What it can't carry is the orchestrator contract. A plugin contributes context on demand, through skills and hooks that load when something triggers them, but the contract has to be always-on project instructions, and no plugin can ship those. So `/agent-guild:init` finishes the install in place: it drops the contract into `.agent-guild/`, adds the `@.agent-guild/CLAUDE.md` import to your project's `CLAUDE.md`, and creates the runtime state directories with a `.gitignore` already covering them. After it runs, confirm the gates load with `python3 .agent-guild/hooks/test_hooks.py`—it should report all pass.
-
-### Manual Copy-In
-
-If you'd rather skip the plugin, copy two directories into your project by hand:
-
-```
-.claude/  .agent-guild/
-```
-
-`.claude/` holds the guild's agents, skills, and the `settings.json` hooks block—Claude Code discovers those there and nowhere else. Everything the kit adds beyond that (the hooks, scripts, templates, runtime state, and the orchestrator contract) lives under the single `.agent-guild/` directory, so it stays out of your repo root.
-
-Then:
-
-- Make the contract law: add one line, `@.agent-guild/CLAUDE.md`, to your project's `CLAUDE.md` (create one at the root if you don't have it). That import is what loads the orchestrator contract every session; the kit deliberately doesn't drop a second `CLAUDE.md` at your root.
-- If you already have `.claude/settings.json`, merge the `hooks` block from this one rather than overwriting; otherwise copy the file.
-- Add `.agent-guild/state/` to your `.gitignore` (or copy this repo's ignore rules for it). The runtime bus is per-job and never committed.
-- Edit the routing table in `.agent-guild/CLAUDE.md` to your own model tiers.
-- Confirm the gates load: `python3 .agent-guild/hooks/test_hooks.py` should report all pass.
-
-The hooks reference `$CLAUDE_PROJECT_DIR`, so they work wherever the repo lands. `.agent-guild/scripts/check-a11y.mjs` installs its own Node dependencies on first run; everything else is Python or Bash with no dependencies.
-
-Whichever way you install, walk through `SMOKE.md` once in a fresh session to watch every gate fire before it guards real work.
-
-## Build The Plugins
-
-The Claude and Codex packages are generated from one shared core. After a repo-local Codex bootstrap, the same job intake you run as `/agent-guild:job` in the Claude plugin is available as `$job`; an installed Codex plugin exposes `$agent-guild:job`. Codex hooks are not automatically trusted—review and explicitly trust the Agent Guild definitions in `/hooks` after setup. See [Building The Plugins](docs/building.md) for the exact per-host commands, source-versus-output rules, installation modes, compatibility checks, and CI artifact flow.
+The Claude and Codex packages are generated from one shared core. See [Building The Plugins](docs/building.md) for exact per-host build commands, source-versus-output rules, compatibility checks, and the CI artifact flow.

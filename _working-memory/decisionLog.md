@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-27: One Install Guide And One Smoke Lifecycle Serve Both Hosts
+
+**Source:** issue #55
+
+**Context:** First-Class Codex added real platform setup differences, but keeping Claude and Codex guides or lifecycle drills side by side would make shared Guild behavior drift and force users to reconcile near-copies.
+**Decision:** Make `docs/installing.md` the one user installation source for Claude plugin, Codex CLI/desktop plugin, repo-local Codex IDE, cross-vendor credentials, hook trust, and duplicate-registration safety. Root and packaged READMEs point to it; `docs/building.md` remains a maintainer build reference. Keep one host-neutral `SMOKE.md` lifecycle with a small invocation/lane map and thin, independently checkable fresh-project launch drills for each supported surface.
+**Alternatives considered:** Separate Claude and Codex install guides (rejected—the shared init and lifecycle would be duplicated); keeping user setup in the build reference (rejected—it mixes maintainer and adopter paths); cloning the full smoke lifecycle per host (rejected—only dispatch representation, skill syntax, hook trust, and courier lane differ).
+
 ## 2026-07-26: One Generated Codex Package Is The Git Marketplace Surface
 
 **Source:** issue #53

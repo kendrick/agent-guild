@@ -2,6 +2,10 @@
 
 Unresolved and shouldn't be guessed at. Answers move to [[decisionLog]] when settled.
 
+## Claude Max-subscription quota shape, pending a live encounter
+
+Issue #52 verified the Claude Code 2.1.212 process contract with a controlled Anthropic-shaped 429: a terminal no-retry response exits 1 with `api_error_status: 429`, while the default path retries silently up to 11 attempts. The maintainer's live Max subscription was not deliberately exhausted, so its exact provider payload and whether it disables retry remain unobserved. The reciprocal courier must classify the structured 429 and own a wall-clock bound; tune any wording fallback on the first live encounter.
+
 ## Does cross-family checking actually pay?
 
 The whole multi-provider arc rests on the claim that a checker from a different model family catches what same-family checking can't see. #34 tests it over 10 dual-checked tasks. As of 2026-07-24: **6 crossings — 5 agreements, 1 blocked, and zero unique findings in either direction.** Four more crossings decide it. A near-zero unique-finding rate closes v0.6.0 through v0.8.0 as won't-do, which is the evaluation succeeding, not failing — the gate exists so the answer can be no. Note the board can't advance itself: every open issue is downstream of this question, so the crossings have to come from ungated work.

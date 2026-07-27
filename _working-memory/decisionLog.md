@@ -14,6 +14,30 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: CI verifies and packages both hosts without committing output
+
+**Source:** maintainer request during PR #60
+
+**Context:** A shared-core build is only dependable if each host has an unambiguous command and pull requests catch stale generated state without creating another automated writer.
+**Decision:** Expose explicit `claude`, `codex`, and `all` build targets; document their sources, outputs, sync command, and checks in one canonical guide. GitHub Actions runs the full suite and strict Claude validator, rejects generated drift, proves a fresh Claude build is identical to the established published package, and uploads both packages—including their hidden manifests—as an ephemeral artifact. It never commits generated files.
+**Alternatives considered:** Keeping the target split implicit in maintainer-only commands (rejected—easy to build or edit the wrong tree); having CI auto-commit rebuilds (rejected—it obscures source/output mistakes and introduces a privileged writer); uploading only Codex (rejected—building both from the same revision is the clearest evidence that the shared-core contract holds).
+
+## 2026-07-26: Host packages are rendered artifacts, not parallel source trees
+
+**Source:** maintainer review of PR #60; supersedes the issue #51 decision immediately below
+
+**Context:** The first #51 implementation called the dogfooded Claude tree a shared core and committed 47 Codex package files beside it; 45 were byte-identical copies, so the repository gained exactly the parallel content surface First-Class Codex was meant to avoid.
+**Decision:** Author shared role behavior and workflow bodies/assets only under `guild-core/`; keep host-bound frontmatter and manifest metadata under `scripts/plugin-src/adapters/`; generate the dogfooded Claude wrappers and both packages from those inputs. Preserve the existing published Claude tree for marketplace compatibility, but stage Codex under ignored `dist/` and commit only its compact content lock until #53 defines the publishing surface. A check rejects edits to generated dogfood, stale Claude output, stale Codex content, and a hand-edited staged artifact.
+**Alternatives considered:** Treating committed generated copies as sufficiently DRY (rejected—the edit path was singular but the repository surface was not); keeping `.claude/` as the semantic core (rejected—it mixed shared behavior with Claude representation); committing the incomplete Codex staging tree before #50, #56, and #57 supply its actual adapters (rejected—it looked like a second implementation and exposed Claude wrappers as Codex content).
+
+## 2026-07-26: Both host distributions are generated from the dogfooded source graph
+
+**Source:** issue #51
+
+**Context:** First-Class Codex needs a package target without creating a second Agent Guild implementation or turning the repo's live Claude setup into another generated copy developers cannot edit directly.
+**Decision:** Keep the dogfooded `.claude/` and `.agent-guild/` trees as the canonical shared source graph. `scripts/build-plugin.py` now generates both `plugin/` and `codex-plugin/` from that graph and one authored version. Schemas, scripts, templates, scenario assets, workflow bodies, and role definitions are single-sourced; target builders may change only platform representation, currently Claude invocation namespacing and Codex skill frontmatter/manifest metadata. `--check` rebuilds and diffs both committed targets, so hand edits fail regardless of host.
+**Alternatives considered:** Maintaining a parallel Codex source tree (rejected—the drift #51 exists to prevent); moving every live source into a third abstract directory immediately (rejected—it would make both dogfooded host trees generated artifacts before the later agent, hook, and skill adapter issues define their stable representations).
+
 ## 2026-07-26: First-Class Codex targets v0.5.1
 
 **Source:** maintainer direction during issue #52

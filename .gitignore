@@ -18,6 +18,8 @@ __pycache__/
 
 .DS_Store
 
+# Host packages staged for release. Published trees are generated, never authored.
+/dist/
+
 # Local-only active context (working-memory-kit)
 _working-memory/activeContext.md
-

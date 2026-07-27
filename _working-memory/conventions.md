@@ -26,7 +26,7 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 
 ## Releases
 
-- Two-commit pattern: work commits never touch the version; one mechanical release commit carries the bump (in `scripts/plugin-src/plugin.json`), the generated changelog section, and the rebuilt `plugin/`. Kit-payload jobs leave the version untouched — the release is the maintainer ritual at wrap, per `docs/publishing.md`.
+- Two-commit pattern: work commits never touch the version; one mechanical release commit carries the bump (in `scripts/plugin-src/plugin.json`), the generated changelog section, the rebuilt published tree, and the refreshed Codex artifact lock. Kit-payload jobs leave the version untouched — the release is the maintainer ritual at wrap, per `docs/publishing.md`.
 - Every release commit gets tagged with a GitHub release, patch bumps included; notes come from `make-changelog.py --notes`, never retyped. A milestone close is just the bump that closes it.
 - The changelog is generated, never hand-edited: `--check` fails a bumped-but-sectionless version, `--notes` refuses a noteless release.
 
@@ -36,8 +36,9 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 
 ## Plugin Packaging
 
-- The plugin is built, never hand-edited: authored sources live in-repo, `scripts/build-plugin.py` assembles `plugin/`, and `--check` rebuilds into a temp dir, diffs both ways, and runs `claude plugin validate --strict`. A hand-added file in `plugin/` fails `--check` as "missing from a fresh build."
-- Bump the version in the authored manifest `scripts/plugin-src/plugin.json`, never the build output `plugin/.claude-plugin/plugin.json`—a rebuild reverts the output, so a bump there ships nothing. The version field is the only update signal installed copies watch. (`docs/publishing.md`)
+- Shared behavior is authored only under `guild-core/`; host frontmatter and manifest metadata live under `scripts/plugin-src/adapters/`. The dogfooded `.claude` wrappers and published `plugin/` tree are generated views. `codex-plugin/` is never a development source tree: Codex stages under ignored `dist/`, with only `scripts/plugin-src/codex.sha256` committed until the publishing issue defines its release surface.
+- Use the explicit `--target claude`, `--target codex`, or `--target all` commands for standalone artifacts; use the bare command only to sync the repository's generated state. CI verifies and uploads packages but never commits output. (`docs/building.md`)
+- Bump the version in the authored manifest `scripts/plugin-src/plugin.json`, never a generated manifest—rebuilds revert output-only changes, and the one source writes the same version to both targets. (`docs/publishing.md`)
 - `/agent-guild:init` never touches `.claude/settings.json`; plugin installs get their gates from the plugin's own `hooks/hooks.json`. Registering them again would double-fire every gate. (`.claude/skills/init/SKILL.md`)
 
 ## Prose Voice (docs and comments)

@@ -1,0 +1,67 @@
+name: Plugin Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build And Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v6
+
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set Up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install Claude Plugin Validator
+        run: npm install --global @anthropic-ai/claude-code@2.1.212
+
+      - name: Run Test Suites
+        run: |
+          python3 scripts/test_build_plugin.py
+          python3 scripts/test_make_changelog.py
+          python3 .agent-guild/scripts/test_check_diff_scope.py
+          python3 .agent-guild/scripts/test_compose_brief.py
+          python3 .agent-guild/scripts/test_ledger_append.py
+          python3 .agent-guild/scripts/test_verdict_tools.py
+          python3 .agent-guild/hooks/test_hooks.py
+
+      - name: Verify Generated State
+        run: python3 scripts/build-plugin.py --check
+
+      - name: Build Claude And Codex Packages
+        run: python3 scripts/build-plugin.py --target all --out dist/packages
+
+      - name: Prove Claude Package Compatibility
+        run: diff -qr plugin dist/packages/claude-plugin
+
+      - name: Upload Plugin Packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-guild-plugins-${{ github.sha }}
+          path: dist/packages
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

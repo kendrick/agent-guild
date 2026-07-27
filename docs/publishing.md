@@ -1,10 +1,10 @@
 # Publishing
 
-This file collects the policies for shipping this repo as a Claude Code plugin marketplace.
+This file collects the policies for shipping this repo's generated host distributions. For exact Claude, Codex, and combined build commands, start with [Building The Plugins](building.md).
 
 ## Version Bumps
 
-Claude Code detects plugin updates through the `version` field in `plugin/.claude-plugin/plugin.json`. That file is a build output, though, not something you edit directly. The authored source is `scripts/plugin-src/plugin.json`, and `build-plugin.py` copies it into the committed `plugin/` tree. Bump the source.
+The generated host manifests at `plugin/.claude-plugin/plugin.json` and `dist/codex-plugin/.codex-plugin/plugin.json` carry one release version. Both are build outputs, not something you edit directly. The authored source is `scripts/plugin-src/plugin.json`; `build-plugin.py` copies that version into both rendered trees. Bump the source.
 
 Bumping the build output instead is the classic mistake: it looks like it worked, `--check` stays green, but the next rebuild copies the un-bumped source back over it and silently reverts your change. Every existing install keeps running the old code until someone notices.
 
@@ -18,9 +18,9 @@ A release is one mechanical commit, separate from the work that earns it. Everyt
 
 1. **Bump the version** in `scripts/plugin-src/plugin.json`, in your working tree only; don't commit yet. See [Version Bumps](#version-bumps) above for why it's this file and not the build output.
 2. **Generate the changelog section**: `python3 scripts/make-changelog.py <version>`. Because that bump isn't committed yet, the script takes its in-flight path: it covers every commit back to the last release, dated today, instead of looking for a boundary commit that doesn't exist. Rerun it as often as you like while more work lands before you commit; each run replaces the provisional section instead of duplicating it.
-3. **Rebuild**: `python3 scripts/build-plugin.py`. This assembles the committed `plugin/` tree from the in-repo sources.
-4. **Verify**: `python3 scripts/build-plugin.py --check`. This rebuilds into a temp directory, diffs it against the committed tree in both directions, runs `claude plugin validate --strict`, and fails if `CHANGELOG.md` has no section for the bumped version. It has to exit 0 before anything ships.
-5. **Commit** the bumped source, the generated changelog section, and the rebuilt `plugin/` tree together, and nothing else. The changelog was generated before this commit existed, so the release commit itself never shows up in its own section—that's expected, not a bug to chase.
+3. **Rebuild**: `python3 scripts/build-plugin.py`. This renders dogfooded Claude wrappers and the published `plugin/` tree, stages the Codex artifact under ignored `dist/`, and refreshes `scripts/plugin-src/codex.sha256`.
+4. **Verify**: `python3 scripts/build-plugin.py --check`. This rejects dogfood edits outside `guild-core/`, stale Claude output, a stale Codex lock, and a hand-edited staged Codex artifact when present; it also runs `claude plugin validate --strict` and fails if `CHANGELOG.md` has no section for the bumped version. It has to exit 0 before anything ships.
+5. **Commit** the bumped source, the generated changelog section, the rebuilt published Claude tree, and the refreshed Codex lock together, and nothing else. The Codex package itself remains a release artifact until its publishing surface is defined by #53. The changelog was generated before this commit existed, so the release commit itself never shows up in its own section—that's expected, not a bug to chase.
 
 ## Tagging a Release
 

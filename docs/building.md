@@ -26,6 +26,19 @@ Codex hooks are not automatically trusted. After installing the plugin, open `/h
 
 Its `project-template/` contains the generated nine-agent Guild roster, one bounded `AGENTS.md` section, the repo-local hook configuration, and the same dependency-free project installer engine as the Claude package. The roster TOML is rendered from the same `guild-core/roles/` bodies as Claude; model, reasoning, sandbox, and host-bound instruction metadata come from `scripts/plugin-src/adapters/codex.json`.
 
+## Install The Codex Plugin From Git
+
+Add the repository as a Codex marketplace, then install the qualified plugin:
+
+```sh
+codex plugin marketplace add kendrick/agent-guild
+codex plugin add agent-guild@kendrick
+```
+
+Start a new Codex session after installation so the bundled skills and hooks load. Run `$agent-guild:init` once in the target project, open `/hooks`, review and trust the exact Agent Guild definitions, then start existing work with `$agent-guild:job <issue|file|url>`.
+
+For desktop discovery, add the marketplace with the CLI command above, restart the ChatGPT desktop app, select Codex, open **Plugins**, choose the **Kendrick** marketplace, and install **Agent Guild**. Start a new thread before invoking its skills. The repo marketplace is generated at `.agents/plugins/marketplace.json`; its entry resolves the committed package at `plugins/agent-guild/` inside the same Git snapshot.
+
 ## Bootstrap A Codex Project
 
 Build the Codex package, then point its initializer at the target project root:
@@ -68,7 +81,7 @@ dist/packages/
 └── codex-plugin/
 ```
 
-Explicit target builds only write beneath the requested output directory. They do not update tracked generated files or the Codex release lock.
+Explicit target builds only write beneath the requested output directory. They do not update tracked generated files or marketplaces.
 
 ## Sync The Repository
 
@@ -82,10 +95,10 @@ This command:
 
 - refreshes the generated Claude wrappers under `.claude/`;
 - rebuilds the tracked published Claude package under `plugin/`;
-- stages the ignored Codex package under `dist/codex-plugin/`; and
-- refreshes the tracked Codex artifact lock at `scripts/plugin-src/codex.sha256`.
+- rebuilds the tracked published Codex package under `plugins/agent-guild/`; and
+- generates the Claude and Codex marketplace files from `scripts/plugin-src/plugin.json` and `scripts/plugin-src/marketplace.json`.
 
-The published Claude layout is a compatibility surface. After a packaging refactor, `git diff --exit-code origin/main -- .claude plugin` must stay clean unless the feature intentionally changes Claude behavior.
+Both published layouts are compatibility surfaces. After a packaging refactor, `git diff --exit-code origin/main -- .claude plugin plugins/agent-guild` must stay clean unless the feature intentionally changes host behavior.
 
 ## Verify
 
@@ -104,7 +117,7 @@ Then run the repository check:
 python3 scripts/build-plugin.py --check
 ```
 
-`--check` rebuilds from the shared sources, rejects drift in the dogfooded Claude wrappers and published Claude package, verifies the Codex artifact lock, and runs `claude plugin validate --strict plugin`. It therefore requires the `claude` CLI on `PATH`. The check does not require `dist/codex-plugin/` to exist; when that local staging tree is present, it is checked for hand edits too.
+`--check` rebuilds from the shared sources, rejects drift in the dogfooded Claude wrappers, both published packages, and both marketplace files, then runs `claude plugin validate --strict plugin`. It therefore requires the `claude` CLI on `PATH`.
 
 ## Know What To Edit
 
@@ -114,16 +127,18 @@ python3 scripts/build-plugin.py --check
 | `scripts/plugin-src/adapters/` | Host-specific frontmatter and metadata | Yes |
 | `scripts/plugin-src/install-project.py` | Shared Claude/Codex project installer engine | Yes |
 | `scripts/plugin-src/plugin.json` | Authored plugin identity and version | Yes—version bumps only during the release ritual |
+| `scripts/plugin-src/marketplace.json` | Authored shared marketplace identity and presentation metadata | Yes |
 | `.agent-guild/` | Host-neutral runtime payload copied into both packages | Yes |
 | `.claude/agents/`, `.claude/skills/` | Generated Claude dogfood wrappers | No |
 | `plugin/` | Generated, tracked Claude package | No |
+| `plugins/agent-guild/` | Generated, tracked Codex package exposed by the Git marketplace | No |
+| `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json` | Generated host marketplace views | No |
 | `dist/` | Generated, ignored local packages | No |
-| `scripts/plugin-src/codex.sha256` | Generated Codex artifact lock | No |
 
 For version bumps, changelog generation, tagging, and releases, continue with [Publishing](publishing.md).
 
 ## Continuous Integration
 
-The [Plugin Build workflow](../.github/workflows/plugin-build.yml) runs the build tests, full dependency-free test suite, drift check, and strict Claude validator. It then builds both host packages, proves the CI-built Claude package matches the tracked published package, and uploads the two packages as one workflow artifact.
+The [Plugin Build workflow](../.github/workflows/plugin-build.yml) runs the build tests, full dependency-free test suite, drift check, and strict Claude validator. It then builds both host packages, proves each CI-built package matches its tracked published package, and uploads the two packages as one workflow artifact.
 
 CI never commits generated files. If a source change makes generated output stale, the workflow fails and the author runs the repository sync command locally.

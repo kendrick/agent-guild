@@ -1,0 +1,24 @@
+{
+  "name": "agent-guild",
+  "description": "Runs Codex as an org chart: an orchestrator plans and rules, worker subagents build, and independent checker agents verify the work.",
+  "version": "0.5.0",
+  "author": {
+    "name": "Kendrick Arnett"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Guild",
+    "shortDescription": "Run Codex as a checked org chart",
+    "longDescription": "Plan work through an orchestrator, delegate implementation to specialist workers, and verify every result independently.",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Turn this issue into a checked Agent Guild job.",
+      "Decompose this spec into independently checked tasks.",
+      "Run an Agent Guild retrospective for this job."
+    ],
+    "developerName": "Kendrick Arnett"
+  }
+}

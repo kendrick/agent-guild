@@ -60,6 +60,9 @@ jobs:
       - name: Prove Claude Package Compatibility
         run: diff -qr plugin dist/packages/claude-plugin
 
+      - name: Prove Codex Package Compatibility
+        run: diff -qr plugins/agent-guild dist/packages/codex-plugin
+
       - name: Upload Plugin Packages
         uses: actions/upload-artifact@v7
         with:

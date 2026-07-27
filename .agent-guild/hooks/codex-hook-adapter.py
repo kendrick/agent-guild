@@ -194,6 +194,7 @@ def _run_write_gate(script, data):
 
 
 def _mapped_input(gate, data, skill_prefix):
+    data = {**data, "hook_host": "codex"}
     if gate == "dispatch-guard":
         return _dispatch_input(data)
     if gate == "subagent-return":

@@ -42,7 +42,9 @@ All nine properties are required, with `duration_ms` and `cost_usd` typed nullab
 
 ## Second-Opinion Verdicts
 
-The courier lane writes to a lane-suffixed stem: `verdicts/T-NNN-<tier>-r<retries>-codex.json` plus its rendered sibling, same schema, produced by `checker-courier` and validated by `subagent-return` at that stem. It is comparison data for the dual-check regime; the standard-stem verdict decides the task and is never outvoted by it.
+The courier writes to a host-mapped lane suffix: `verdicts/T-NNN-<tier>-r<retries>-<lane>.json` plus its rendered sibling, where Claude uses `codex` and Codex uses `claude`. It uses the canonical verdict schema and is comparison data only; the standard-stem verdict decides the task and is never outvoted.
+
+A read-only Codex courier returns `AGENT_GUILD_COURIER_OUTCOME\n<json>` rather than writing state. The object has exactly `status`, `verdict`, `ledger`, `attempts`, and `diagnostic`; the return gate validates its task/lane/model identities, ledger field types, quota consistency, and canonical verdict before the parent persists it. For `status: verdict`, the parent writes the unchanged `-claude` verdict, validates/renders it, then appends the ledger. For `status: quota`, the parent appends the quota ledger line first, then creates `state/exhausted/claude`, with no verdict.
 
 ## Lane Exhaustion
 

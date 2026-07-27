@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: Reciprocal couriers share one protocol and keep host commands in adapters
+
+**Source:** issue #54
+
+**Context:** Codex-hosted jobs needed an independent Claude second opinion, but the courier core still embedded the Claude-hosted `codex exec` route and Codex project agents are intentionally read-only.
+**Decision:** Keep evidence, validation, ledger, quota, and second-opinion semantics in one host-neutral `checker-courier` role; put the exact Codex and Claude commands in thin agent adapter suffixes. The Codex lane invokes a stdlib-only `claude-courier.py` boundary that pins `claude-haiku-4-5-20251001`, isolates the CLI with no tools or MCP servers, adapts only the schema's top-level `$schema`, requires and independently validates `structured_output`, aggregates retry usage, classifies structured 429s, and enforces a wall-clock bound. A read-only Codex courier returns the marked outcome; the return gate validates it before the parent persists the `-claude` verdict and ledger, or appends the quota ledger line before creating `exhausted/claude`. The unsuffixed in-family verdict remains authoritative.
+**Alternatives considered:** Duplicating the full courier procedure in the Codex adapter (rejected—it recreates the parallel implementation surface); granting the Codex courier workspace write (rejected—it weakens the read-only verifier boundary); trusting Claude's exit code or `--json-schema` alone (rejected—controlled malformed output can exit zero without `structured_output`); blocking the whole task when the external lane is unavailable (rejected—the second opinion is comparison data, not the verdict of record).
+
 ## 2026-07-26: Codex lifecycle adapters reuse the four shared gates
 
 **Source:** issue #56

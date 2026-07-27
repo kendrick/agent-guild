@@ -188,7 +188,17 @@ def _adapter_skill_suffix(name, target):
     return adapter.get("skill_body_suffixes", {}).get(name, "")
 
 
-def copy_agents(out_dir, core_dir=CORE_DIR, names=GUILD_AGENTS):
+def _adapter_agent_suffix(name, target):
+    adapter_path = (
+        CLAUDE_ADAPTER_PATH if target == "claude" else CODEX_ADAPTER_PATH
+    )
+    adapter = _load_json(adapter_path, f"{target.title()} adapter")
+    return adapter.get("agent_body_suffixes", {}).get(name, "")
+
+
+def copy_agents(
+    out_dir, core_dir=CORE_DIR, names=GUILD_AGENTS, target="claude"
+):
     """Render Claude agent wrappers around host-neutral role behavior."""
     src_dir = os.path.join(core_dir, "roles")
     dst_dir = os.path.join(out_dir, "agents")
@@ -199,6 +209,7 @@ def copy_agents(out_dir, core_dir=CORE_DIR, names=GUILD_AGENTS):
             raise BuildError(f"missing shared role source: {src}")
         with open(src, encoding="utf-8") as f:
             body = f.read()
+        body += _adapter_agent_suffix(name, target)
         rendered = _render_frontmatter(
             _adapter_frontmatter("agents", name, "claude"), body
         )
@@ -292,7 +303,7 @@ def generate_codex_agents(out_dir, core_dir=CORE_DIR):
         instructions = body
         if metadata.get("sandbox_mode") == "read-only":
             instructions += _CODEX_READ_ONLY_PROTOCOL
-        instructions += metadata.get("developer_instructions_suffix", "")
+        instructions += _adapter_agent_suffix(name, "codex")
         values = {
             "name": name,
             **metadata,
@@ -347,6 +358,18 @@ def generate_codex_agents(out_dir, core_dir=CORE_DIR):
             "- Read-only agents return the intended state-file path and "
             "complete content to the orchestrator. Never grant them write "
             "access to bypass that boundary.\n"
+        )
+        f.write(
+            "- A read-only `checker-courier` returns an "
+            "`AGENT_GUILD_COURIER_OUTCOME` from the fixed Claude runner. "
+            "For a verdict outcome, persist the supplied verdict unchanged "
+            "at the `-claude` suffixed path, validate and render it, then "
+            "record the supplied metrics through `ledger-append.py`. For a "
+            "quota outcome, append that ledger line first with "
+            "`--quota-event`, then create "
+            "`.agent-guild/state/exhausted/claude`; write no verdict. A "
+            "courier outcome never replaces the unsuffixed in-family "
+            "verdict.\n"
         )
         f.write(
             "- Agent Guild owns only this marked section of `AGENTS.md` "
@@ -703,7 +726,12 @@ def build_codex(out_dir, core_dir=CORE_DIR):
         {
             key: value
             for key, value in codex_adapter.items()
-            if key not in {"agents", "skill_frontmatter_overrides"}
+            if key
+            not in {
+                "agents",
+                "agent_body_suffixes",
+                "skill_frontmatter_overrides",
+            }
         }
     )
     manifest["interface"]["developerName"] = manifest["author"]["name"]

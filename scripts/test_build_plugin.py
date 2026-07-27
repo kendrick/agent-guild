@@ -9,6 +9,8 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 
 
@@ -78,6 +80,86 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         "the builder refuses to overwrite the shared core",
         condition,
         detail,
+    )
+
+    explicit_claude = os.path.join(tmp, "explicit-claude")
+    claude_proc = subprocess.run(
+        [
+            sys.executable,
+            BUILD_PLUGIN_PATH,
+            "--target",
+            "claude",
+            "--out",
+            explicit_claude,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    claude_diffs = (
+        build_plugin.diff_trees(
+            os.path.join(os.path.dirname(SCRIPTS_DIR), "plugin"),
+            explicit_claude,
+        )
+        if os.path.isdir(explicit_claude)
+        else ["output missing"]
+    )
+    check(
+        "the explicit Claude build reproduces the published plugin exactly",
+        claude_proc.returncode == 0 and claude_diffs == [],
+        (
+            f"rc={claude_proc.returncode} diffs={claude_diffs!r} "
+            f"stderr={claude_proc.stderr!r}"
+        ),
+    )
+
+    explicit_codex = os.path.join(tmp, "explicit-codex")
+    codex_proc = subprocess.run(
+        [
+            sys.executable,
+            BUILD_PLUGIN_PATH,
+            "--target",
+            "codex",
+            "--out",
+            explicit_codex,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    check(
+        "the explicit Codex build emits a standalone Codex package",
+        codex_proc.returncode == 0
+        and os.path.isfile(
+            os.path.join(
+                explicit_codex, ".codex-plugin", "plugin.json"
+            )
+        )
+        and not os.path.exists(
+            os.path.join(explicit_codex, ".claude-plugin")
+        ),
+        f"rc={codex_proc.returncode} stderr={codex_proc.stderr!r}",
+    )
+
+    explicit_all = os.path.join(tmp, "explicit-all")
+    all_proc = subprocess.run(
+        [
+            sys.executable,
+            BUILD_PLUGIN_PATH,
+            "--target",
+            "all",
+            "--out",
+            explicit_all,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    all_claude = os.path.join(explicit_all, "claude-plugin")
+    all_codex = os.path.join(explicit_all, "codex-plugin")
+    check(
+        "the all-target build emits both packages under one output root",
+        all_proc.returncode == 0
+        and build_plugin.diff_trees(explicit_claude, all_claude) == []
+        and build_plugin.diff_trees(explicit_codex, all_codex) == [],
+        f"rc={all_proc.returncode} stderr={all_proc.stderr!r}",
     )
 
     try:

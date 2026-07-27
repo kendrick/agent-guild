@@ -7,7 +7,12 @@ Claude dogfood and both packages are generated views of those sources.
 
 Modes:
     build-plugin.py              build ./plugin/ and stage ./dist/codex-plugin/
-    build-plugin.py --out DIR    build the Claude target into DIR
+    build-plugin.py --target claude --out DIR
+                                 build only the Claude package
+    build-plugin.py --target codex --out DIR
+                                 build only the Codex package
+    build-plugin.py --target all --out DIR
+                                 build both as children of DIR
     build-plugin.py --check      verify shared-core wrappers, generated output,
                                   the Codex release lock, and Claude validation
 
@@ -724,7 +729,9 @@ def main():
             "Build Agent Guild host distributions from shared sources.\n\n"
             "Modes:\n"
             "  build-plugin.py              build ./plugin/; stage Codex in ./dist/\n"
-            "  build-plugin.py --out DIR    build the Claude target into DIR\n"
+            "  --target claude --out DIR    build only the Claude package\n"
+            "  --target codex --out DIR     build only the Codex package\n"
+            "  --target all --out DIR       build both packages under DIR\n"
             "  build-plugin.py --check      verify core-derived wrappers, outputs,\n"
             "                               the Codex lock, and Claude validation"
         ),
@@ -732,20 +739,51 @@ def main():
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
-        "--out",
-        metavar="DIR",
-        help="build only the Claude target into DIR",
+        "--target",
+        choices=("claude", "codex", "all"),
+        help="build an explicit host target (requires --out)",
     )
     mode.add_argument(
         "--check",
         action="store_true",
         help="verify the committed plugin/ is up to date instead of building",
     )
+    parser.add_argument(
+        "--out",
+        metavar="DIR",
+        help="output directory for --target (without --target: Claude compatibility)",
+    )
     args = parser.parse_args()
+
+    if args.check and args.out:
+        parser.error("--check cannot be combined with --out")
+    if args.target and not args.out:
+        parser.error("--target requires --out DIR")
 
     try:
         if args.check:
             return run_check()
+        if args.target:
+            out_dir = os.path.abspath(args.out)
+            _guard_out_dir(out_dir)
+            if args.target == "claude":
+                build(out_dir)
+                print(f"OK: built Claude plugin at {out_dir}")
+            elif args.target == "codex":
+                build_codex(out_dir)
+                print(f"OK: built Codex plugin at {out_dir}")
+            else:
+                if os.path.exists(out_dir):
+                    shutil.rmtree(out_dir)
+                os.makedirs(out_dir)
+                claude_out = os.path.join(out_dir, "claude-plugin")
+                codex_out = os.path.join(out_dir, "codex-plugin")
+                build_distributions(claude_out, codex_out)
+                print(
+                    f"OK: built Claude plugin at {claude_out} and Codex "
+                    f"plugin at {codex_out}"
+                )
+            return 0
         if args.out:
             out_dir = os.path.abspath(args.out)
             _guard_out_dir(out_dir)

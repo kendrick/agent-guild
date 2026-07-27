@@ -1,6 +1,6 @@
 # Publishing
 
-This file collects the policies for shipping this repo's generated host distributions.
+This file collects the policies for shipping this repo's generated host distributions. For exact Claude, Codex, and combined build commands, start with [Building The Plugins](building.md).
 
 ## Version Bumps
 

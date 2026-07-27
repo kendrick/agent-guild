@@ -96,3 +96,7 @@ Then:
 The hooks reference `$CLAUDE_PROJECT_DIR`, so they work wherever the repo lands. `.agent-guild/scripts/check-a11y.mjs` installs its own Node dependencies on first run; everything else is Python or Bash with no dependencies.
 
 Whichever way you install, walk through `SMOKE.md` once in a fresh session to watch every gate fire before it guards real work.
+
+## Build The Plugins
+
+The Claude and Codex packages are generated from one shared core. See [Building The Plugins](docs/building.md) for the exact per-host commands, source-versus-output rules, compatibility checks, and CI artifact flow.

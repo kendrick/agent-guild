@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: CI verifies and packages both hosts without committing output
+
+**Source:** maintainer request during PR #60
+
+**Context:** A shared-core build is only dependable if each host has an unambiguous command and pull requests catch stale generated state without creating another automated writer.
+**Decision:** Expose explicit `claude`, `codex`, and `all` build targets; document their sources, outputs, sync command, and checks in one canonical guide. GitHub Actions runs the full suite and strict Claude validator, rejects generated drift, proves a fresh Claude build is identical to the established published package, and uploads both packages—including their hidden manifests—as an ephemeral artifact. It never commits generated files.
+**Alternatives considered:** Keeping the target split implicit in maintainer-only commands (rejected—easy to build or edit the wrong tree); having CI auto-commit rebuilds (rejected—it obscures source/output mistakes and introduces a privileged writer); uploading only Codex (rejected—building both from the same revision is the clearest evidence that the shared-core contract holds).
+
 ## 2026-07-26: Host packages are rendered artifacts, not parallel source trees
 
 **Source:** maintainer review of PR #60; supersedes the issue #51 decision immediately below

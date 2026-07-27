@@ -62,14 +62,14 @@ def _save_state(digest, count):
 
 
 def main(data):
-    # Claude Code fires Stop for subagents too, stamping agent_id on that input.
-    # A subagent's turn ending is subagent-return's jurisdiction, not this gate's—
-    # this gate exists to hold open the ORCHESTRATOR's turn, and a subagent has no
-    # say over the orchestrator's open-task picture. No-op unconditionally, before
-    # touching open_tasks() or the livelock state file: a subagent Stop must never
-    # increment (or reset) the counter that's tracking main-session livelock, or
-    # parallel subagents finishing in sequence would trip a spurious STALLED.md
-    # with nothing actually stuck.
+    # Supported hosts stamp agent_id on a subagent-scoped stop input. A
+    # subagent's turn ending is subagent-return's jurisdiction, not this gate's—
+    # this gate exists to hold open the ORCHESTRATOR's turn, and a subagent has
+    # no say over the orchestrator's open-task picture. No-op unconditionally,
+    # before touching open_tasks() or the livelock state file: a subagent Stop
+    # must never increment (or reset) the counter that's tracking main-session
+    # livelock, or parallel subagents finishing in sequence would trip a
+    # spurious STALLED.md with nothing actually stuck.
     if _lib.in_subagent(data):
         return 0
 

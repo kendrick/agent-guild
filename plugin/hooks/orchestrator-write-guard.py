@@ -7,9 +7,8 @@ else. This turns that contract from prompt language into mechanism: while a job
 is active, a main-session write outside .agent-guild/state/ is blocked with an instruction,
 not a bare denial.
 
-PreToolUse fires inside subagents too (verified on CC 2.1.x—an earlier
-assumption that it didn't was wrong, and it silently blocked workers). So this
-gate no-ops when the hook input carries an `agent_id`, which Claude Code sets
+PreToolUse fires inside subagents too. So this gate no-ops when the hook input
+carries an `agent_id`, which supported Claude Code and Codex hook payloads set
 only for subagent tool calls. That leaves workers free to write real
 deliverables and ties only the orchestrator's own hands.
 
@@ -17,13 +16,14 @@ No open job means no gate: during Phase 0, before any task exists, the
 orchestrator writes the constitution and spec freely. That window is
 prompt-enforced, by design.
 
-Known limit, deliberate: the matcher is Write|Edit|MultiEdit, not Bash. A shell
-redirect (`printf … > deliverable`) bypasses this gate, so the orchestrator's
-restraint on the shell path rests on the contract, not here. Detecting writes in
-arbitrary shell can't be done statically without both false positives and
-misses, and a Bash check would have to fail OPEN to keep the orchestrator's
-ordinary git/ls/grep usable—inverting this file's fail-closed stance. Left to the
-prompt on purpose; the orchestrator is cooperative, not adversarial.
+Known limit, deliberate: host registration covers structured edit tools, not
+Bash. A shell redirect (`printf … > deliverable`) bypasses this gate, so the
+orchestrator's restraint on the shell path rests on the contract, not here.
+Detecting writes in arbitrary shell can't be done statically without both false
+positives and misses, and a Bash check would have to fail OPEN to keep the
+orchestrator's ordinary git/ls/grep usable—inverting this file's fail-closed
+stance. Left to the prompt on purpose; the orchestrator is cooperative, not
+adversarial.
 """
 import os
 import sys

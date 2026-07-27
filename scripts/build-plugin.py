@@ -101,6 +101,7 @@ GUILD_HOOKS = [
     "test_hooks.py",
 ]
 OPTIONAL_HOOKS = ["session-nudge.py"]
+CODEX_HOOKS = ["codex-hook-adapter.py", "test_codex_adapter.py"]
 
 # check-a11y.mjs self-bootstraps node_modules/ and a lockfile on first run
 # (.agent-guild/scripts/package.json), and Python leaves __pycache__ behind
@@ -391,22 +392,36 @@ def sync_dogfood(out_dir=CLAUDE_DIR, core_dir=CORE_DIR):
                 )
 
 
-def copy_hooks(out_dir):
-    """Copy the hook scripts byte-identical into hooks/. Returns the list of
-    filenames actually shipped (see copy_skills for why)."""
-    src_dir = os.path.join(GUILD_DIR, "hooks")
-    dst_dir = os.path.join(out_dir, "hooks")
-    os.makedirs(dst_dir, exist_ok=True)
+def _hook_names(target):
     shipped = list(GUILD_HOOKS)
     for name in OPTIONAL_HOOKS:
-        if os.path.isfile(os.path.join(src_dir, name)):
+        if os.path.isfile(os.path.join(GUILD_DIR, "hooks", name)):
             shipped.append(name)
+    if target == "codex":
+        shipped.extend(CODEX_HOOKS)
+    return shipped
+
+
+def copy_hook_scripts(dst_dir, target):
+    """Copy one host's hook scripts from the shared source inventory."""
+    if target not in {"claude", "codex"}:
+        raise BuildError(f"unsupported hook target: {target}")
+    src_dir = os.path.join(GUILD_DIR, "hooks")
+    os.makedirs(dst_dir, exist_ok=True)
+    shipped = _hook_names(target)
     for name in shipped:
         src = os.path.join(src_dir, name)
         if not os.path.isfile(src):
             raise BuildError(f"missing guild hook source: {src}")
         shutil.copy2(src, os.path.join(dst_dir, name))
     return shipped
+
+
+def copy_hooks(out_dir, target="claude"):
+    """Copy the hook scripts byte-identical into hooks/. Returns the list of
+    filenames actually shipped (see copy_skills for why)."""
+    dst_dir = os.path.join(out_dir, "hooks")
+    return copy_hook_scripts(dst_dir, target)
 
 
 # A registered command looks like:
@@ -478,7 +493,102 @@ def generate_hooks_json(out_dir, shipped_hooks):
         f.write("\n")
 
 
-def assemble_project_template(out_dir):
+def _codex_hook_groups(command_root, skill_prefix):
+    adapter = f'python3 "{command_root}/codex-hook-adapter.py"'
+    nudge_command = f"{adapter} session-nudge"
+    if skill_prefix:
+        nudge_command += f" {skill_prefix}"
+    guild_agents = "|".join(GUILD_AGENTS)
+    return {
+        "SessionStart": [
+            {
+                "matcher": "startup",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": nudge_command,
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "Agent|spawn_agent",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{adapter} dispatch-guard",
+                        "timeout": 30,
+                    }
+                ],
+            },
+            {
+                "matcher": "Edit|Write|apply_patch",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": (
+                            f"{adapter} orchestrator-write-guard"
+                        ),
+                        "timeout": 30,
+                    }
+                ],
+            },
+        ],
+        "SubagentStop": [
+            {
+                "matcher": guild_agents,
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{adapter} subagent-return",
+                        "timeout": 30,
+                    }
+                ],
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{adapter} stop-gate",
+                        "timeout": 30,
+                    }
+                ]
+            }
+        ],
+    }
+
+
+def generate_codex_hooks_json(out_dir):
+    """Generate plugin and repo-local configs from one Codex hook inventory."""
+    plugin_config = {
+        "hooks": _codex_hook_groups(
+            "${PLUGIN_ROOT}/hooks", "agent-guild:"
+        )
+    }
+    plugin_path = os.path.join(out_dir, "hooks", "hooks.json")
+    with open(plugin_path, "w", encoding="utf-8") as f:
+        json.dump(plugin_config, f, indent=2)
+        f.write("\n")
+
+    project_config = {
+        "hooks": _codex_hook_groups(
+            '$(git rev-parse --show-toplevel)/.agent-guild/hooks', ""
+        )
+    }
+    project_path = os.path.join(
+        out_dir, "project-template", ".codex", "hooks.json"
+    )
+    os.makedirs(os.path.dirname(project_path), exist_ok=True)
+    with open(project_path, "w", encoding="utf-8") as f:
+        json.dump(project_config, f, indent=2)
+        f.write("\n")
+
+
+def assemble_project_template(out_dir, target="claude"):
     """Build project-template/.agent-guild/ -- the per-project payload the
     init skill copies into a user's repo: the orchestrator contract,
     the check scripts, the task/verdict templates, and the verdict schema."""
@@ -502,6 +612,8 @@ def assemble_project_template(out_dir):
         os.path.join(dst_root, "schemas"),
         ignore=_IGNORE_BUILD_BYPRODUCTS,
     )
+    if target == "codex":
+        copy_hook_scripts(os.path.join(dst_root, "hooks"), "codex")
     if not os.path.isfile(INSTALLER_PATH):
         raise BuildError(f"missing project installer: {INSTALLER_PATH}")
     shutil.copy2(
@@ -579,15 +691,12 @@ def write_plugin_manifest(out_dir):
 
 
 def build_codex(out_dir, core_dir=CORE_DIR):
-    """Build the initial Codex target from the same authored release metadata.
-
-    Later target-specific issues add Codex agent, hook, and skill adapters;
-    this substrate owns the output root and the shared version boundary now.
-    """
+    """Build the Codex target from shared behavior plus thin host adapters."""
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(os.path.join(out_dir, ".codex-plugin"))
     copy_skills(out_dir, core_dir, target="codex")
+    copy_hooks(out_dir, target="codex")
     manifest = _load_json(PLUGIN_SRC_MANIFEST, "release manifest")
     codex_adapter = _load_json(CODEX_ADAPTER_PATH, "Codex adapter")
     manifest.update(
@@ -605,7 +714,8 @@ def build_codex(out_dir, core_dir=CORE_DIR):
     ) as f:
         json.dump(manifest, f, indent=2)
         f.write("\n")
-    assemble_project_template(out_dir)
+    assemble_project_template(out_dir, target="codex")
+    generate_codex_hooks_json(out_dir)
     generate_codex_agents(out_dir, core_dir)
 
 
@@ -625,9 +735,9 @@ def build(out_dir, core_dir=CORE_DIR):
     os.makedirs(out_dir)
     copy_agents(out_dir, core_dir, names=CLAUDE_PLUGIN_AGENTS)
     shipped_skills = copy_skills(out_dir, core_dir)
-    shipped_hooks = copy_hooks(out_dir)
+    shipped_hooks = copy_hooks(out_dir, target="claude")
     generate_hooks_json(out_dir, shipped_hooks)
-    assemble_project_template(out_dir)
+    assemble_project_template(out_dir, target="claude")
     copy_readme(out_dir)
     apply_namespacing(out_dir, shipped_skills)
     write_plugin_manifest(out_dir)

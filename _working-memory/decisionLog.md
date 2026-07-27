@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: Codex lifecycle adapters reuse the four shared gates
+
+**Source:** issue #56
+
+**Context:** Claude's four enforcement gates already held the Guild policy, but Codex names lifecycle fields and structured edits differently, discovers plugin and project hooks at different scopes, and requires explicit user trust for hook definitions.
+**Decision:** Keep policy only in the existing four stdlib Python gates and translate Codex command-hook JSON through one `codex-hook-adapter.py`. Preserve exit code 2 plus stderr as the blocking/continuation protocol; map `spawn_agent`, multi-target `apply_patch`, child transcript paths, and subagent identity into the shared contract. Generate plugin and repo-local hook configs from one inventory. Plugin setup relies only on plugin hooks; repo-local bootstrap owns the shared scripts and merges only handler commands carrying the Guild adapter signature into `.codex/hooks.json`, preserving unrelated configuration. Setup always directs the user to review and explicitly trust definitions in `/hooks`; installation never claims trust.
+**Alternatives considered:** Forking all four gates for Codex (rejected—the policies would drift); reimplementing policy inside a stateful adapter (rejected—the current Codex payload supplies subagent identity directly); overwriting `.codex/hooks.json` (rejected—it is project-owned shared configuration); installing project hooks alongside plugin hooks (rejected—every gate would fire twice); implying installation automatically trusted hooks (rejected—Codex intentionally keeps that authority with the user).
+
 ## 2026-07-26: One workflow core and installer engine serve both hosts
 
 **Source:** issue #57

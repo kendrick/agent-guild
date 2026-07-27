@@ -47,6 +47,8 @@ jobs:
           python3 .agent-guild/scripts/test_ledger_append.py
           python3 .agent-guild/scripts/test_verdict_tools.py
           python3 .agent-guild/hooks/test_hooks.py
+          python3 .agent-guild/hooks/test_codex_adapter.py
+          python3 scripts/test_codex_hooks_packaging.py
 
       - name: Verify Generated State
         run: python3 scripts/build-plugin.py --check

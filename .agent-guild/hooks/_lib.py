@@ -123,12 +123,12 @@ def read_input():
 
 def in_subagent(data):
     """True if this hook fired for a tool call INSIDE a subagent rather than the
-    main session. Claude Code stamps an `agent_id` on subagent hook input and
-    leaves it off main-session input, so a gate meant to constrain only the
-    orchestrator no-ops when it's present. Load-bearing: PreToolUse DOES fire
-    inside subagents on CC 2.1.x (an earlier assumption that it didn't was
-    wrong), so without this the write-guard blocks workers from writing the very
-    deliverables they were dispatched to produce."""
+    main session. Supported Claude Code and Codex hook payloads stamp an
+    `agent_id` on subagent input and leave it off main-session input, so a gate
+    meant to constrain only the orchestrator no-ops when it's present.
+    Load-bearing: tool hooks fire inside subagents, so without this the
+    write-guard blocks workers from writing the deliverables they were
+    dispatched to produce."""
     return bool(data.get("agent_id"))
 
 
@@ -244,7 +244,7 @@ def con_audit_passed():
 
 # Claude Code records a subagent dispatch as an assistant tool_use block for one
 # of these tool names; the id we need rides in that block's `input.prompt`.
-_DISPATCH_TOOLS = {"Task", "Agent"}
+_DISPATCH_TOOLS = {"Task", "Agent", "spawn_agent"}
 
 
 def _id_in(text):
@@ -258,20 +258,16 @@ def _id_in(text):
 
 def id_from_transcript(transcript_path):
     """Extract the Task-ID / Audit-ID / Audition-ID a subagent was dispatched
-    with. FRAGILE: depends on Claude Code's transcript JSONL shape, which is not
-    a stable public contract. Any failure to find an id raises, and the caller
-    turns that into a loud fail-closed block.
+    with. FRAGILE: both Claude Code and Codex document their transcript JSONL
+    as unstable. Any failure to find an id raises, and the caller turns that
+    into a loud, non-hanging return warning.
 
-    Where the id actually lives: SubagentStop hands us the PARENT session
-    transcript (verified on CC 2.1.x—there is no separate subagent transcript
-    carrying the dispatch prompt as a user turn). So the authoritative record is
-    the orchestrator's assistant tool_use(Task|Agent) call, whose `input.prompt`
-    holds the `Task-ID: T-NNN` line—NOT a role:user message. Under the guild's
-    serial dispatch (one subagent dispatched and awaited at a time) the LAST such
-    dispatch is the one that just finished. We still scan role:user text as a
-    fallback, so a CC version that records the prompt as the subagent's own
-    opening turn keeps working. The fixture tests pin both shapes; update them
-    here if CC changes the format again.
+    Claude's SubagentStop supplies the parent transcript, where the id lives in
+    the last assistant Task/Agent tool_use input. Codex supplies the child
+    transcript explicitly, where the opening prompt is currently a
+    response_item message or event_msg user_message. We scan both records, plus
+    Codex function_call dispatches, so this parser remains one shared
+    compatibility boundary rather than a host-specific policy fork.
     """
     with open(transcript_path, encoding="utf-8") as f:
         raw_lines = f.readlines()
@@ -288,32 +284,74 @@ def id_from_transcript(transcript_path):
             continue
         if not isinstance(obj, dict):
             continue
-        msg = obj.get("message", obj)
-        content = msg.get("content") if isinstance(msg, dict) else None
+        records = [obj]
+        payload = obj.get("payload")
+        if isinstance(payload, dict):
+            records.append(payload)
 
-        if isinstance(content, list):
-            for b in content:
-                if (isinstance(b, dict) and b.get("type") == "tool_use"
-                        and b.get("name") in _DISPATCH_TOOLS):
-                    got = _id_in((b.get("input") or {}).get("prompt", ""))
-                    if got:
-                        tool_ids.append(got)
+        for record in records:
+            msg = record.get("message", record)
+            content = msg.get("content") if isinstance(msg, dict) else None
 
-        role = msg.get("role") if isinstance(msg, dict) else None
-        role = role or obj.get("role") or obj.get("type")
-        if role == "user":
-            got = _id_in(_text_of(content))
-            if got:
-                user_ids.append(got)
+            if isinstance(content, list):
+                for block in content:
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "tool_use"
+                        and block.get("name") in _DISPATCH_TOOLS
+                    ):
+                        got = _id_in(
+                            _dispatch_prompt(block.get("input") or {})
+                        )
+                        if got:
+                            tool_ids.append(got)
+
+            if (
+                record.get("type") == "function_call"
+                and record.get("name") in _DISPATCH_TOOLS
+            ):
+                arguments = record.get("arguments") or {}
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                got = _id_in(_dispatch_prompt(arguments))
+                if got:
+                    tool_ids.append(got)
+
+            role = msg.get("role") if isinstance(msg, dict) else None
+            role = role or record.get("role") or record.get("type")
+            if role in {"user", "user_message"}:
+                user_text = (
+                    record.get("message")
+                    if record.get("type") == "user_message"
+                    else content
+                )
+                got = _id_in(_text_of(user_text))
+                if got:
+                    user_ids.append(got)
 
     if tool_ids:
         return tool_ids[-1]
     if user_ids:
         return user_ids[-1]
     raise ValueError(
-        f"no Task-ID/Audit-ID/Audition-ID found in any Task/Agent dispatch or "
+        f"no Task-ID/Audit-ID/Audition-ID found in any agent dispatch or "
         f"user message of {transcript_path}"
     )
+
+
+def _dispatch_prompt(tool_input):
+    if not isinstance(tool_input, dict):
+        return ""
+    parts = []
+    for key in ("prompt", "message", "items"):
+        if key in tool_input:
+            text = _text_of(tool_input[key])
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
 
 
 def _text_of(content):
@@ -324,8 +362,18 @@ def _text_of(content):
         for b in content:
             if isinstance(b, str):
                 parts.append(b)
-            elif isinstance(b, dict) and isinstance(b.get("text"), str):
-                parts.append(b["text"])
+            elif isinstance(b, dict):
+                text = _text_of(b)
+                if text:
+                    parts.append(text)
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        parts = []
+        for key in ("text", "input_text", "message", "content"):
+            if key in content:
+                text = _text_of(content[key])
+                if text:
+                    parts.append(text)
         return "\n".join(parts)
     return ""
 

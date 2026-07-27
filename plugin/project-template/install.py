@@ -6,6 +6,7 @@ packages. Plugin init skills call it without `--project-skills`; the direct
 Codex IDE bootstrap adds that flag to install repo-local `.agents/skills`.
 All writes stay inside the explicitly supplied project root.
 """
+import json
 import os
 import shutil
 import sys
@@ -23,10 +24,15 @@ TEMPLATE_ROOT = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_ROOT = os.path.dirname(TEMPLATE_ROOT)
 SOURCE_PAYLOAD = os.path.join(TEMPLATE_ROOT, ".agent-guild")
 SOURCE_AGENTS = os.path.join(TEMPLATE_ROOT, ".codex", "agents")
+SOURCE_CODEX_HOOKS = os.path.join(SOURCE_PAYLOAD, "hooks")
+SOURCE_CODEX_HOOK_CONFIG = os.path.join(
+    TEMPLATE_ROOT, ".codex", "hooks.json"
+)
 SOURCE_CODEX_SECTION = os.path.join(
     TEMPLATE_ROOT, "AGENTS.agent-guild.md"
 )
 SOURCE_SKILLS = os.path.join(PACKAGE_ROOT, "skills")
+CODEX_HOOK_SIGNATURE = "codex-hook-adapter.py"
 
 CLAUDE_SECTION = (
     f"{CLAUDE_SECTION_START}\n"
@@ -232,6 +238,96 @@ def _copy_owned(source_root, target_root, relative_files):
     return updated, unchanged
 
 
+def _json_object(text, path):
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise InstallError(f"cannot parse {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise InstallError(f"{path} must contain a JSON object")
+    return value
+
+
+def _validate_hook_groups(config, path, allow_missing=False):
+    hooks = config.get("hooks")
+    if hooks is None and allow_missing and "hooks" not in config:
+        hooks = {}
+        config["hooks"] = hooks
+    if not isinstance(hooks, dict):
+        raise InstallError(f"{path} must contain an object at hooks")
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            raise InstallError(
+                f"{path} hooks.{event} must contain a list"
+            )
+        for index, group in enumerate(groups):
+            if not isinstance(group, dict):
+                raise InstallError(
+                    f"{path} hooks.{event}[{index}] must be an object"
+                )
+            handlers = group.get("hooks")
+            if not isinstance(handlers, list):
+                raise InstallError(
+                    f"{path} hooks.{event}[{index}].hooks must be a list"
+                )
+            if not all(isinstance(handler, dict) for handler in handlers):
+                raise InstallError(
+                    f"{path} hooks.{event}[{index}].hooks must contain "
+                    "objects"
+                )
+    return hooks
+
+
+def _is_guild_hook(handler):
+    command = handler.get("command")
+    return (
+        handler.get("type") == "command"
+        and isinstance(command, str)
+        and CODEX_HOOK_SIGNATURE in command
+    )
+
+
+def _codex_hooks_update(existing, existing_path):
+    """Replace only Agent Guild handlers, preserving every unrelated entry."""
+    source = _json_object(
+        _read(SOURCE_CODEX_HOOK_CONFIG), SOURCE_CODEX_HOOK_CONFIG
+    )
+    source_hooks = _validate_hook_groups(
+        source, SOURCE_CODEX_HOOK_CONFIG
+    )
+    if existing:
+        merged = _json_object(existing, existing_path)
+        existing_hooks = _validate_hook_groups(
+            merged, existing_path, allow_missing=True
+        )
+    else:
+        merged = {"hooks": {}}
+        existing_hooks = merged["hooks"]
+
+    for event, groups in list(existing_hooks.items()):
+        retained_groups = []
+        for group in groups:
+            had_managed_handler = any(
+                _is_guild_hook(handler) for handler in group["hooks"]
+            )
+            retained_handlers = [
+                handler
+                for handler in group["hooks"]
+                if not _is_guild_hook(handler)
+            ]
+            if not had_managed_handler:
+                retained_groups.append(group)
+            elif retained_handlers:
+                retained = dict(group)
+                retained["hooks"] = retained_handlers
+                retained_groups.append(retained)
+        existing_hooks[event] = retained_groups
+
+    for event, groups in source_hooks.items():
+        existing_hooks.setdefault(event, []).extend(groups)
+    return json.dumps(merged, indent=2) + "\n"
+
+
 def install(host, project_root, project_skills=False):
     if host not in {"claude", "codex"}:
         raise InstallError(f"unsupported host: {host}")
@@ -247,6 +343,19 @@ def install(host, project_root, project_skills=False):
     payload_files = _validate_source_tree(
         SOURCE_PAYLOAD, "project payload"
     )
+    codex_hook_files = []
+    hook_prefix = "hooks" + os.sep
+    if host == "codex":
+        codex_hook_files = [
+            relative[len(hook_prefix):]
+            for relative in payload_files
+            if relative.startswith(hook_prefix)
+        ]
+        payload_files = [
+            relative
+            for relative in payload_files
+            if not relative.startswith(hook_prefix)
+        ]
     agent_files = []
     skill_files = []
     if host == "codex":
@@ -264,6 +373,10 @@ def install(host, project_root, project_skills=False):
                     "audition", "results", "results.jsonl"
                 )
             ]
+            if not codex_hook_files:
+                raise InstallError(
+                    f"packaged Codex hooks are empty: {SOURCE_CODEX_HOOKS}"
+                )
 
     guidance_name = "CLAUDE.md" if host == "claude" else "AGENTS.md"
     guidance_path = os.path.join(project_root, guidance_name)
@@ -304,6 +417,21 @@ def install(host, project_root, project_skills=False):
     )
     updated_gitignore = _gitignore_update(existing_gitignore)
 
+    codex_hooks_path = os.path.join(
+        project_root, ".codex", "hooks.json"
+    )
+    existing_codex_hooks = updated_codex_hooks = ""
+    if host == "codex" and project_skills:
+        _require_beneath(project_root, codex_hooks_path)
+        existing_codex_hooks = (
+            _read(codex_hooks_path)
+            if os.path.exists(codex_hooks_path)
+            else ""
+        )
+        updated_codex_hooks = _codex_hooks_update(
+            existing_codex_hooks, codex_hooks_path
+        )
+
     double_registration = False
     if host == "claude":
         claude_settings = os.path.join(
@@ -338,6 +466,13 @@ def install(host, project_root, project_skills=False):
             _require_beneath(
                 target_skills, os.path.join(target_skills, relative)
             )
+    target_hooks = os.path.join(target_payload, "hooks")
+    if host == "codex" and project_skills:
+        _require_beneath(project_root, target_hooks)
+        for relative in codex_hook_files:
+            _require_beneath(
+                target_hooks, os.path.join(target_hooks, relative)
+            )
 
     state_root = os.path.join(target_payload, "state")
     for name in STATE_DIRS:
@@ -359,6 +494,11 @@ def install(host, project_root, project_skills=False):
         skills_updated, skills_unchanged = _copy_owned(
             SOURCE_SKILLS, target_skills, skill_files
         )
+    hooks_updated = hooks_unchanged = 0
+    if host == "codex" and project_skills:
+        hooks_updated, hooks_unchanged = _copy_owned(
+            SOURCE_CODEX_HOOKS, target_hooks, codex_hook_files
+        )
 
     for name in STATE_DIRS:
         keep = os.path.join(state_root, name, ".gitkeep")
@@ -371,6 +511,13 @@ def install(host, project_root, project_skills=False):
     gitignore_changed = updated_gitignore != existing_gitignore
     if gitignore_changed:
         _atomic_write(gitignore_path, updated_gitignore)
+    codex_hooks_changed = (
+        host == "codex"
+        and project_skills
+        and updated_codex_hooks != existing_codex_hooks
+    )
+    if codex_hooks_changed:
+        _atomic_write(codex_hooks_path, updated_codex_hooks)
 
     if double_registration:
         print(
@@ -384,10 +531,17 @@ def install(host, project_root, project_skills=False):
         f"(host={host}; payload={payload_copied} updated/"
         f"{payload_unchanged} unchanged; agents={agents_updated} updated/"
         f"{agents_unchanged} unchanged; skills={skills_updated} updated/"
-        f"{skills_unchanged} unchanged; "
+        f"{skills_unchanged} unchanged; hooks={hooks_updated} updated/"
+        f"{hooks_unchanged} unchanged; "
         f"{guidance_name}={'updated' if guidance_changed else 'unchanged'}; "
         f".gitignore={'updated' if gitignore_changed else 'unchanged'})"
     )
+    if host == "codex":
+        print(
+            "NEXT: Codex hooks are not automatically trusted. Open `/hooks`, "
+            "review the exact Agent Guild definitions, and trust them "
+            "explicitly before relying on the gates."
+        )
 
 
 def main(argv):

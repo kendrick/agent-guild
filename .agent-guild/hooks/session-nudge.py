@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""SessionStart(startup): nudge a half-installed project toward /agent-guild:init.
+"""SessionStart(startup): nudge a half-installed project toward Guild init.
 
 Installing the plugin only gets a project the user-scope half of the kit. The
-per-project half—the CLAUDE.md import line, the state directories, the
+per-project half—the host instructions, state directories, and
 constitution/spec workflow—has to be run once per repo. A project that never
 ran it just silently doesn't have working gates; nothing else would tell the
 user. This hook is that one nudge: on session start, print a single line
-pointing at /agent-guild:init when the project looks like it meant to use the
-guild but didn't finish setting it up.
+pointing at the host's init skill when the project looks like it meant to use
+the guild but didn't finish setting it up.
 
 Zero-evidence silence beats discoverability: with no .agent-guild/ directory
 at all, we say nothing, even though a one-line "hey, agent-guild is available"
@@ -42,7 +42,10 @@ IMPORT_LINE = "@.agent-guild/CLAUDE.md"
 # gates at all, dispatch-guard.py is among them (it's the PreToolUse entry
 # every dispatch goes through), so grepping for it alone is enough without
 # enumerating every sibling gate script.
-GUILD_GATE_SIGNATURE = "dispatch-guard.py"
+GUILD_GATE_SIGNATURE = {
+    "claude": "dispatch-guard.py",
+    "codex": "codex-hook-adapter.py",
+}
 
 DOUBLE_REGISTRATION_WARNING = (
     "agent-guild: this project's gates are registered twice (this plugin's "
@@ -55,6 +58,15 @@ DOUBLE_REGISTRATION_WARNING = (
     "plugin disable agent-guild@agent-guild --scope local` if you've "
     "verified that's safe in your setup)—never --scope project, which "
     "writes the tracked settings.json."
+)
+
+CODEX_DOUBLE_REGISTRATION_WARNING = (
+    "agent-guild: this project's gates are registered twice (this plugin's "
+    "hooks/hooks.json AND .codex/hooks.json)—every gate fires twice. Fix it "
+    "by removing only the Agent Guild hook groups from .codex/hooks.json "
+    "(migrating IDE bootstrap to plugin), or disable the plugin for this "
+    "project. Review the exact active definitions in `/hooks`; do not trust "
+    "or remove unrelated project hooks."
 )
 
 
@@ -78,32 +90,38 @@ def _running_from_plugin_root(here, root):
         return True
 
 
-def _copy_in_gate_registered(settings_path):
-    """True if the project's .claude/settings.json wires the guild's gates
-    itself—the copy-in half of the footgun. A missing or malformed file is
-    silently fine: this is a nudge, not a gate, and it must never crash on a
-    project's arbitrary settings file."""
+def _copy_in_gate_registered(settings_path, host="claude"):
+    """True if a project hook config wires the Guild gates itself.
+
+    A missing or malformed file is silently fine: this is a nudge, not a gate,
+    and it must never crash on a project's arbitrary settings file.
+    """
     try:
         with open(settings_path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return False
-    return GUILD_GATE_SIGNATURE in json.dumps(data.get("hooks", {}))
+    return GUILD_GATE_SIGNATURE[host] in json.dumps(data.get("hooks", {}))
 
 
-def _missing_pieces(root):
+def _missing_pieces(root, host="claude"):
     """Repo-relative names of whatever's missing for a finished per-project
     install, in a stable order so the message is deterministic."""
     missing = [f"state/{sub}" for sub in STATE_SUBDIRS
                if not os.path.isdir(_lib.state_path(sub))]
 
-    claude_md = os.path.join(root, "CLAUDE.md")
-    if not os.path.isfile(claude_md):
-        missing.append("CLAUDE.md")
+    guidance_name = "CLAUDE.md" if host == "claude" else "AGENTS.md"
+    guidance_path = os.path.join(root, guidance_name)
+    if not os.path.isfile(guidance_path):
+        missing.append(guidance_name)
     else:
-        with open(claude_md, encoding="utf-8") as f:
-            if IMPORT_LINE not in f.read():
+        with open(guidance_path, encoding="utf-8") as f:
+            guidance = f.read()
+        if host == "claude":
+            if IMPORT_LINE not in guidance:
                 missing.append(f"CLAUDE.md {IMPORT_LINE} import line")
+        elif "<!-- agent-guild:codex:start -->" not in guidance:
+            missing.append("AGENTS.md Agent Guild section")
     return missing
 
 
@@ -117,10 +135,21 @@ def main(data):
     # check below: it reads evidence from the PROJECT's own settings.json,
     # not this instance's .agent-guild/ completeness, and only the
     # plugin-rooted instance ever needs to run it (see the module docstring).
+    host = data.get("hook_host", "claude")
+    if host not in {"claude", "codex"}:
+        raise ValueError(f"unsupported hook host: {host!r}")
     if _running_from_plugin_root(os.path.abspath(__file__), root):
-        settings_path = os.path.join(root, ".claude", "settings.json")
-        if _copy_in_gate_registered(settings_path):
-            print(DOUBLE_REGISTRATION_WARNING)
+        settings_path = (
+            os.path.join(root, ".claude", "settings.json")
+            if host == "claude"
+            else os.path.join(root, ".codex", "hooks.json")
+        )
+        if _copy_in_gate_registered(settings_path, host):
+            print(
+                DOUBLE_REGISTRATION_WARNING
+                if host == "claude"
+                else CODEX_DOUBLE_REGISTRATION_WARNING
+            )
             return 0
 
     # No .agent-guild/ at all: the project has shown no intent to use the
@@ -128,13 +157,18 @@ def main(data):
     if not os.path.isdir(os.path.join(root, ".agent-guild")):
         return 0
 
-    missing = _missing_pieces(root)
+    missing = _missing_pieces(root, host)
     if not missing:
         return 0
 
+    if host == "claude":
+        init_invocation = "/agent-guild:init"
+    else:
+        prefix = data.get("agent_guild_skill_prefix", "")
+        init_invocation = f"${prefix}init"
     print(
         "agent-guild: this project looks partially initialized (missing "
-        f"{', '.join(missing)}) — run /agent-guild:init to finish the install."
+        f"{', '.join(missing)})—run {init_invocation} to finish the install."
     )
     return 0
 

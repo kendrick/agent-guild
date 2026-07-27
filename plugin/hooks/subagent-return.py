@@ -32,13 +32,13 @@ subagent keeps working.
   reproducible from the one that matters would make this gate brittle for no
   safety gain.
 
-Identifying which task finished means reading the subagent's transcript for its
-Task-ID/Audit-ID. That parsing depends on Claude Code's transcript format, which
-is not a stable contract. When identification fails we do NOT block: blocking a
-subagent over something it can't fix only hangs it (this gate has no stall backstop
-the way stop-gate does), so an id failure fails loud and lets the subagent finish,
-leaving the task open for the main-session stop-gate to catch. This is the kit's
-most version-fragile point; the fixture tests pin the expected shape.
+Identifying which task finished means reading the host transcript for its
+Task-ID/Audit-ID. Claude Code and Codex both treat transcript representation as
+unstable. When identification fails we do NOT block: blocking a subagent over
+something it can't fix only hangs it (this gate has no stall backstop the way
+stop-gate does), so an id failure fails loud and lets the subagent finish,
+leaving the task open for the main-session stop-gate to catch. This is the
+kit's most version-fragile point; the fixture tests pin both host shapes.
 """
 import json
 import os
@@ -148,7 +148,7 @@ def _unidentifiable(reason):
     msg = (
         "subagent-return could not identify this subagent's task: " + reason
         + ". Letting it finish instead of hanging; the stop-gate will catch the "
-        "still-open task on the main side. If this recurs, Claude Code's transcript "
+        "still-open task on the main side. If this recurs, the host transcript "
         "shape probably changed—see id_from_transcript and its fixtures."
     )
     try:

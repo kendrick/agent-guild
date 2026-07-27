@@ -17,13 +17,13 @@ subagent keeps working.
   Markdown verdict shape (audit verdicts are out of scope for the JSON
   migration; see the constitution's non-goals), so its check is unchanged.
 
-  checker-courier, the cross-vendor second-opinion lane, writes its verdict
-  at the SAME stem plus a lane suffix (…-codex.json)—comparison data, never
-  the verdict of record—and validates through the same validate-verdict.py
-  call at that path. It has one other legal way to finish: the documented
-  quota bailout (ledger line with quota_event: true, then the lane's
-  exhaustion sentinel, no verdict written), which this gate accepts in place
-  of a verdict file.
+  checker-courier, the cross-vendor second-opinion role, uses the SAME stem
+  plus its host lane suffix (…-codex.json from Claude; …-claude.json from
+  Codex)—comparison data, never the verdict of record. A writable Claude
+  courier validates at that file path; a read-only Codex courier returns the
+  marked claude-courier.py outcome for validation before parent persistence.
+  Quota uses the same ledger-first, lane-sentinel-second, no-verdict contract;
+  Codex returns that outcome before the parent performs those writes.
 
   We deliberately do NOT require the rendered `.md` sibling to exist here.
   The JSON is the record of record; the renderer is the checker's documented
@@ -45,9 +45,14 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
+
+
+CODEX_COURIER_OUTCOME_MARKER = "AGENT_GUILD_COURIER_OUTCOME\n"
+CLAUDE_COURIER_MODEL = "claude-haiku-4-5-20251001"
 
 
 def _has_diagnosis(verdict_text):
@@ -125,6 +130,160 @@ def _quota_return_ok(task_id, lane):
             if rec.get("task_id") == task_id:
                 last_for_task = rec
     return bool(last_for_task) and last_for_task.get("quota_event") is True
+
+
+def _codex_courier_outcome_ok(message, task_id):
+    """Validate a read-only Codex courier return before parent persistence.
+
+    A Codex project agent cannot write its own verdict, ledger, or exhaustion
+    sentinel. It returns the deterministic claude-courier.py outcome instead;
+    this gate validates that handoff, then the parent persists it in the
+    documented order. Claude-hosted couriers keep the original file-backed
+    return contract below.
+    """
+    if not isinstance(message, str) or not message.startswith(
+        CODEX_COURIER_OUTCOME_MARKER
+    ):
+        return (
+            False,
+            "last message must be the AGENT_GUILD_COURIER_OUTCOME marker "
+            "followed by the runner's JSON object",
+        )
+    raw = message[len(CODEX_COURIER_OUTCOME_MARKER):].strip()
+    try:
+        outcome = json.loads(raw)
+    except json.JSONDecodeError as error:
+        return False, f"outcome JSON is malformed: {error}"
+    if not isinstance(outcome, dict):
+        return False, "outcome JSON is not an object"
+
+    required = {
+        "status",
+        "verdict",
+        "ledger",
+        "attempts",
+        "diagnostic",
+    }
+    if set(outcome) != required:
+        return (
+            False,
+            "outcome fields must be exactly "
+            f"{sorted(required)!r}, got {sorted(outcome)!r}",
+        )
+    status = outcome.get("status")
+    if status not in {"verdict", "quota"}:
+        return False, f"status is {status!r}, not 'verdict' or 'quota'"
+    attempts = outcome.get("attempts")
+    if type(attempts) is not int or attempts not in {1, 2}:
+        return False, f"attempts is {attempts!r}, not 1 or 2"
+    diagnostic = outcome.get("diagnostic")
+    if diagnostic is not None and not isinstance(diagnostic, str):
+        return False, "diagnostic is neither a string nor null"
+
+    ledger = outcome.get("ledger")
+    if not isinstance(ledger, dict):
+        return False, "ledger is not an object"
+    ledger_fields = {
+        "task_id",
+        "vendor",
+        "model",
+        "started_at",
+        "duration_ms",
+        "exit_code",
+        "tokens_in",
+        "tokens_out",
+        "cost_usd",
+        "quota_event",
+    }
+    if set(ledger) != ledger_fields:
+        return (
+            False,
+            "ledger fields must be exactly "
+            f"{sorted(ledger_fields)!r}, got {sorted(ledger)!r}",
+        )
+    expected_ledger = {
+        "task_id": task_id,
+        "vendor": "claude",
+        "model": CLAUDE_COURIER_MODEL,
+    }
+    for key, expected in expected_ledger.items():
+        if ledger.get(key) != expected:
+            return (
+                False,
+                f"ledger.{key} is {ledger.get(key)!r}, expected "
+                f"{expected!r}",
+            )
+    if not isinstance(ledger.get("started_at"), str) or not ledger[
+        "started_at"
+    ].strip():
+        return False, "ledger.started_at is not a non-empty string"
+    for key in ("duration_ms", "exit_code"):
+        value = ledger.get(key)
+        if type(value) is not int:
+            return False, f"ledger.{key} is not an integer"
+    if ledger["duration_ms"] < 0:
+        return False, "ledger.duration_ms is negative"
+    for key in ("tokens_in", "tokens_out"):
+        value = ledger.get(key)
+        if value is not None and (
+            type(value) is not int or value < 0
+        ):
+            return (
+                False,
+                f"ledger.{key} is neither a non-negative integer nor null",
+            )
+    cost = ledger.get("cost_usd")
+    if cost is not None and (
+        isinstance(cost, bool)
+        or not isinstance(cost, (int, float))
+        or cost < 0
+    ):
+        return (
+            False,
+            "ledger.cost_usd is neither a non-negative number nor null",
+        )
+    quota_event = ledger.get("quota_event")
+    if type(quota_event) is not bool:
+        return False, "ledger.quota_event is not boolean"
+
+    verdict = outcome.get("verdict")
+    if status == "quota":
+        if verdict is not None:
+            return False, "quota outcome must carry verdict: null"
+        if quota_event is not True:
+            return False, "quota outcome must carry ledger.quota_event: true"
+        return True, None
+
+    if quota_event is not False:
+        return False, "verdict outcome must carry ledger.quota_event: false"
+    if not isinstance(verdict, dict):
+        return False, "verdict outcome does not carry an object verdict"
+    expected_verdict = {
+        "task_id": task_id,
+        "checker": "checker-courier",
+        "vendor": "anthropic",
+        "model": CLAUDE_COURIER_MODEL,
+    }
+    for key, expected in expected_verdict.items():
+        if verdict.get(key) != expected:
+            return (
+                False,
+                f"verdict.{key} is {verdict.get(key)!r}, expected "
+                f"{expected!r}",
+            )
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".json"
+        ) as scratch:
+            json.dump(verdict, scratch)
+            scratch.flush()
+            ok, reason = _validate_verdict_json(scratch.name)
+    except OSError as error:
+        return False, f"could not stage verdict for validation: {error}"
+    if not ok:
+        return False, f"returned verdict does not validate ({reason})"
+    return True, None
 
 
 def _latest_audit_verdict(audit_id):
@@ -229,7 +388,20 @@ def main(data):
     if agent == "checker-courier":
         # A second-opinion return writes a LANE-suffixed stem, never the
         # verdict of record—same schema, different path, same validator.
-        lane = _lib.DEFAULT_MODEL["checker-courier"]
+        lane = _lib.courier_lane(data)
+        if data.get("hook_host") == "codex":
+            ok, reason = _codex_courier_outcome_ok(
+                data.get("last_assistant_message"), ident
+            )
+            if ok:
+                return 0
+            return _lib.block(
+                f"checker-courier for {ident} returned an invalid read-only "
+                f"Claude-lane outcome ({reason}). Run "
+                ".agent-guild/scripts/claude-courier.py and return its JSON "
+                f"under the {CODEX_COURIER_OUTCOME_MARKER.strip()} marker; "
+                "the parent will persist the validated verdict and ledger."
+            )
         rel = f".agent-guild/state/verdicts/{ident}-{tier}-r{retries}-{lane}.json"
         vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}-{lane}.json")
         if os.path.exists(vpath):

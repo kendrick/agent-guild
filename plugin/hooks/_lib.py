@@ -33,12 +33,10 @@ DEFAULT_MODEL = {
     "checker-deterministic": "haiku",
     "checker-judgment": "opus",
     "auditor": "opus",
-    # checker-courier's own brain is haiku (set in the agent file, same as
-    # every other checker); "codex" here is the LANE tier this entry exists
-    # for, not a Claude model—dispatch-guard needs an effective model per
-    # agent for its tier-match logic and the dispatch log, and there is no
-    # Claude model named codex, so courier dispatches carry no override at
-    # all. Read this value as dispatch-logging plumbing, never as a model.
+    # checker-courier's own brain is host-configured; "codex" here is the
+    # Claude host's default LANE, not a model. Codex adapters select the
+    # reciprocal "claude" lane through courier_lane(data). Dispatches carry
+    # no model override; read this value as lane/logging plumbing.
     "checker-courier": "codex",
 }
 GUILD_AGENTS = set(DEFAULT_MODEL)
@@ -114,6 +112,18 @@ def lane_exhausted(lane):
         return os.path.exists(state_path("exhausted", lane))
     except Exception:
         return False
+
+
+def courier_lane(data=None):
+    """Return the far-side lane for this host.
+
+    Claude-hosted jobs use the long-standing Codex lane. The Codex lifecycle
+    adapter stamps `hook_host: codex`, selecting the reciprocal Claude lane
+    without forking any gate policy or changing Claude's existing default.
+    """
+    if isinstance(data, dict) and data.get("hook_host") == "codex":
+        return "claude"
+    return DEFAULT_MODEL["checker-courier"]
 
 
 def read_input():

@@ -110,7 +110,7 @@ def main(data):
                 return _lib.block(
                     f"Dispatch to checker-courier for {tid} carries a model "
                     f"override ({override!r}). Drop the override—the courier "
-                    "runs its own default; there is no Claude model named codex."
+                    "runs its host-selected lane and pinned far-side model."
                 )
             if "workspace-write" in prompt or "danger-full-access" in prompt:
                 return _lib.block(
@@ -118,7 +118,8 @@ def main(data):
                     "workspace-write or danger-full-access. The lane is "
                     "read-only by contract; drop the request."
                 )
-            lane = _lib.DEFAULT_MODEL[agent]
+            lane = _lib.courier_lane(data)
+            effective_model = lane
             if _lib.lane_exhausted(lane):
                 in_family = str(task.get("checker", "")).strip() or "its checker of record"
                 return _lib.block(

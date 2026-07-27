@@ -12,8 +12,7 @@
       "description": "Read-only Guild courier for an independent second opinion. Dispatch with a Task-ID; its suffixed verdict never decides the task.",
       "model": "gpt-5.6-terra",
       "model_reasoning_effort": "low",
-      "sandbox_mode": "read-only",
-      "developer_instructions_suffix": "\n\n## Codex Lane Availability\n\nThe reciprocal Claude lane is not installed in this build. Fail closed: tell the parent orchestrator that the independent lane is unavailable, return no verdict, and never invoke `codex` as the far-side vendor. A Codex-hosted job calling Codex again is correlated self-review, not a second opinion."
+      "sandbox_mode": "read-only"
     },
     "checker-deterministic": {
       "description": "Read-only Guild checker that runs only the deterministic checks named by a task. Dispatch with a Task-ID.",
@@ -57,6 +56,9 @@
       "model_reasoning_effort": "medium",
       "sandbox_mode": "workspace-write"
     }
+  },
+  "agent_body_suffixes": {
+    "checker-courier": "\n\n## Codex Host: Claude Lane\n\nOn a Codex host, the lane is `claude`, the far-side provider is `anthropic`, and the pinned model is `claude-haiku-4-5-20251001`. A Codex-hosted job must never call Codex for its own second opinion.\n\nRemain project-read-only. You may use an absolute scratch path outside the project, but do not write state, verdict, ledger, sentinel, artifact, or task files. Never execute a task's project-provided check command or ask Claude to execute one. Read the task, named artifacts or diff, and already-collected local check output; run only the Guild-owned `compose-brief.py` and `claude-courier.py` helpers. Inline the `Task-ID`, complete brief, artifact contents or diff, and local evidence in the prompt. The far side receives no repository paths as substitutes for evidence and has no tools or remote-command surface.\n\nInvoke the fixed boundary with the complete prompt on stdin:\n\n```sh\npython3 .agent-guild/scripts/claude-courier.py --task-id <Task-ID> < <ABSOLUTE prompt scratch path>\n```\n\nThe runner pins the model and safe CLI flags, removes only the canonical schema's top-level `$schema` declaration for Claude, closes the child stdin, isolates its cwd, enforces a wall-clock bound, requires `structured_output`, independently validates the canonical verdict and identity, retries malformed output once, and classifies structured HTTP 429 before wording fallbacks.\n\nReturn exactly two parts and no surrounding prose: the line `AGENT_GUILD_COURIER_OUTCOME`, then the runner's JSON object unchanged. The Codex return gate validates that object before allowing the read-only handoff. The parent persists it as follows:\n\n- For `status: \"verdict\"`, write the supplied verdict unchanged to `.agent-guild/state/verdicts/<Task-ID>-<tier>-r<retries>-claude.json`, validate and render it with the Guild-owned helpers, then append the supplied metrics through `ledger-append.py` with lane vendor `claude`, the brief path, and the verified verdict path.\n- For `status: \"quota\"`, append the supplied ledger metrics first with `--quota-event` and no artifacts, then create `.agent-guild/state/exhausted/claude`. Write no verdict.\n\nMissing CLI access, authentication failures, timeouts, and twice-malformed output arrive as a validated `blocked` suffixed verdict plus ledger metrics. They never replace or alter the unsuffixed in-family verdict of record."
   },
   "skill_frontmatter_overrides": {
     "init": {

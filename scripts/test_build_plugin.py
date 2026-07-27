@@ -595,6 +595,16 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         leaked_codex_language == [],
         repr(leaked_codex_language),
     )
+    with open(codex_contract_path, encoding="utf-8") as f:
+        codex_contract = f.read()
+    check(
+        "the shared orchestrator contract maps the courier lane by host",
+        "Claude host → `codex`; Codex host → `claude`"
+        in codex_contract
+        and "-<lane>.json" in codex_contract
+        and "state/exhausted/<lane>" in codex_contract,
+        codex_contract[-2400:],
+    )
 
     interface = codex_manifest.get("interface")
     required_interface_fields = {
@@ -767,12 +777,73 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     courier_instructions = courier_config.get(
         "developer_instructions", ""
     )
+    with open(
+        os.path.join(core_dir, "roles", "checker-courier.md"),
+        encoding="utf-8",
+    ) as f:
+        core_courier = f.read()
+    with open(
+        os.path.join(dogfood_out, "agents", "checker-courier.md"),
+        encoding="utf-8",
+    ) as f:
+        claude_courier = f.read()
     check(
-        "the Codex courier fails closed until its reciprocal lane lands",
-        "never invoke `codex` as the far-side vendor" in courier_instructions
+        "courier protocol is shared while exact lane commands stay in adapters",
+        "codex exec" not in core_courier
+        and "claude-courier.py" not in core_courier
+        and "codex exec" in claude_courier
+        and "claude-courier.py" not in claude_courier
+        and "claude-courier.py" in courier_instructions
+        and "codex exec" not in courier_instructions,
+        (
+            f"core_codex={'codex exec' in core_courier} "
+            f"core_claude={'claude-courier.py' in core_courier} "
+            f"claude_codex={'codex exec' in claude_courier} "
+            f"codex_codex={'codex exec' in courier_instructions}"
+        ),
+    )
+    check(
+        "the Codex courier runs the fixed read-only Claude lane",
+        "python3 .agent-guild/scripts/claude-courier.py --task-id"
+        in courier_instructions
+        and "AGENT_GUILD_COURIER_OUTCOME" in courier_instructions
+        and "state/exhausted/claude" in courier_instructions
+        and "-claude.json" in courier_instructions
+        and "Never execute a task's project-provided check command"
+        in courier_instructions
         and "reciprocal Claude lane is not installed"
-        in courier_instructions,
-        courier_instructions[-600:],
+        not in courier_instructions,
+        courier_instructions[-1800:],
+    )
+    check(
+        "the Codex project payload ships the deterministic Claude boundary",
+        os.path.isfile(
+            os.path.join(
+                codex_out,
+                "project-template",
+                ".agent-guild",
+                "scripts",
+                "claude-courier.py",
+            )
+        ),
+        codex_out,
+    )
+    codex_guidance_path = os.path.join(
+        codex_out,
+        "project-template",
+        "AGENTS.agent-guild.md",
+    )
+    with open(codex_guidance_path, encoding="utf-8") as f:
+        codex_guidance = f.read()
+    check(
+        "the Codex parent persists read-only courier outcomes in safe order",
+        "AGENT_GUILD_COURIER_OUTCOME" in codex_guidance
+        and "ledger-append.py" in codex_guidance
+        and "then create `.agent-guild/state/exhausted/claude`"
+        in codex_guidance
+        and "never replaces the unsuffixed in-family verdict"
+        in codex_guidance,
+        codex_guidance[-1200:],
     )
 
     claude_installer = os.path.join(

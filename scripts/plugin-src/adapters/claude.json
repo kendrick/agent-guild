@@ -6,6 +6,12 @@
       "model: opus",
       "tools: Read, Bash, Write, Grep, Glob"
     ],
+    "checker-courier": [
+      "name: checker-courier",
+      "description: GUILD CHECKER (courier) that relays a judgment check to an external vendor CLI over a lane (codex today), producing a SECOND-OPINION verdict at a lane-suffixed stem. Dispatch only via the guild lifecycle with a Task-ID.",
+      "model: haiku",
+      "tools: Read, Bash, Write"
+    ],
     "checker-deterministic": [
       "name: checker-deterministic",
       "description: GUILD CHECKER (haiku tier) that runs a task's named check scripts and transcribes the results into a verdict, exercising zero judgment. For clauses whose check is a deterministic script. Dispatch only via the guild lifecycle with a Task-ID.",
@@ -17,6 +23,14 @@
       "description: GUILD CHECKER (opus tier) that verifies taste and correctness clauses by re-deriving every claim from the artifacts, ignoring the worker's self-report. For clauses whose check is a judgment rubric. Dispatch only via the guild lifecycle with a Task-ID.",
       "model: opus",
       "tools: Read, Bash, Write, Grep, Glob"
+    ],
+    "hydrator": [
+      "name: hydrator",
+      "description: >",
+      "  Runs the five-phase working-memory hydration pipeline — discover, extract, draft,",
+      "  reconcile, propose — to surface candidate working-memory content from a project's",
+      "  existing source artifacts for human review. Use when populating working memory",
+      "  beyond the installer's pre-population (deeper one-time hydration)."
     ],
     "worker-bulk": [
       "name: worker-bulk",
@@ -32,6 +46,13 @@
       "name: worker-standard",
       "description: GUILD WORKER (sonnet tier) for clear-spec implementation—code, config, and structured content where the spec is explicit and the work is judged on correctness. Dispatch only via the guild lifecycle with a Task-ID.",
       "model: sonnet"
+    ],
+    "working-memory-synchronizer": [
+      "name: working-memory-synchronizer",
+      "description: >",
+      "  Synchronizes working memory with project state. Invoke after completing a feature,",
+      "  making an architectural decision, or when activeContext.md feels stale.",
+      "  Can also be triggered with /update-working-memory."
     ]
   },
   "skills": {

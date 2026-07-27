@@ -44,6 +44,9 @@ CLAUDE_ADAPTER_PATH = os.path.join(
 CODEX_ADAPTER_PATH = os.path.join(
     ROOT, "scripts", "plugin-src", "adapters", "codex.json"
 )
+CODEX_INSTALLER_PATH = os.path.join(
+    ROOT, "scripts", "plugin-src", "install-codex.py"
+)
 PLUGIN_SRC_README = os.path.join(ROOT, "docs", "plugin-readme.md")
 CHANGELOG_PATH = os.path.join(ROOT, "CHANGELOG.md")
 DEFAULT_OUT = os.path.join(ROOT, "plugin")
@@ -51,6 +54,18 @@ DEFAULT_CODEX_OUT = os.path.join(ROOT, "dist", "codex-plugin")
 CODEX_LOCK_PATH = os.path.join(ROOT, "scripts", "plugin-src", "codex.sha256")
 
 GUILD_AGENTS = [
+    "auditor",
+    "checker-courier",
+    "checker-deterministic",
+    "checker-judgment",
+    "hydrator",
+    "worker-bulk",
+    "worker-craft",
+    "worker-standard",
+    "working-memory-synchronizer",
+]
+
+CLAUDE_PLUGIN_AGENTS = [
     "auditor",
     "checker-deterministic",
     "checker-judgment",
@@ -152,12 +167,12 @@ def _adapter_frontmatter(kind, name, target):
     return lines
 
 
-def copy_agents(out_dir, core_dir=CORE_DIR):
+def copy_agents(out_dir, core_dir=CORE_DIR, names=GUILD_AGENTS):
     """Render Claude agent wrappers around host-neutral role behavior."""
     src_dir = os.path.join(core_dir, "roles")
     dst_dir = os.path.join(out_dir, "agents")
     os.makedirs(dst_dir, exist_ok=True)
-    for name in GUILD_AGENTS:
+    for name in names:
         src = os.path.join(src_dir, f"{name}.md")
         if not os.path.isfile(src):
             raise BuildError(f"missing shared role source: {src}")
@@ -214,11 +229,117 @@ def copy_skills(
     return shipped
 
 
-def copy_codex_role_sources(out_dir, core_dir=CORE_DIR):
-    """Stage neutral role prompts for the later Codex TOML adapter."""
+_CODEX_READ_ONLY_PROTOCOL = """
+
+## Codex Host Boundary
+
+This project-scoped agent runs in a read-only sandbox. Do not write or edit any project, artifact, task, state, ledger, or verdict file—even where the shared role protocol above tells a Claude-hosted agent to write one. Return the intended output path and complete proposed file content to the parent orchestrator instead. The parent owns persistence after independently checking the return. When a shared verdict contract names the Claude host identity, report `vendor: openai` and your configured Codex model instead. This host boundary takes precedence over every write instruction above.
+"""
+
+
+def generate_codex_agents(out_dir, core_dir=CORE_DIR):
+    """Render project-scoped Codex agent TOML from shared role prompts."""
+    codex_adapter = _load_json(CODEX_ADAPTER_PATH, "Codex adapter")
+    configured = codex_adapter.get("agents", {})
+    expected = set(GUILD_AGENTS)
+    if set(configured) != expected:
+        missing = sorted(expected - set(configured))
+        extra = sorted(set(configured) - expected)
+        raise BuildError(
+            "Codex agent adapter must match the shared roster exactly "
+            f"(missing={missing}, extra={extra})"
+        )
     src_dir = os.path.join(core_dir, "roles")
-    dst_dir = os.path.join(out_dir, "core", "roles")
-    shutil.copytree(src_dir, dst_dir, ignore=_IGNORE_BUILD_BYPRODUCTS)
+    dst_dir = os.path.join(out_dir, "project-template", ".codex", "agents")
+    os.makedirs(dst_dir, exist_ok=True)
+    keys = (
+        "name",
+        "description",
+        "model",
+        "model_reasoning_effort",
+        "sandbox_mode",
+        "developer_instructions",
+    )
+    for name in GUILD_AGENTS:
+        src = os.path.join(src_dir, f"{name}.md")
+        if not os.path.isfile(src):
+            raise BuildError(f"missing shared role source: {src}")
+        with open(src, encoding="utf-8") as f:
+            body = f.read()
+        metadata = configured[name]
+        instructions = body
+        if metadata.get("sandbox_mode") == "read-only":
+            instructions += _CODEX_READ_ONLY_PROTOCOL
+        instructions += metadata.get("developer_instructions_suffix", "")
+        values = {
+            "name": name,
+            **metadata,
+            "developer_instructions": instructions,
+        }
+        missing = [key for key in keys if key not in values]
+        if missing:
+            raise BuildError(
+                f"Codex agent adapter for {name} is missing {missing}"
+            )
+        with open(
+            os.path.join(dst_dir, f"{name}.toml"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            for key in keys:
+                value = json.dumps(values[key], ensure_ascii=False)
+                f.write(f"{key} = {value}\n")
+
+    section_path = os.path.join(
+        out_dir, "project-template", "AGENTS.agent-guild.md"
+    )
+    with open(section_path, "w", encoding="utf-8") as f:
+        f.write("<!-- agent-guild:codex:start -->\n")
+        f.write("## Agent Guild\n\n")
+        f.write(
+            "Before running an Agent Guild job, read "
+            "`.agent-guild/CLAUDE.md`; its lifecycle and state-file "
+            "contract is authoritative. Apply the Codex host mapping "
+            "below.\n\n"
+        )
+        f.write("### Project Agent Roster\n\n")
+        f.write("| Agent | Route | Sandbox |\n")
+        f.write("| --- | --- | --- |\n")
+        for name in GUILD_AGENTS:
+            metadata = configured[name]
+            f.write(
+                f"| `{name}` | {metadata['description']} | "
+                f"`{metadata['sandbox_mode']}` |\n"
+            )
+        f.write("\n### Codex Dispatch Boundary\n\n")
+        f.write(
+            "- The main session is the orchestrator. Delegate Guild work "
+            "to the exact project agent named by the routing table.\n"
+        )
+        f.write(
+            "- Worker and checker dispatches carry `Task-ID: T-NNN`; "
+            "auditor dispatches carry `Audit-ID: CON-audit` or "
+            "`Audit-ID: DEC-audit`.\n"
+        )
+        f.write(
+            "- Read-only agents return the intended state-file path and "
+            "complete content to the orchestrator. Never grant them write "
+            "access to bypass that boundary.\n"
+        )
+        f.write(
+            "- Agent Guild owns only this marked section of `AGENTS.md` "
+            "and its generated files under `.codex/agents/`.\n"
+        )
+        f.write("<!-- agent-guild:codex:end -->\n")
+
+    if not os.path.isfile(CODEX_INSTALLER_PATH):
+        raise BuildError(
+            f"missing Codex project initializer: {CODEX_INSTALLER_PATH}"
+        )
+    shutil.copy2(
+        CODEX_INSTALLER_PATH,
+        os.path.join(out_dir, "project-template", "install-codex.py"),
+    )
 
 
 def build_dogfood(out_dir, core_dir=CORE_DIR):
@@ -442,7 +563,6 @@ def build_codex(out_dir, core_dir=CORE_DIR):
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(os.path.join(out_dir, ".codex-plugin"))
-    copy_codex_role_sources(out_dir, core_dir)
     copy_skills(out_dir, core_dir, target="codex")
     manifest = _load_json(PLUGIN_SRC_MANIFEST, "release manifest")
     codex_adapter = _load_json(CODEX_ADAPTER_PATH, "Codex adapter")
@@ -450,7 +570,7 @@ def build_codex(out_dir, core_dir=CORE_DIR):
         {
             key: value
             for key, value in codex_adapter.items()
-            if key != "skill_frontmatter_overrides"
+            if key not in {"agents", "skill_frontmatter_overrides"}
         }
     )
     manifest["interface"]["developerName"] = manifest["author"]["name"]
@@ -462,6 +582,7 @@ def build_codex(out_dir, core_dir=CORE_DIR):
         json.dump(manifest, f, indent=2)
         f.write("\n")
     assemble_project_template(out_dir)
+    generate_codex_agents(out_dir, core_dir)
 
 
 def build_distributions(claude_out, codex_out, core_dir=CORE_DIR):
@@ -478,7 +599,7 @@ def build(out_dir, core_dir=CORE_DIR):
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(out_dir)
-    copy_agents(out_dir, core_dir)
+    copy_agents(out_dir, core_dir, names=CLAUDE_PLUGIN_AGENTS)
     shipped_skills = copy_skills(out_dir, core_dir)
     shipped_hooks = copy_hooks(out_dir)
     generate_hooks_json(out_dir, shipped_hooks)

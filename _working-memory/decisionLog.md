@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: Codex verifiers return content across a read-only host boundary
+
+**Source:** issue #50
+
+**Context:** The shared Guild checker and auditor roles describe writing their own state files, while Codex can enforce a stronger project-agent sandbox and the initializer must coexist with project and global user configuration.
+**Decision:** Generate the complete nine-agent project roster as standalone `.codex/agents/*.toml` from the shared role bodies plus Codex adapter metadata. Auditor and checker agents run `read-only`; their host instructions override shared write steps and require returning the intended path and complete proposed content to the parent orchestrator for persistence. The initializer updates only the generated project roster and one bounded `AGENTS.md` section, preserves unrelated content, never reads or writes global Codex configuration, rejects redirected `.codex` paths, and fails closed on malformed ownership markers.
+**Alternatives considered:** Granting checkers workspace write so shared prompts could remain literal (rejected—it weakens independent verification); forking Codex-specific role prose (rejected—it recreates the duplicate implementation surface); replacing all of `AGENTS.md` or `.codex/` (rejected—it would destroy project-owned configuration); installing into global `$CODEX_HOME` (rejected—Guild behavior is project-scoped).
+
 ## 2026-07-26: CI verifies and packages both hosts without committing output
 
 **Source:** maintainer request during PR #60

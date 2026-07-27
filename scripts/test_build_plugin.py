@@ -4,6 +4,7 @@
 Run: python3 scripts/test_build_plugin.py
 """
 import contextlib
+import filecmp
 import importlib.util
 import io
 import json
@@ -33,6 +34,21 @@ def check(label, condition, detail=""):
     else:
         failed += 1
         print(f"  FAIL {label}  {detail}")
+
+
+def read_flat_toml(path):
+    """Parse the builder's deliberately flat key = JSON-string TOML subset."""
+    parsed = {}
+    with open(path, encoding="utf-8") as f:
+        for number, line in enumerate(f, 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            key, separator, raw = stripped.partition(" = ")
+            if not separator:
+                raise ValueError(f"{path}:{number}: expected key = value")
+            parsed[key] = json.loads(raw)
+    return parsed
 
 
 print("dual-target build")
@@ -182,16 +198,22 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         build_plugin.build_distributions(
             claude_out, codex_out, core_dir=scratch_core
         )
-        rendered = []
-        for target, role_dir in (
-            (claude_out, "agents"),
-            (codex_out, os.path.join("core", "roles")),
-        ):
-            with open(
-                os.path.join(target, role_dir, "auditor.md"),
-                encoding="utf-8",
-            ) as f:
-                rendered.append(f.read())
+        with open(
+            os.path.join(claude_out, "agents", "auditor.md"),
+            encoding="utf-8",
+        ) as f:
+            claude_role = f.read()
+        codex_role = read_flat_toml(
+            os.path.join(
+                codex_out,
+                "project-template",
+                ".codex",
+                "agents",
+                "auditor.toml",
+            )
+        )["developer_instructions"]
+        rendered = [claude_role, codex_role]
+        for target in (claude_out, codex_out):
             with open(
                 os.path.join(target, "skills", "init", "SKILL.md"),
                 encoding="utf-8",
@@ -201,8 +223,8 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
             marker in text
             for marker, text in (
                 (role_marker.strip(), rendered[0]),
-                (skill_marker.strip(), rendered[1]),
-                (role_marker.strip(), rendered[2]),
+                (role_marker.strip(), rendered[1]),
+                (skill_marker.strip(), rendered[2]),
                 (skill_marker.strip(), rendered[3]),
             )
         )
@@ -557,33 +579,351 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         codex_init_frontmatter,
     )
 
-    expected_roles = (
-        "auditor",
-        "checker-deterministic",
-        "checker-judgment",
-        "worker-bulk",
-        "worker-craft",
-        "worker-standard",
+    expected_roles = {
+        "auditor": ("gpt-5.6-sol", "xhigh", "read-only"),
+        "checker-courier": ("gpt-5.6-terra", "low", "read-only"),
+        "checker-deterministic": (
+            "gpt-5.6-terra",
+            "low",
+            "read-only",
+        ),
+        "checker-judgment": ("gpt-5.6-sol", "high", "read-only"),
+        "hydrator": ("gpt-5.6-sol", "high", "workspace-write"),
+        "worker-bulk": ("gpt-5.6-terra", "low", "workspace-write"),
+        "worker-craft": ("gpt-5.6-sol", "high", "workspace-write"),
+        "worker-standard": (
+            "gpt-5.6-terra",
+            "medium",
+            "workspace-write",
+        ),
+        "working-memory-synchronizer": (
+            "gpt-5.6-terra",
+            "medium",
+            "workspace-write",
+        ),
+    }
+    agent_dir = os.path.join(
+        codex_out, "project-template", ".codex", "agents"
+    )
+    built_role_names = (
+        {
+            os.path.splitext(name)[0]
+            for name in os.listdir(agent_dir)
+            if name.endswith(".toml")
+        }
+        if os.path.isdir(agent_dir)
+        else set()
     )
     role_diffs = []
-    for name in expected_roles:
-        source = os.path.join(core_dir or "", "roles", f"{name}.md")
-        built = os.path.join(
-            codex_out, "core", "roles", f"{name}.md"
+    if built_role_names != set(expected_roles):
+        role_diffs.append(
+            f"roles={sorted(built_role_names)!r}, "
+            f"expected={sorted(expected_roles)!r}"
         )
-        if not os.path.isfile(built):
-            role_diffs.append(f"missing core/roles/{name}.md")
+    for name, expected_config in expected_roles.items():
+        source = os.path.join(core_dir or "", "roles", f"{name}.md")
+        built = os.path.join(agent_dir, f"{name}.toml")
+        if not os.path.isfile(source):
+            role_diffs.append(f"missing shared role source: {name}")
             continue
-        with open(source, "rb") as f:
-            source_bytes = f.read()
-        with open(built, "rb") as f:
-            built_bytes = f.read()
-        if source_bytes != built_bytes:
-            role_diffs.append(f"content differs: core/roles/{name}.md")
+        if not os.path.isfile(built):
+            role_diffs.append(f"missing .codex/agents/{name}.toml")
+            continue
+        with open(source, encoding="utf-8") as f:
+            source_body = f.read()
+        try:
+            config = read_flat_toml(built)
+        except (ValueError, json.JSONDecodeError) as error:
+            role_diffs.append(str(error))
+            continue
+        expected_model, expected_effort, expected_sandbox = expected_config
+        if config.get("name") != name:
+            role_diffs.append(
+                f"{name}: name={config.get('name')!r}"
+            )
+        if not config.get("description"):
+            role_diffs.append(f"{name}: empty description")
+        if config.get("model") != expected_model:
+            role_diffs.append(
+                f"{name}: model={config.get('model')!r}"
+            )
+        if config.get("model_reasoning_effort") != expected_effort:
+            role_diffs.append(
+                f"{name}: effort="
+                f"{config.get('model_reasoning_effort')!r}"
+            )
+        if config.get("sandbox_mode") != expected_sandbox:
+            role_diffs.append(
+                f"{name}: sandbox={config.get('sandbox_mode')!r}"
+            )
+        if source_body not in config.get("developer_instructions", ""):
+            role_diffs.append(
+                f"{name}: developer instructions do not derive from core"
+            )
+        if (
+            expected_sandbox == "read-only"
+            and "Return the intended output path and complete proposed "
+            "file content to the parent orchestrator"
+            not in config.get("developer_instructions", "")
+        ):
+            role_diffs.append(
+                f"{name}: missing Codex read-only return protocol"
+            )
+        if (
+            name in {"checker-deterministic", "checker-judgment"}
+            and "report `vendor: openai` and your configured Codex model"
+            not in config.get("developer_instructions", "")
+        ):
+            role_diffs.append(
+                f"{name}: missing Codex verdict identity override"
+            )
     check(
-        "Codex stages neutral role sources without Claude agent wrappers",
-        role_diffs == [],
+        "Codex generates the complete project roster from shared roles",
+        role_diffs == []
+        and not os.path.exists(os.path.join(codex_out, "core", "roles")),
         "; ".join(role_diffs),
+    )
+
+    courier_config = read_flat_toml(
+        os.path.join(agent_dir, "checker-courier.toml")
+    )
+    courier_instructions = courier_config.get(
+        "developer_instructions", ""
+    )
+    check(
+        "the Codex courier fails closed until its reciprocal lane lands",
+        "never invoke `codex` as the far-side vendor" in courier_instructions
+        and "reciprocal Claude lane is not installed"
+        in courier_instructions,
+        courier_instructions[-600:],
+    )
+
+    installer = os.path.join(
+        codex_out, "project-template", "install-codex.py"
+    )
+    project_root = os.path.join(tmp, "codex-project")
+    project_agents = os.path.join(project_root, ".codex", "agents")
+    os.makedirs(project_agents)
+    original_agents_md = (
+        "# Existing Project\n\n"
+        "## Local Rules\n\n"
+        "Keep this guidance exactly.\n"
+    )
+    with open(
+        os.path.join(project_root, "AGENTS.md"), "w", encoding="utf-8"
+    ) as f:
+        f.write(original_agents_md)
+    config_path = os.path.join(project_root, ".codex", "config.toml")
+    unrelated_agent = os.path.join(project_agents, "unrelated.toml")
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write('model = "user-choice"\n')
+    with open(unrelated_agent, "w", encoding="utf-8") as f:
+        f.write('name = "unrelated"\n')
+    fake_home = os.path.join(tmp, "home")
+    os.makedirs(fake_home)
+    home_marker = os.path.join(fake_home, "keep.txt")
+    with open(home_marker, "w", encoding="utf-8") as f:
+        f.write("untouched\n")
+    install_env = dict(os.environ)
+    install_env["HOME"] = fake_home
+    first_install = subprocess.run(
+        [sys.executable, installer, project_root],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    managed_diffs = []
+    for name in expected_roles:
+        source = os.path.join(agent_dir, f"{name}.toml")
+        installed = os.path.join(project_agents, f"{name}.toml")
+        if not os.path.isfile(installed):
+            managed_diffs.append(f"missing {name}.toml")
+        elif not filecmp.cmp(source, installed, shallow=False):
+            managed_diffs.append(f"content differs: {name}.toml")
+    with open(config_path, encoding="utf-8") as f:
+        installed_config = f.read()
+    with open(unrelated_agent, encoding="utf-8") as f:
+        installed_unrelated = f.read()
+    with open(home_marker, encoding="utf-8") as f:
+        installed_home_marker = f.read()
+    check(
+        "the Codex initializer installs only the project-local Guild roster",
+        first_install.returncode == 0
+        and managed_diffs == []
+        and installed_config == 'model = "user-choice"\n'
+        and installed_unrelated == 'name = "unrelated"\n'
+        and installed_home_marker == "untouched\n"
+        and not os.path.exists(os.path.join(fake_home, ".codex")),
+        (
+            f"rc={first_install.returncode} diffs={managed_diffs!r} "
+            f"config={installed_config!r} "
+            f"unrelated={installed_unrelated!r} "
+            f"home={sorted(os.listdir(fake_home))!r} "
+            f"stdout={first_install.stdout!r} "
+            f"stderr={first_install.stderr!r}"
+        ),
+    )
+
+    agents_path = os.path.join(project_root, "AGENTS.md")
+    section_start = "<!-- agent-guild:codex:start -->"
+    section_end = "<!-- agent-guild:codex:end -->"
+    if os.path.isfile(agents_path):
+        with open(agents_path, encoding="utf-8") as f:
+            first_agents_md = f.read()
+    else:
+        first_agents_md = ""
+    section = (
+        first_agents_md[
+            first_agents_md.find(section_start) :
+            first_agents_md.find(section_end) + len(section_end)
+        ]
+        if section_start in first_agents_md
+        and section_end in first_agents_md
+        else ""
+    )
+    before_second_digest = (
+        build_plugin.tree_digest(project_root)
+        if os.path.isdir(project_root)
+        else ""
+    )
+    second_install = subprocess.run(
+        [sys.executable, installer, project_root],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    after_second_digest = (
+        build_plugin.tree_digest(project_root)
+        if os.path.isdir(project_root)
+        else ""
+    )
+    check(
+        "the Codex initializer preserves AGENTS.md outside one idempotent section",
+        first_install.returncode == 0
+        and first_agents_md.startswith(original_agents_md)
+        and first_agents_md.count(section_start) == 1
+        and first_agents_md.count(section_end) == 1
+        and all(name in section for name in expected_roles)
+        and "read-only" in section
+        and "workspace-write" in section
+        and second_install.returncode == 0
+        and before_second_digest == after_second_digest,
+        (
+            f"first_rc={first_install.returncode} "
+            f"second_rc={second_install.returncode} "
+            f"section={section!r} "
+            f"before={before_second_digest!r} "
+            f"after={after_second_digest!r}"
+        ),
+    )
+
+    managed_agent = os.path.join(
+        project_agents, "worker-standard.toml"
+    )
+    with open(managed_agent, "w", encoding="utf-8") as f:
+        f.write("stale generated agent\n")
+    stale_agents_md = first_agents_md.replace(
+        section, f"{section_start}\nstale generated section\n{section_end}"
+    )
+    with open(agents_path, "w", encoding="utf-8") as f:
+        f.write(stale_agents_md)
+    update_install = subprocess.run(
+        [sys.executable, installer, project_root],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    with open(agents_path, encoding="utf-8") as f:
+        updated_agents_md = f.read()
+    with open(config_path, encoding="utf-8") as f:
+        updated_config = f.read()
+    with open(unrelated_agent, encoding="utf-8") as f:
+        updated_unrelated = f.read()
+    check(
+        "the Codex initializer refreshes only Agent Guild-owned content",
+        update_install.returncode == 0
+        and filecmp.cmp(
+            managed_agent,
+            os.path.join(agent_dir, "worker-standard.toml"),
+            shallow=False,
+        )
+        and updated_agents_md == first_agents_md
+        and updated_config == 'model = "user-choice"\n'
+        and updated_unrelated == 'name = "unrelated"\n',
+        (
+            f"rc={update_install.returncode} "
+            f"stdout={update_install.stdout!r} "
+            f"stderr={update_install.stderr!r}"
+        ),
+    )
+
+    malformed_project = os.path.join(tmp, "malformed-project")
+    os.makedirs(malformed_project)
+    malformed_agents_path = os.path.join(
+        malformed_project, "AGENTS.md"
+    )
+    malformed_text = (
+        "# User Guidance\n\n"
+        f"{section_start}\n"
+        "unterminated user-visible content\n"
+    )
+    with open(malformed_agents_path, "w", encoding="utf-8") as f:
+        f.write(malformed_text)
+    malformed_install = subprocess.run(
+        [sys.executable, installer, malformed_project],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    with open(malformed_agents_path, encoding="utf-8") as f:
+        after_malformed = f.read()
+    check(
+        "the Codex initializer fails closed on malformed ownership markers",
+        malformed_install.returncode != 0
+        and after_malformed == malformed_text
+        and not os.path.exists(
+            os.path.join(malformed_project, ".codex")
+        )
+        and "marker" in malformed_install.stderr.lower(),
+        (
+            f"rc={malformed_install.returncode} "
+            f"stdout={malformed_install.stdout!r} "
+            f"stderr={malformed_install.stderr!r}"
+        ),
+    )
+
+    redirected_project = os.path.join(tmp, "redirected-project")
+    redirected_codex = os.path.join(tmp, "outside-project")
+    os.makedirs(redirected_project)
+    os.makedirs(redirected_codex)
+    outside_marker = os.path.join(redirected_codex, "keep.txt")
+    with open(outside_marker, "w", encoding="utf-8") as f:
+        f.write("outside stays untouched\n")
+    os.symlink(
+        redirected_codex, os.path.join(redirected_project, ".codex")
+    )
+    redirected_install = subprocess.run(
+        [sys.executable, installer, redirected_project],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    with open(outside_marker, encoding="utf-8") as f:
+        after_redirected = f.read()
+    check(
+        "the Codex initializer rejects project paths redirected outside",
+        redirected_install.returncode != 0
+        and sorted(os.listdir(redirected_codex)) == ["keep.txt"]
+        and after_redirected == "outside stays untouched\n"
+        and not os.path.exists(
+            os.path.join(redirected_project, "AGENTS.md")
+        ),
+        (
+            f"rc={redirected_install.returncode} "
+            f"outside={sorted(os.listdir(redirected_codex))!r} "
+            f"stdout={redirected_install.stdout!r} "
+            f"stderr={redirected_install.stderr!r}"
+        ),
     )
 
     codex_manifest_path = os.path.join(

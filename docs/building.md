@@ -22,6 +22,20 @@ python3 scripts/build-plugin.py --target codex --out dist/codex-plugin
 
 The package is written to `dist/codex-plugin/`, with its manifest at `dist/codex-plugin/.codex-plugin/plugin.json`.
 
+Its `project-template/` contains the generated nine-agent Guild roster, one bounded `AGENTS.md` section, and the dependency-free project initializer. The roster TOML is rendered from the same `guild-core/roles/` bodies as Claude; model, reasoning, sandbox, and host-bound instruction metadata come from `scripts/plugin-src/adapters/codex.json`.
+
+## Bootstrap A Codex Project
+
+Build the Codex package, then point its initializer at the target project root:
+
+```sh
+python3 dist/codex-plugin/project-template/install-codex.py /path/to/project
+```
+
+The initializer creates or refreshes only Agent Guild-owned files under the target project's `.codex/agents/` directory and the section of its root `AGENTS.md` bounded by `<!-- agent-guild:codex:start -->` and `<!-- agent-guild:codex:end -->`. It preserves all text outside that section, `.codex/config.toml`, unrelated project agents, and every user/global Codex path. Re-running it is idempotent; malformed ownership markers or a `.codex` path redirected outside the project fail closed before any write.
+
+The generated read-only checker and auditor configurations keep their verification boundary by returning the intended state-file path and complete proposed content to the parent orchestrator. The parent persists that content; do not grant a checker write access to work around the handoff.
+
 ## Build Both
 
 ```sh
@@ -75,8 +89,9 @@ python3 scripts/build-plugin.py --check
 
 | Path | Role | Edit Directly? |
 | --- | --- | --- |
-| `guild-core/` | Shared role behavior, workflow bodies, and workflow assets | Yes |
+| `guild-core/` | Shared role behavior for the complete roster, workflow bodies, and workflow assets | Yes |
 | `scripts/plugin-src/adapters/` | Host-specific frontmatter and metadata | Yes |
+| `scripts/plugin-src/install-codex.py` | Project-local Codex initializer source | Yes |
 | `scripts/plugin-src/plugin.json` | Authored plugin identity and version | Yes—version bumps only during the release ritual |
 | `.agent-guild/` | Host-neutral runtime payload copied into both packages | Yes |
 | `.claude/agents/`, `.claude/skills/` | Generated Claude dogfood wrappers | No |

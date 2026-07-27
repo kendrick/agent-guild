@@ -1,6 +1,63 @@
 {
   "description": "Runs Codex as an org chart: an orchestrator plans and rules, worker subagents build, and independent checker agents verify the work.",
   "skills": "./skills/",
+  "agents": {
+    "auditor": {
+      "description": "Guild auditor for the constitution and task decomposition. Dispatch with an Audit-ID.",
+      "model": "gpt-5.6-sol",
+      "model_reasoning_effort": "xhigh",
+      "sandbox_mode": "read-only"
+    },
+    "checker-courier": {
+      "description": "Read-only Guild courier for an independent second opinion. Dispatch with a Task-ID; its suffixed verdict never decides the task.",
+      "model": "gpt-5.6-terra",
+      "model_reasoning_effort": "low",
+      "sandbox_mode": "read-only",
+      "developer_instructions_suffix": "\n\n## Codex Lane Availability\n\nThe reciprocal Claude lane is not installed in this build. Fail closed: tell the parent orchestrator that the independent lane is unavailable, return no verdict, and never invoke `codex` as the far-side vendor. A Codex-hosted job calling Codex again is correlated self-review, not a second opinion."
+    },
+    "checker-deterministic": {
+      "description": "Read-only Guild checker that runs only the deterministic checks named by a task. Dispatch with a Task-ID.",
+      "model": "gpt-5.6-terra",
+      "model_reasoning_effort": "low",
+      "sandbox_mode": "read-only"
+    },
+    "checker-judgment": {
+      "description": "Read-only Guild checker that independently evaluates judgment clauses against artifact evidence. Dispatch with a Task-ID.",
+      "model": "gpt-5.6-sol",
+      "model_reasoning_effort": "high",
+      "sandbox_mode": "read-only"
+    },
+    "hydrator": {
+      "description": "Guild specialist for the five-phase working-memory hydration pipeline.",
+      "model": "gpt-5.6-sol",
+      "model_reasoning_effort": "high",
+      "sandbox_mode": "workspace-write"
+    },
+    "worker-bulk": {
+      "description": "Guild worker for mechanical, zero-judgment execution. Dispatch with a Task-ID.",
+      "model": "gpt-5.6-terra",
+      "model_reasoning_effort": "low",
+      "sandbox_mode": "workspace-write"
+    },
+    "worker-craft": {
+      "description": "Guild worker for user-facing, taste-sensitive work. Dispatch with a Task-ID.",
+      "model": "gpt-5.6-sol",
+      "model_reasoning_effort": "high",
+      "sandbox_mode": "workspace-write"
+    },
+    "worker-standard": {
+      "description": "Guild worker for clear-spec implementation judged primarily on correctness. Dispatch with a Task-ID.",
+      "model": "gpt-5.6-terra",
+      "model_reasoning_effort": "medium",
+      "sandbox_mode": "workspace-write"
+    },
+    "working-memory-synchronizer": {
+      "description": "Guild specialist for synchronizing working memory after material project changes.",
+      "model": "gpt-5.6-terra",
+      "model_reasoning_effort": "medium",
+      "sandbox_mode": "workspace-write"
+    }
+  },
   "skill_frontmatter_overrides": {
     "init": {
       "disable-model-invocation": "false"

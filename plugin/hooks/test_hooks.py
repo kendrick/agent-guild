@@ -788,6 +788,8 @@ check("double-registration warning cites the verified stall-counter consequence"
       "STALLED after two real blocks" in out, out)
 check("double-registration warning names --scope local, not --scope project, as the resolution",
       "--scope local" in out and "never --scope project" in out, out)
+check("double-registration warning names the kendrick-qualified plugin id",
+      "agent-guild@kendrick" in out and "agent-guild@agent-guild" not in out, out)
 
 plugin_rooted_miss = tempfile.mkdtemp(prefix="ag-nudge-dblreg-miss-")
 write_settings_json(plugin_rooted_miss, UNRELATED_HOOKS)

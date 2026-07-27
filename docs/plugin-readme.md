@@ -10,7 +10,7 @@ From any Claude Code session:
 
 ```
 /plugin marketplace add kendrick/agent-guild
-/plugin install agent-guild
+/plugin install agent-guild@kendrick
 ```
 
 That lands the tooling: the six guild agents, the lifecycle skills, and the four hook gates. What it doesn't do is put the guild to work in a project. For that, run this once inside the project where you want to run jobs:

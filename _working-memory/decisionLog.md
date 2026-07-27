@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: One Generated Codex Package Is The Git Marketplace Surface
+
+**Source:** issue #53
+
+**Context:** Codex had a complete generated package, but it lived only in ignored `dist/` with a committed hash. A Git marketplace needs a real package path inside the repository, and hand-maintained marketplace or package copies would recreate the parallel implementation surface the shared core removed.
+**Decision:** Generate and commit the Codex package at `plugins/agent-guild/`, generate `.agents/plugins/marketplace.json` beside the existing Claude marketplace, and derive both marketplace views from `scripts/plugin-src/plugin.json` plus one `scripts/plugin-src/marketplace.json`. The default build syncs both package trees and marketplaces; `--check` rebuilds and diffs all four generated release views. Explicit `dist/` builds remain scratch/CI artifacts. The old Codex hash lock retires because the committed generated tree is now the stronger drift boundary.
+**Alternatives considered:** Keep only the hash and publish an attached archive (rejected—the Git marketplace cannot resolve ignored content); author the Codex package or marketplace by hand (rejected—it creates a second implementation and metadata drift); publish from a separate repository (rejected—it creates a parallel release process).
+
 ## 2026-07-26: Claude Marketplace Identity Is `agent-guild@kendrick`
 
 **Source:** issue #48; isolated Claude Code 2.1.212 marketplace experiment

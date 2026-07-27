@@ -1,0 +1,20 @@
+{
+  "name": "kendrick",
+  "interface": {
+    "displayName": "Kendrick"
+  },
+  "plugins": [
+    {
+      "name": "agent-guild",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agent-guild"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

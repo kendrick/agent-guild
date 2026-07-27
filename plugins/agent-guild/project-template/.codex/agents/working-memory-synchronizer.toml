@@ -1,0 +1,6 @@
+name = "working-memory-synchronizer"
+description = "Guild specialist for synchronizing working memory after material project changes."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+developer_instructions = "# Working Memory Synchronizer\n\nInvoke the `update-working-memory` skill through the host's skill mechanism. It contains the canonical process and file rules.\n\nThis agent is a thin wrapper so the workflow is reachable as a custom agent in hosts that surface one. The skill is the source of truth—do not duplicate process or rules here.\n"

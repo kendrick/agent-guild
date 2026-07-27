@@ -5,8 +5,8 @@ The design reference for the Job 2 epic. Job 1 (the `/job` intake skill, the pro
 ## Fixed Decisions
 
 - The plugin ships guild-only content: the lifecycle skills (constitution, decompose, retrospective, audition, job, init), the six guild agents, and the four hook gates plus a SessionStart nudge. Working-memory tooling stays out.
-- The published plugin lives in a committed `plugin/` directory at the repo root, generated from the in-repo sources by a build script with a deterministic drift check. The gitignored `dist/` staging area from the first packaging dogfood retires.
-- This repo is its own marketplace: `.claude-plugin/marketplace.json` at the repo root, named `kendrick`, with `plugins[].source` pointing at `./plugin`. Colleagues install with `/plugin marketplace add kendrick/agent-guild` and `/plugin install agent-guild@kendrick`.
+- The published host packages live in committed `plugin/` and `plugins/agent-guild/` directories, generated from the same in-repo sources by one build script with a deterministic drift check. Gitignored `dist/` is only for explicit scratch or CI builds.
+- This repo is its own `kendrick` marketplace on both hosts: `.claude-plugin/marketplace.json` points Claude at `./plugin`, while `.agents/plugins/marketplace.json` points Codex at `./plugins/agent-guild`. Both views are generated from the same release and marketplace metadata.
 - Plugin components are always invoked namespaced (`/agent-guild:constitution`). Repo-local copies keep bare names; the build script rewrites the known invocation tokens in plugin-bound content only.
 
 ## Verified Platform Facts
@@ -18,13 +18,13 @@ The design reference for the Job 2 epic. Job 1 (the `/job` intake skill, the pro
 
 ## The Pieces
 
-**Build script** (`scripts/build-plugin.py`, stdlib): copies the guild agents, skills, and hooks into `plugin/`; generates `plugin/hooks/hooks.json` from `.claude/settings.json` by rewriting hook paths to `"${CLAUDE_PLUGIN_ROOT}"/hooks/` and appending the nudge registration; assembles `plugin/project-template/` (contract, check scripts, task templates — the per-project payload init copies); applies the namespacing map. `--check` rebuilds into a temp dir, diffs against the committed `plugin/`, and runs `claude plugin validate --strict` with the plugin manifest isolated (with both manifests in one folder, the validator only reads the marketplace one).
+**Build script** (`scripts/build-plugin.py`, stdlib): renders the Claude and Codex packages from the shared core plus thin adapters; generates their hook files, project templates, manifests, and marketplace views; and applies host-specific invocation namespacing. `--check` rebuilds into a temporary directory, diffs both committed packages and marketplaces, and runs `claude plugin validate --strict` against the Claude package.
 
 **Init** (`/agent-guild:init`, explicit-only): idempotent project setup — copy the contract if missing, add the `@.agent-guild/CLAUDE.md` import line with a provenance comment, create the state directories, gitignore state, copy the scripts/templates payload skipping existing files. Never overwrites without asking.
 
 **Nudge** (`session-nudge.py`, `startup` matcher): speaks only on partial init — `.agent-guild/` exists but the state dirs or the import line are missing. Zero-evidence projects stay silent, because a user-scope install must never nag unrelated repos; fresh adopters find init through the READMEs.
 
-**Marketplace and docs**: root `marketplace.json` (with a description — the strict validator warns without one), `plugin.json` at 0.2.0 with `author` as an object (a string fails schema validation at install time; learned the hard way), root README leading with the marketplace install, a plugin README adapted from the dist-era one, a publishing checklist, a SMOKE plugin-install drill, and a documented footgun: enabling the plugin inside this repo double-registers the gates alongside `.claude/settings.json`.
+**Marketplace and docs**: generated Claude and Codex marketplace views, manifests with `author` as an object, one canonical build/install guide, a publishing checklist, host smoke drills, and a documented footgun: enabling a plugin alongside the same repo-local hooks double-registers the gates.
 
 ## Standing Lessons From The Dogfoods
 

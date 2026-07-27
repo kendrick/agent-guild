@@ -16,10 +16,11 @@ import tempfile
 
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(SCRIPTS_DIR)
 BUILD_PLUGIN_PATH = os.path.join(SCRIPTS_DIR, "build-plugin.py")
 VERSION_SOURCE = os.path.join(SCRIPTS_DIR, "plugin-src", "plugin.json")
 MARKETPLACE_PATH = os.path.join(
-    os.path.dirname(SCRIPTS_DIR), ".claude-plugin", "marketplace.json"
+    ROOT, ".claude-plugin", "marketplace.json"
 )
 
 spec = importlib.util.spec_from_file_location("build_plugin", BUILD_PLUGIN_PATH)
@@ -340,20 +341,28 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         detail,
     )
 
-    expected_codex_stage = os.path.join(
-        os.path.dirname(SCRIPTS_DIR), "dist", "codex-plugin"
-    )
-    committed_codex = os.path.join(
-        os.path.dirname(SCRIPTS_DIR), "codex-plugin"
+    expected_codex_publish = os.path.join(
+        ROOT, "plugins", "agent-guild"
     )
     check(
-        "Codex package content is release-stage output, not a committed mirror",
+        "the default Codex output is the repo marketplace package",
         getattr(build_plugin, "DEFAULT_CODEX_OUT", None)
-        == expected_codex_stage
-        and not os.path.exists(committed_codex),
+        == expected_codex_publish,
         (
             f"default={getattr(build_plugin, 'DEFAULT_CODEX_OUT', None)!r} "
-            f"committed_exists={os.path.exists(committed_codex)}"
+            f"expected={expected_codex_publish!r}"
+        ),
+    )
+    expected_codex_marketplace = os.path.join(
+        ROOT, ".agents", "plugins", "marketplace.json"
+    )
+    check(
+        "the default Codex marketplace is repo-scoped",
+        getattr(build_plugin, "CODEX_MARKETPLACE_PATH", None)
+        == expected_codex_marketplace,
+        (
+            f"default={getattr(build_plugin, 'CODEX_MARKETPLACE_PATH', None)!r} "
+            f"expected={expected_codex_marketplace!r}"
         ),
     )
 
@@ -385,45 +394,24 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         detail,
     )
 
+    original_manifest = build_plugin.PLUGIN_SRC_MANIFEST
+    scratch_manifest = os.path.join(tmp, "plugin.json")
     try:
-        lock_path = os.path.join(tmp, "codex.sha256")
-        with open(lock_path, "w", encoding="utf-8") as f:
-            f.write("0" * 64 + "\n")
-        lock_problem = build_plugin.codex_lock_problem(
-            lock_path=lock_path, core_dir=scratch_core
-        )
-        condition = (
-            lock_problem is not None
-            and "stale" in lock_problem
-            and lock_path in lock_problem
-        )
-        detail = repr(lock_problem)
-    except (AttributeError, FileNotFoundError, TypeError) as error:
-        condition = False
-        detail = repr(error)
-    check(
-        "the compact Codex release lock rejects stale generated content",
-        condition,
-        detail,
-    )
-
-    try:
-        lock_problem = build_plugin.codex_lock_problem()
-        condition = lock_problem is None
-        detail = repr(lock_problem)
-    except (AttributeError, FileNotFoundError, TypeError) as error:
-        condition = False
-        detail = repr(error)
-    check(
-        "the committed Codex lock matches a fresh release-stage build",
-        condition,
-        detail,
-    )
-
-    try:
-        build_plugin.build_distributions(claude_out, codex_out)
         with open(VERSION_SOURCE, encoding="utf-8") as f:
-            authored_version = json.load(f)["version"]
+            authored_manifest = json.load(f)
+        authored_manifest["name"] = "release-candidate"
+        authored_manifest["version"] = "0.5.1"
+        with open(scratch_manifest, "w", encoding="utf-8") as f:
+            json.dump(authored_manifest, f, indent=2)
+            f.write("\n")
+        build_plugin.PLUGIN_SRC_MANIFEST = scratch_manifest
+        build_plugin.build_distributions(claude_out, codex_out)
+        claude_marketplace = os.path.join(tmp, "claude-marketplace.json")
+        codex_marketplace = os.path.join(tmp, "codex-marketplace.json")
+        build_plugin.write_marketplaces(
+            claude_path=claude_marketplace,
+            codex_path=codex_marketplace,
+        )
         with open(
             os.path.join(claude_out, ".claude-plugin", "plugin.json"),
             encoding="utf-8",
@@ -434,11 +422,36 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
             encoding="utf-8",
         ) as f:
             codex_version = json.load(f)["version"]
+        with open(codex_marketplace, encoding="utf-8") as f:
+            generated_marketplace = json.load(f)
+        expected_marketplace = {
+            "name": "kendrick",
+            "interface": {"displayName": "Kendrick"},
+            "plugins": [
+                {
+                    "name": "release-candidate",
+                    "source": {
+                        "source": "local",
+                        "path": "./plugins/release-candidate",
+                    },
+                    "policy": {
+                        "installation": "AVAILABLE",
+                        "authentication": "ON_INSTALL",
+                    },
+                    "category": "Developer Tools",
+                }
+            ],
+        }
         detail = (
-            f"authored={authored_version!r} claude={claude_version!r} "
+            f"authored='0.5.1' claude={claude_version!r} "
             f"codex={codex_version!r}"
         )
-        condition = claude_version == codex_version == authored_version
+        condition = claude_version == codex_version == "0.5.1"
+        marketplace_condition = generated_marketplace == expected_marketplace
+        marketplace_detail = (
+            f"generated={generated_marketplace!r} "
+            f"expected={expected_marketplace!r}"
+        )
     except (
         AttributeError,
         FileNotFoundError,
@@ -447,12 +460,22 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     ) as error:
         condition = False
         detail = repr(error)
+        marketplace_condition = False
+        marketplace_detail = repr(error)
+    finally:
+        build_plugin.PLUGIN_SRC_MANIFEST = original_manifest
 
     check(
-        "one build emits Claude and Codex manifests at the authored version",
+        "one version source writes v0.5.1 to both host manifests",
         condition,
         detail,
     )
+    check(
+        "the Codex marketplace is generated from release metadata",
+        marketplace_condition,
+        marketplace_detail,
+    )
+    build_plugin.build_distributions(claude_out, codex_out)
 
     claude_payload = os.path.join(
         claude_out, "project-template", ".agent-guild"
@@ -646,6 +669,18 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         "Codex manifest carries the required interface metadata",
         condition,
         repr(interface),
+    )
+    adapter_only_fields = {
+        "agents",
+        "agent_body_suffixes",
+        "skill_body_suffixes",
+        "skill_frontmatter_overrides",
+    }
+    leaked_adapter_fields = adapter_only_fields & set(codex_manifest)
+    check(
+        "Codex manifest excludes build-only adapter metadata",
+        leaked_adapter_fields == set(),
+        repr(sorted(leaked_adapter_fields)),
     )
 
     with open(
@@ -1450,6 +1485,67 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         and "codex: content differs: .codex-plugin/plugin.json"
         in stderr.getvalue(),
         f"rc={check_rc} stderr={stderr.getvalue()!r}",
+    )
+
+    build_plugin.build_distributions(claude_out, codex_out)
+    stderr = io.StringIO()
+    try:
+        scratch_claude_marketplace = os.path.join(
+            tmp, "marketplaces", "claude.json"
+        )
+        scratch_codex_marketplace = os.path.join(
+            tmp, "marketplaces", "codex.json"
+        )
+        build_plugin.write_marketplaces(
+            claude_path=scratch_claude_marketplace,
+            codex_path=scratch_codex_marketplace,
+        )
+        with open(scratch_codex_marketplace, encoding="utf-8") as f:
+            hand_edited_marketplace = json.load(f)
+        hand_edited_marketplace["plugins"][0]["category"] = "Hand Edited"
+        with open(scratch_codex_marketplace, "w", encoding="utf-8") as f:
+            json.dump(hand_edited_marketplace, f, indent=2)
+            f.write("\n")
+
+        original_claude_marketplace = getattr(
+            build_plugin, "CLAUDE_MARKETPLACE_PATH", None
+        )
+        original_codex_marketplace = getattr(
+            build_plugin, "CODEX_MARKETPLACE_PATH", None
+        )
+        build_plugin.DEFAULT_OUT = claude_out
+        build_plugin.DEFAULT_CODEX_OUT = codex_out
+        build_plugin.CLAUDE_MARKETPLACE_PATH = scratch_claude_marketplace
+        build_plugin.CODEX_MARKETPLACE_PATH = scratch_codex_marketplace
+        try:
+            with contextlib.redirect_stderr(stderr):
+                marketplace_check_rc = build_plugin.run_check()
+        finally:
+            build_plugin.DEFAULT_OUT = original_claude_out
+            build_plugin.DEFAULT_CODEX_OUT = original_codex_out
+            if original_claude_marketplace is None:
+                del build_plugin.CLAUDE_MARKETPLACE_PATH
+            else:
+                build_plugin.CLAUDE_MARKETPLACE_PATH = (
+                    original_claude_marketplace
+                )
+            if original_codex_marketplace is None:
+                del build_plugin.CODEX_MARKETPLACE_PATH
+            else:
+                build_plugin.CODEX_MARKETPLACE_PATH = (
+                    original_codex_marketplace
+                )
+    except (AttributeError, FileNotFoundError) as error:
+        marketplace_check_rc = -1
+        stderr.write(repr(error))
+    check(
+        "--check fails loudly on a hand-edited Codex marketplace",
+        marketplace_check_rc == 1
+        and "codex marketplace: content differs" in stderr.getvalue(),
+        (
+            f"rc={marketplace_check_rc} "
+            f"stderr={stderr.getvalue()!r}"
+        ),
     )
 
 print(f"\n{passed} passed, {failed} failed")

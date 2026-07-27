@@ -6,7 +6,7 @@ payload. Thin adapter metadata supplies host representation; the repository's
 Claude dogfood and both packages are generated views of those sources.
 
 Modes:
-    build-plugin.py              build ./plugin/ and stage ./dist/codex-plugin/
+    build-plugin.py              sync both published packages and marketplaces
     build-plugin.py --target claude --out DIR
                                  build only the Claude package
     build-plugin.py --target codex --out DIR
@@ -14,7 +14,7 @@ Modes:
     build-plugin.py --target all --out DIR
                                  build both as children of DIR
     build-plugin.py --check      verify shared-core wrappers, generated output,
-                                  the Codex release lock, and Claude validation
+                                  marketplaces, and Claude validation
 
 Exit codes: 0 success; 1 a build or check step failed (message on stderr
 names the actual problem, not a bare "failed").
@@ -38,6 +38,9 @@ CLAUDE_DIR = os.path.join(ROOT, ".claude")
 GUILD_DIR = os.path.join(ROOT, ".agent-guild")
 CORE_DIR = os.path.join(ROOT, "guild-core")
 PLUGIN_SRC_MANIFEST = os.path.join(ROOT, "scripts", "plugin-src", "plugin.json")
+MARKETPLACE_METADATA_PATH = os.path.join(
+    ROOT, "scripts", "plugin-src", "marketplace.json"
+)
 CLAUDE_ADAPTER_PATH = os.path.join(
     ROOT, "scripts", "plugin-src", "adapters", "claude.json"
 )
@@ -50,8 +53,13 @@ INSTALLER_PATH = os.path.join(
 PLUGIN_SRC_README = os.path.join(ROOT, "docs", "plugin-readme.md")
 CHANGELOG_PATH = os.path.join(ROOT, "CHANGELOG.md")
 DEFAULT_OUT = os.path.join(ROOT, "plugin")
-DEFAULT_CODEX_OUT = os.path.join(ROOT, "dist", "codex-plugin")
-CODEX_LOCK_PATH = os.path.join(ROOT, "scripts", "plugin-src", "codex.sha256")
+DEFAULT_CODEX_OUT = os.path.join(ROOT, "plugins", "agent-guild")
+CLAUDE_MARKETPLACE_PATH = os.path.join(
+    ROOT, ".claude-plugin", "marketplace.json"
+)
+CODEX_MARKETPLACE_PATH = os.path.join(
+    ROOT, ".agents", "plugins", "marketplace.json"
+)
 
 GUILD_AGENTS = [
     "auditor",
@@ -713,6 +721,75 @@ def write_plugin_manifest(out_dir):
     shutil.copy2(PLUGIN_SRC_MANIFEST, os.path.join(dst_dir, "plugin.json"))
 
 
+def _write_json(path, payload):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+
+
+def marketplace_payloads():
+    """Render both host catalogs from one plugin and marketplace identity."""
+    manifest = _load_json(PLUGIN_SRC_MANIFEST, "release manifest")
+    metadata = _load_json(
+        MARKETPLACE_METADATA_PATH, "marketplace metadata"
+    )
+    codex_adapter = _load_json(CODEX_ADAPTER_PATH, "Codex adapter")
+    try:
+        plugin_name = manifest["name"]
+        description = manifest["description"]
+        marketplace_name = metadata["name"]
+        display_name = metadata["displayName"]
+        owner = manifest["author"]
+        category = codex_adapter["interface"]["category"]
+    except KeyError as error:
+        raise BuildError(
+            f"release or Codex adapter metadata is missing {error.args[0]!r}"
+        ) from error
+
+    claude = {
+        "name": marketplace_name,
+        "owner": owner,
+        "description": description,
+        "plugins": [
+            {
+                "name": plugin_name,
+                "source": "./plugin",
+                "description": description,
+            }
+        ],
+    }
+    codex = {
+        "name": marketplace_name,
+        "interface": {"displayName": display_name},
+        "plugins": [
+            {
+                "name": plugin_name,
+                "source": {
+                    "source": "local",
+                    "path": f"./plugins/{plugin_name}",
+                },
+                "policy": {
+                    "installation": "AVAILABLE",
+                    "authentication": "ON_INSTALL",
+                },
+                "category": category,
+            }
+        ],
+    }
+    return claude, codex
+
+
+def write_marketplaces(
+    claude_path=CLAUDE_MARKETPLACE_PATH,
+    codex_path=CODEX_MARKETPLACE_PATH,
+):
+    """Write both host marketplace views from shared release metadata."""
+    claude, codex = marketplace_payloads()
+    _write_json(claude_path, claude)
+    _write_json(codex_path, codex)
+
+
 def build_codex(out_dir, core_dir=CORE_DIR):
     """Build the Codex target from shared behavior plus thin host adapters."""
     if os.path.exists(out_dir):
@@ -730,18 +807,16 @@ def build_codex(out_dir, core_dir=CORE_DIR):
             not in {
                 "agents",
                 "agent_body_suffixes",
+                "skill_body_suffixes",
                 "skill_frontmatter_overrides",
             }
         }
     )
     manifest["interface"]["developerName"] = manifest["author"]["name"]
-    with open(
+    _write_json(
         os.path.join(out_dir, ".codex-plugin", "plugin.json"),
-        "w",
-        encoding="utf-8",
-    ) as f:
-        json.dump(manifest, f, indent=2)
-        f.write("\n")
+        manifest,
+    )
     assemble_project_template(out_dir, target="codex")
     generate_codex_hooks_json(out_dir)
     generate_codex_agents(out_dir, core_dir)
@@ -853,32 +928,29 @@ def tree_digest(root):
     return digest.hexdigest()
 
 
-def write_codex_lock(codex_out, lock_path=CODEX_LOCK_PATH):
-    """Record a compact release-artifact fingerprint, never its copied files."""
-    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    with open(lock_path, "w", encoding="utf-8") as f:
-        f.write(tree_digest(codex_out) + "\n")
-
-
-def codex_lock_problem(lock_path=CODEX_LOCK_PATH, core_dir=CORE_DIR):
-    """Return None when a fresh Codex artifact matches its compact lock."""
-    try:
-        with open(lock_path, encoding="utf-8") as f:
-            expected = f.read().strip()
-    except OSError as error:
-        return f"cannot read Codex release lock {lock_path}: {error}"
-    if not re.fullmatch(r"[0-9a-f]{64}", expected):
-        return f"Codex release lock {lock_path} is malformed"
-    with tempfile.TemporaryDirectory(prefix="build-codex-lock-") as tmp:
-        fresh = os.path.join(tmp, "codex")
-        build_codex(fresh, core_dir)
-        actual = tree_digest(fresh)
-    if actual != expected:
-        return (
-            f"Codex release lock {lock_path} is stale -- run "
-            "`python3 scripts/build-plugin.py`"
+def marketplace_diffs(committed_claude, committed_codex):
+    """Return drift in either generated marketplace file."""
+    with tempfile.TemporaryDirectory(prefix="build-marketplaces-check-") as tmp:
+        fresh_claude = os.path.join(tmp, "claude.json")
+        fresh_codex = os.path.join(tmp, "codex.json")
+        write_marketplaces(
+            claude_path=fresh_claude,
+            codex_path=fresh_codex,
         )
-    return None
+        diffs = []
+        for label, fresh, committed in (
+            ("claude", fresh_claude, committed_claude),
+            ("codex", fresh_codex, committed_codex),
+        ):
+            if not os.path.isfile(committed):
+                diffs.append(
+                    f"{label} marketplace: missing generated file {committed}"
+                )
+            elif not filecmp.cmp(fresh, committed, shallow=False):
+                diffs.append(
+                    f"{label} marketplace: content differs: {committed}"
+                )
+        return diffs
 
 
 def distribution_diffs(committed_claude, committed_codex):
@@ -928,7 +1000,7 @@ def check_changelog_section():
 
 
 def run_check():
-    """Verify generated dogfood, the published Claude tree, and Codex lock.
+    """Verify generated dogfood, both published trees, and marketplaces.
 
     Exits 0 only when the changelog has caught up with the manifest version,
     generated wrappers and artifacts match the shared core, AND
@@ -945,6 +1017,13 @@ def run_check():
         )
         return 1
 
+    if not os.path.isdir(DEFAULT_CODEX_OUT):
+        sys.stderr.write(
+            f"build-plugin.py --check: Codex output {DEFAULT_CODEX_OUT} does "
+            "not exist -- run a build first\n"
+        )
+        return 1
+
     wrapper_diffs = dogfood_diffs(CLAUDE_DIR)
     if wrapper_diffs:
         sys.stderr.write(
@@ -955,16 +1034,7 @@ def run_check():
             sys.stderr.write(f"  - {diff}\n")
         return 1
 
-    if os.path.isdir(DEFAULT_CODEX_OUT):
-        diffs = distribution_diffs(DEFAULT_OUT, DEFAULT_CODEX_OUT)
-    else:
-        with tempfile.TemporaryDirectory(prefix="build-claude-check-") as tmp:
-            fresh_claude = os.path.join(tmp, "claude")
-            build(fresh_claude)
-            diffs = [
-                f"claude: {diff}"
-                for diff in diff_trees(fresh_claude, DEFAULT_OUT)
-            ]
+    diffs = distribution_diffs(DEFAULT_OUT, DEFAULT_CODEX_OUT)
     if diffs:
         sys.stderr.write(
             "build-plugin.py --check: generated distributions are stale "
@@ -974,9 +1044,18 @@ def run_check():
             sys.stderr.write(f"  - {d}\n")
         return 1
 
-    lock_problem = codex_lock_problem()
-    if lock_problem:
-        sys.stderr.write(f"build-plugin.py --check: {lock_problem}\n")
+    marketplace_problems = marketplace_diffs(
+        CLAUDE_MARKETPLACE_PATH,
+        CODEX_MARKETPLACE_PATH,
+    )
+    if marketplace_problems:
+        sys.stderr.write(
+            "build-plugin.py --check: generated marketplaces are stale "
+            f"relative to release metadata "
+            f"({len(marketplace_problems)} difference(s)):\n"
+        )
+        for problem in marketplace_problems:
+            sys.stderr.write(f"  - {problem}\n")
         return 1
 
     claude_bin = shutil.which("claude")
@@ -999,8 +1078,9 @@ def run_check():
         return proc.returncode
 
     print(
-        "OK: shared-core wrappers, Claude output, and the Codex release lock "
-        "match fresh builds; the Claude plugin passes strict validation"
+        "OK: shared-core wrappers, both published packages, and both "
+        "marketplaces match fresh builds; the Claude plugin passes strict "
+        "validation"
     )
     return 0
 
@@ -1011,12 +1091,12 @@ def main():
         description=(
             "Build Agent Guild host distributions from shared sources.\n\n"
             "Modes:\n"
-            "  build-plugin.py              build ./plugin/; stage Codex in ./dist/\n"
+            "  build-plugin.py              sync both published packages and marketplaces\n"
             "  --target claude --out DIR    build only the Claude package\n"
             "  --target codex --out DIR     build only the Codex package\n"
             "  --target all --out DIR       build both packages under DIR\n"
             "  build-plugin.py --check      verify core-derived wrappers, outputs,\n"
-            "                               the Codex lock, and Claude validation"
+            "                               marketplaces, and Claude validation"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1077,10 +1157,10 @@ def main():
         _guard_out_dir(DEFAULT_CODEX_OUT)
         sync_dogfood()
         build_distributions(DEFAULT_OUT, DEFAULT_CODEX_OUT)
-        write_codex_lock(DEFAULT_CODEX_OUT)
+        write_marketplaces()
         print(
             f"OK: built Claude plugin at {DEFAULT_OUT} and Codex plugin at "
-            f"{DEFAULT_CODEX_OUT}"
+            f"{DEFAULT_CODEX_OUT}; generated both marketplaces"
         )
         return 0
     except BuildError as e:

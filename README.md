@@ -99,4 +99,4 @@ Whichever way you install, walk through `SMOKE.md` once in a fresh session to wa
 
 ## Build The Plugins
 
-The Claude and Codex packages are generated from one shared core. See [Building The Plugins](docs/building.md) for the exact per-host commands, source-versus-output rules, compatibility checks, and CI artifact flow.
+The Claude and Codex packages are generated from one shared core. After a repo-local Codex bootstrap, the same job intake you run as `/agent-guild:job` in the Claude plugin is available as `$job`; an installed Codex plugin exposes `$agent-guild:job`. See [Building The Plugins](docs/building.md) for the exact per-host commands, source-versus-output rules, installation modes, compatibility checks, and CI artifact flow.

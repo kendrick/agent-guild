@@ -2,9 +2,11 @@
 
 The kit has no application data. Its "contracts" are the shapes of the file-based message bus under `.agent-guild/state/`, and the source of truth for each is a template in `.agent-guild/templates/`. Consume these shapes through the templates; don't restate them here (that just drifts).
 
-## Codex Project Bootstrap Ownership
+## Project Bootstrap Ownership
 
-The Codex initializer owns only the generated files matching the packaged roster under the target project's `.codex/agents/` and the inclusive root `AGENTS.md` section bounded by `<!-- agent-guild:codex:start -->` and `<!-- agent-guild:codex:end -->`. It may replace those owned files and that section on update. It must preserve `.codex/config.toml`, unrelated agents, all `AGENTS.md` content outside the markers, and every path outside the project; malformed marker cardinality/order or any `.codex` resolution outside the project is a fail-closed error before writes.
+The shared installer copies missing host-neutral payload files under `.agent-guild/` but never overwrites differing local payload content. It owns its bounded guidance section: `<!-- agent-guild:claude:start -->`…`<!-- agent-guild:claude:end -->` in `CLAUDE.md`, or `<!-- agent-guild:codex:start -->`…`<!-- agent-guild:codex:end -->` in `AGENTS.md`. Existing legacy Claude guidance consisting of the exact `@.agent-guild/CLAUDE.md` import remains valid and unchanged.
+
+For Codex, the installer also owns the generated files matching the packaged roster under `.codex/agents/`. In repo-local mode only, it owns packaged files under `.agents/skills/`, except the audition result log, which is runtime data. It may replace owned generated files and guidance sections on update. It must preserve `.codex/config.toml`, unrelated agents and skills, audition results, all guidance outside the markers, and every path outside the project; malformed marker cardinality/order or any managed path resolving outside the project is a fail-closed error before writes.
 
 Codex agents whose generated `sandbox_mode` is `read-only` never persist verdict, ledger, task, or other state content. Their return contract is the intended state-file path plus complete proposed file content; the parent orchestrator independently checks and persists it.
 

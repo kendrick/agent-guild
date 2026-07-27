@@ -12,7 +12,7 @@ A finished job leaves a full record in `.agent-guild/state/`, and the point of r
 Run `summarize.py` (beside this file) over the run:
 
 ```
-python3 .claude/skills/retrospective/summarize.py
+python3 <this-skill-directory>/summarize.py
 ```
 
 It reports verdict counts (PASS/FAIL/ERROR), FAILs grouped by checker, retries and escalations per task, dispute outcomes, and whether the stop gate ever stalled. Read its output as the raw material; you supply the reading.

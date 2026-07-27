@@ -12,7 +12,7 @@ Building either package requires only Python 3 and repository checkout—there i
 python3 scripts/build-plugin.py --target claude --out dist/claude-plugin
 ```
 
-The package is written to `dist/claude-plugin/`, with its manifest at `dist/claude-plugin/.claude-plugin/plugin.json`. A Claude-target build must reproduce the established published `plugin/` tree exactly.
+The package is written to `dist/claude-plugin/`, with its manifest at `dist/claude-plugin/.claude-plugin/plugin.json`. A Claude-target build must reproduce the established published `plugin/` tree exactly. Load or publish it as a Claude Code plugin, run `/agent-guild:init` once in each project, then start existing work with `/agent-guild:job <issue|file|url>`.
 
 ## Build Codex
 
@@ -20,21 +20,35 @@ The package is written to `dist/claude-plugin/`, with its manifest at `dist/clau
 python3 scripts/build-plugin.py --target codex --out dist/codex-plugin
 ```
 
-The package is written to `dist/codex-plugin/`, with its manifest at `dist/codex-plugin/.codex-plugin/plugin.json`.
+The package is written to `dist/codex-plugin/`, with its manifest at `dist/codex-plugin/.codex-plugin/plugin.json`. When it is installed as a Codex plugin, run `$agent-guild:init` once in each project, then start existing work with `$agent-guild:job <issue|file|url>`.
 
-Its `project-template/` contains the generated nine-agent Guild roster, one bounded `AGENTS.md` section, and the dependency-free project initializer. The roster TOML is rendered from the same `guild-core/roles/` bodies as Claude; model, reasoning, sandbox, and host-bound instruction metadata come from `scripts/plugin-src/adapters/codex.json`.
+Its `project-template/` contains the generated nine-agent Guild roster, one bounded `AGENTS.md` section, and the same dependency-free project installer engine as the Claude package. The roster TOML is rendered from the same `guild-core/roles/` bodies as Claude; model, reasoning, sandbox, and host-bound instruction metadata come from `scripts/plugin-src/adapters/codex.json`.
 
 ## Bootstrap A Codex Project
 
 Build the Codex package, then point its initializer at the target project root:
 
 ```sh
-python3 dist/codex-plugin/project-template/install-codex.py /path/to/project
+python3 dist/codex-plugin/project-template/install.py codex /path/to/project --project-skills
 ```
 
-The initializer creates or refreshes only Agent Guild-owned files under the target project's `.codex/agents/` directory and the section of its root `AGENTS.md` bounded by `<!-- agent-guild:codex:start -->` and `<!-- agent-guild:codex:end -->`. It preserves all text outside that section, `.codex/config.toml`, unrelated project agents, and every user/global Codex path. Re-running it is idempotent; malformed ownership markers or a `.codex` path redirected outside the project fail closed before any write.
+`--project-skills` is the IDE-bootstrap switch: it installs the complete workflow set under the project's `.agents/skills/`, where Codex discovers repo-local skills. Omit it when the Codex plugin itself is installed—the plugin already supplies the same skills, and copying them into the project would create duplicate names. After IDE bootstrap, start existing work with `$job <issue|file|url>`.
+
+The installer creates or refreshes only the packaged roster under `.codex/agents/`, the packaged workflows under `.agents/skills/` when requested, and the section of the root `AGENTS.md` bounded by `<!-- agent-guild:codex:start -->` and `<!-- agent-guild:codex:end -->`. It preserves all text outside that section, `.codex/config.toml`, unrelated project agents and skills, working-memory content, audition results, and every user/global Codex path. Re-running it is idempotent; malformed ownership markers or a managed path redirected outside the project fail closed before any write.
 
 The generated read-only checker and auditor configurations keep their verification boundary by returning the intended state-file path and complete proposed content to the parent orchestrator. The parent persists that content; do not grant a checker write access to work around the handoff.
+
+## Workflow Surface
+
+Both host packages render the same twelve workflow bodies from `guild-core/workflows/`: `init`, `job`, `constitution`, `decompose`, `retrospective`, `audition`, `hydrate-discover`, `hydrate-extract`, `hydrate-draft`, `hydrate-reconcile`, `hydrate-propose`, and `update-working-memory`. Host adapters add only frontmatter and the thin `init` command suffix.
+
+| Context | Initialize | Start Existing Work |
+| --- | --- | --- |
+| Installed Claude plugin | `/agent-guild:init` | `/agent-guild:job <issue\|file\|url>` |
+| Installed Codex plugin | `$agent-guild:init` | `$agent-guild:job <issue\|file\|url>` |
+| Repo-local Codex bootstrap | Run the installer command above | `$job <issue\|file\|url>` |
+
+Codex skills use `$skill-name` or the `/skills` picker; they are not Claude-style slash commands. The two Codex forms differ only because plugin skills are namespaced while repo-local skills are not.
 
 ## Build Both
 
@@ -91,7 +105,7 @@ python3 scripts/build-plugin.py --check
 | --- | --- | --- |
 | `guild-core/` | Shared role behavior for the complete roster, workflow bodies, and workflow assets | Yes |
 | `scripts/plugin-src/adapters/` | Host-specific frontmatter and metadata | Yes |
-| `scripts/plugin-src/install-codex.py` | Project-local Codex initializer source | Yes |
+| `scripts/plugin-src/install-project.py` | Shared Claude/Codex project installer engine | Yes |
 | `scripts/plugin-src/plugin.json` | Authored plugin identity and version | Yes—version bumps only during the release ritual |
 | `.agent-guild/` | Host-neutral runtime payload copied into both packages | Yes |
 | `.claude/agents/`, `.claude/skills/` | Generated Claude dogfood wrappers | No |

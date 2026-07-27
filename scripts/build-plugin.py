@@ -44,8 +44,8 @@ CLAUDE_ADAPTER_PATH = os.path.join(
 CODEX_ADAPTER_PATH = os.path.join(
     ROOT, "scripts", "plugin-src", "adapters", "codex.json"
 )
-CODEX_INSTALLER_PATH = os.path.join(
-    ROOT, "scripts", "plugin-src", "install-codex.py"
+INSTALLER_PATH = os.path.join(
+    ROOT, "scripts", "plugin-src", "install-project.py"
 )
 PLUGIN_SRC_README = os.path.join(ROOT, "docs", "plugin-readme.md")
 CHANGELOG_PATH = os.path.join(ROOT, "CHANGELOG.md")
@@ -77,7 +77,19 @@ CLAUDE_PLUGIN_AGENTS = [
 # The lifecycle skills always ship. Optional components join automatically
 # when their source exists, so the source inventory stays the one inclusion
 # boundary for both host targets.
-GUILD_SKILLS = ["constitution", "decompose", "retrospective", "audition", "job"]
+GUILD_SKILLS = [
+    "constitution",
+    "decompose",
+    "retrospective",
+    "audition",
+    "job",
+    "hydrate-discover",
+    "hydrate-draft",
+    "hydrate-extract",
+    "hydrate-propose",
+    "hydrate-reconcile",
+    "update-working-memory",
+]
 OPTIONAL_SKILLS = ["init"]
 
 GUILD_HOOKS = [
@@ -167,6 +179,14 @@ def _adapter_frontmatter(kind, name, target):
     return lines
 
 
+def _adapter_skill_suffix(name, target):
+    adapter_path = (
+        CLAUDE_ADAPTER_PATH if target == "claude" else CODEX_ADAPTER_PATH
+    )
+    adapter = _load_json(adapter_path, f"{target.title()} adapter")
+    return adapter.get("skill_body_suffixes", {}).get(name, "")
+
+
 def copy_agents(out_dir, core_dir=CORE_DIR, names=GUILD_AGENTS):
     """Render Claude agent wrappers around host-neutral role behavior."""
     src_dir = os.path.join(core_dir, "roles")
@@ -212,6 +232,7 @@ def copy_skills(
         skill_path = os.path.join(dst_dir, name, "SKILL.md")
         with open(skill_path, encoding="utf-8") as f:
             body = f.read()
+        body += _adapter_skill_suffix(name, target)
         rendered = _render_frontmatter(
             _adapter_frontmatter("skills", name, target), body
         )
@@ -330,16 +351,13 @@ def generate_codex_agents(out_dir, core_dir=CORE_DIR):
             "- Agent Guild owns only this marked section of `AGENTS.md` "
             "and its generated files under `.codex/agents/`.\n"
         )
-        f.write("<!-- agent-guild:codex:end -->\n")
-
-    if not os.path.isfile(CODEX_INSTALLER_PATH):
-        raise BuildError(
-            f"missing Codex project initializer: {CODEX_INSTALLER_PATH}"
+        f.write("\n### Workflow Entry Point\n\n")
+        f.write(
+            "- Start existing work with `$"
+            "{{AGENT_GUILD_SKILL_PREFIX}}"
+            "job <issue|file|url>`.\n"
         )
-    shutil.copy2(
-        CODEX_INSTALLER_PATH,
-        os.path.join(out_dir, "project-template", "install-codex.py"),
-    )
+        f.write("<!-- agent-guild:codex:end -->\n")
 
 
 def build_dogfood(out_dir, core_dir=CORE_DIR):
@@ -483,6 +501,12 @@ def assemble_project_template(out_dir):
         os.path.join(GUILD_DIR, "schemas"),
         os.path.join(dst_root, "schemas"),
         ignore=_IGNORE_BUILD_BYPRODUCTS,
+    )
+    if not os.path.isfile(INSTALLER_PATH):
+        raise BuildError(f"missing project installer: {INSTALLER_PATH}")
+    shutil.copy2(
+        INSTALLER_PATH,
+        os.path.join(out_dir, "project-template", "install.py"),
     )
 
 

@@ -6,7 +6,7 @@ Work through these steps in order. The output is `.agent-guild/state/constitutio
 
 ## 1. Interview
 
-**If `.agent-guild/state/spec.md` exists** (typically written by the `/job` intake skill, carrying a provenance header), collapse the interview instead of running the full question bank:
+**If `.agent-guild/state/spec.md` exists** (typically written by the `job` intake skill, carrying a provenance header), collapse the interview instead of running the full question bank:
 1. Read the spec end to end, including its provenance header (`source`, `ref`, `fetched_at`, and `issue`/`title` when the source is a GitHub issue).
 2. Derive candidate quality bars straight from the spec's own content: its stated goal, Definition of Done, deliverables, constraints, and non-goals. Each candidate becomes a clause draft per steps 2-3 below.
 3. Present the candidates to the user for confirmation and adjustment. Ask only what the spec leaves genuinely open — severity rankings, protected words, or target environments the spec doesn't name.

@@ -1,19 +1,19 @@
 # Intake a spec or issue
 
-`/job` is the guild's front door for work that already exists somewhere — a GitHub issue, a doc on disk, a page at a URL — instead of being authored fresh in the constitution interview. Its only artifact is one file, `.agent-guild/state/spec.md`, and its governing rule is **never fabricate**: every byte of spec content comes verbatim from the source, and a fetch failure produces an honest error, not a guess.
+The `job` skill is the guild's front door for work that already exists somewhere—a GitHub issue, a doc on disk, or a page at a URL—instead of being authored fresh in the constitution interview. Its only artifact is one file, `.agent-guild/state/spec.md`, and its governing rule is **never fabricate**: every byte of spec content comes verbatim from the source, and a fetch failure produces an honest error, not a guess.
 
-## 1. Classify `$ARGUMENTS`
+## 1. Classify the invocation input
 
-Match `$ARGUMENTS` against these forms, in order, and take the first that fits:
+Match the input supplied with the skill invocation against these forms, in order, and take the first that fits:
 
 1. **Bare number or `#N`** (e.g. `15`, `#15`) — a GitHub issue in the current repo.
 2. **`owner/repo#N`** (e.g. `acme/widgets#42`) — a GitHub issue in another repo.
 3. **A GitHub issue URL** (`https://github.com/<owner>/<repo>/issues/<N>`).
-4. **An existing local file path** — check with a quick existence test (e.g. `test -f "$ARGUMENTS"`) before treating it as one.
+4. **An existing local file path**—check with a quick existence test (for example, `test -f "<input>"`) before treating it as one.
 5. **Any other URL** (starts with `http://` or `https://` but isn't a GitHub issue URL).
 6. **No argument at all.**
 
-Don't guess between these — if `$ARGUMENTS` doesn't cleanly match one, treat it as unrecognized input and tell the user what you saw and which forms are supported, rather than picking the closest one.
+Don't guess between these—if the invocation input doesn't cleanly match one, treat it as unrecognized input and tell the user what you saw and which forms are supported, rather than picking the closest one.
 
 ## 2. Fetch the content
 
@@ -32,11 +32,11 @@ Before trusting the result, handle failure honestly:
 
 On success, parse the JSON's `title`, `body`, and `url` fields. Derive `owner/repo#N` from the `url` field (matches `github\.com/([^/]+/[^/]+)/issues/(\d+)`) so `ref` is consistent no matter which of the three forms was used to invoke `gh`.
 
-**Form 4 (local file).** Read the file's raw content — that content is the entire spec body, unmodified. `ref` is the path as given in `$ARGUMENTS`.
+**Form 4 (local file).** Read the file's raw content—that content is the entire spec body, unmodified. `ref` is the path exactly as supplied with the invocation.
 
 **Form 5 (other URL).** Fetch it (the `WebFetch` tool if available, otherwise `curl -sL <url>`) and use the response body as the spec content verbatim — no summarizing, no reformatting. `ref` is the URL.
 
-**Form 6 (no argument).** Do not guess and do not fetch anything. Tell the user there are two ways forward: point `/job` at an issue, a file, or a URL to intake existing work, or skip intake entirely and run `/constitution`, whose interview authors the spec from scratch. Stop here — write no file.
+**Form 6 (no argument).** Do not guess and do not fetch anything. Tell the user there are two ways forward: invoke the `job` skill with an issue, file, or URL to intake existing work, or skip intake entirely and invoke the `constitution` skill, whose interview authors the spec from scratch. Stop here—write no file.
 
 ## 3. Write `.agent-guild/state/spec.md`
 
@@ -72,10 +72,10 @@ Run the validator against what you just wrote:
 
 Add `--issue N` when intake came from an issue (forms 1–3), so the validator also confirms the recorded `issue` matches the one you fetched. A nonzero exit means the header you wrote doesn't match the contract — fix it and re-run the check before moving on; don't leave a spec.md that fails its own validator.
 
-## 5. Flow into `/constitution`
+## 5. Flow into the constitution skill
 
-Once step 4's validator exits `0`, tell the user in one line that `.agent-guild/state/spec.md` is ready and validated — then, in that same turn, invoke `/constitution` yourself via the Skill tool. The turn that validates the spec is the turn that starts Phase 0.
+Once step 4's validator exits `0`, tell the user in one line that `.agent-guild/state/spec.md` is ready and validated—then, in that same turn, invoke the `constitution` skill through the host's skill mechanism. The turn that validates the spec is the turn that starts Phase 0.
 
-`/constitution` collapses its interview into a confirm-and-adjust step when `spec.md` already exists. That step belongs to the user: invoke the skill and let its interview run as designed — carry the baton to the confirm step, not past it.
+The `constitution` skill collapses its interview into a confirm-and-adjust step when `spec.md` already exists. That step belongs to the user: invoke the skill and let its interview run as designed—carry the baton to the confirm step, not past it.
 
-This flow-through is conditional on a successful, validated write. Every failure path in steps 1–2 already stops with an honest message and no `spec.md` on disk; none of them reaches this step or invokes `/constitution`.
+This flow-through is conditional on a successful, validated write. Every failure path in steps 1–2 already stops with an honest message and no `spec.md` on disk; none of them reaches this step or invokes the `constitution` skill.

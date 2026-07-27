@@ -61,7 +61,13 @@
   "skill_frontmatter_overrides": {
     "init": {
       "disable-model-invocation": "false"
+    },
+    "job": {
+      "description": "Phase 0 intake for an Agent Guild job. Turn an issue, local file, or URL supplied with the invocation into a provenance-backed spec, then continue into the constitution workflow."
     }
+  },
+  "skill_body_suffixes": {
+    "init": "\n\n## Codex Plugin Command\n\nResolve `<skill-directory>` to the directory containing this `SKILL.md`, resolve `<project-root>` to the current repository root, then run the shared installer:\n\n```sh\npython3 \"<skill-directory>/../../project-template/install.py\" codex \"<project-root>\"\n```\n\nDo not add `--project-skills` for plugin setup—the installed plugin already supplies them. After the installer succeeds, start existing work with `$agent-guild:job <issue|file|url>` or author a fresh spec with `$agent-guild:constitution`.\n"
   },
   "interface": {
     "displayName": "Agent Guild",

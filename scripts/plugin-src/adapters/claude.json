@@ -68,6 +68,43 @@
       "name: decompose",
       "description: Phase 1 of a guild job. Turn .agent-guild/state/spec.md plus the constitution into task files under .agent-guild/state/tasks/, each with an executor, a checker, and a check method. Use after the constitution passes audit, when breaking a job into dispatchable work."
     ],
+    "hydrate-discover": [
+      "name: hydrate-discover",
+      "description: >",
+      "  Inventory the source surface for hydrating working memory in this repo.",
+      "  Surveys manifests, code structure, README, ADRs (if any), recent git history,",
+      "  and code patterns. Run once when populating working memory beyond the",
+      "  installer's pre-population."
+    ],
+    "hydrate-draft": [
+      "name: hydrate-draft",
+      "description: >",
+      "  Map findings into the six working memory files: projectOverview, decisionLog,",
+      "  dataContracts, conventions, openQuestions. Drafts include source provenance",
+      "  inline. activeContext.md is excluded; the developer drives that file directly."
+    ],
+    "hydrate-extract": [
+      "name: hydrate-extract",
+      "description: >",
+      "  Pull findings from a single source location. Each finding is one sentence",
+      "  about a fact, decision, convention, or contract, plus a pointer back to",
+      "  source. Deterministic for structured sources, AI semantic for prose."
+    ],
+    "hydrate-propose": [
+      "name: hydrate-propose",
+      "description: >",
+      "  Stage reconciled drafts as a single commit (or PR for multi-developer projects)",
+      "  that updates the working memory files in a reviewable batch. activeContext.md",
+      "  is excluded. After acceptance, the synchronizer agent takes over for ongoing",
+      "  maintenance."
+    ],
+    "hydrate-reconcile": [
+      "name: hydrate-reconcile",
+      "description: >",
+      "  Compare drafts against existing working memory and against the codebase.",
+      "  Annotates each draft as net-new, would-overwrite, or conflicts-with-code.",
+      "  Greenfield projects skip the existing-working-memory comparison."
+    ],
     "init": [
       "name: init",
       "description: Finishes a guild plugin install inside a project by copying the per-project payload (the orchestrator contract, check-script tooling, and templates) that a plugin can't ship as always-on config. Explicit-only — the model never invokes this on its own; the user runs it by name. Use when the user says \"finish the guild install here\" or \"set up this project for the guild\".",
@@ -80,6 +117,16 @@
     "retrospective": [
       "name: retrospective",
       "description: Phase 3 of a guild job. Read the run state and write .agent-guild/state/retrospective.md—what the checkers caught, where retries and escalations clustered, how disputes were ruled. Use at the end of a job, or when reviewing how a build went and what the constitution missed."
+    ],
+    "update-working-memory": [
+      "name: update-working-memory",
+      "description: >",
+      "  Reads the current working memory state, diffs it against recent git changes,",
+      "  and proposes updates. Use when finishing a feature, resolving a decision,",
+      "  or when active context feels stale."
     ]
+  },
+  "skill_body_suffixes": {
+    "init": "\n\n## Claude Plugin Command\n\nRun the shared installer from the installed plugin:\n\n```sh\npython3 \"${CLAUDE_PLUGIN_ROOT}/project-template/install.py\" claude \"${CLAUDE_PROJECT_DIR}\"\n```\n\nAfter it succeeds, start existing work with `/agent-guild:job <issue|file|url>` or author a fresh spec with `/agent-guild:constitution`.\n"
   }
 }

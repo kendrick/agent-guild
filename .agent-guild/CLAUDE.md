@@ -35,15 +35,15 @@ Route a task by the work, not the default: a mechanical task goes to worker-bulk
 
 ## The job, phase by phase
 
-**Phase 0, constitution.** Run `/constitution` to produce `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first.
+**Phase 0, constitution.** Invoke the `constitution` skill to produce `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first.
 
 Note: hooks no-op when no task is open, so during Phase 0 the write-guard is not yet active. The orchestrator contract is prompt-only here—you're trusted to write only the constitution and spec, nothing else, until tasks exist.
 
-**Phase 1, decompose.** Run `/decompose` to turn the spec plus constitution into task files under `.agent-guild/state/tasks/`, each with an executor, a checker, and a `check_method` that cites constitution clauses. Then dispatch the auditor with `Audit-ID: DEC-audit` to confirm the decomposition covers the spec.
+**Phase 1, decompose.** Invoke the `decompose` skill to turn the spec plus constitution into task files under `.agent-guild/state/tasks/`, each with an executor, a checker, and a `check_method` that cites constitution clauses. Then dispatch the auditor with `Audit-ID: DEC-audit` to confirm the decomposition covers the spec.
 
 **Phase 2, build and verify.** Drive each task through the lifecycle below. Dispatch, collect verdicts, rule on disputes, escalate when a tier is spent.
 
-**Phase 3, retrospective.** Run `/retrospective` for the report: what the checkers caught, where retries and escalations clustered, which disputes went which way.
+**Phase 3, retrospective.** Invoke the `retrospective` skill for the report: what the checkers caught, where retries and escalations clustered, which disputes went which way.
 
 ## Task lifecycle
 

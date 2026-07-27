@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-26: One workflow core and installer engine serve both hosts
+
+**Source:** issue #57
+
+**Context:** Claude already carried the complete lifecycle and working-memory workflows, while the staged Codex package exposed only a subset and its separate installer guide duplicated setup behavior. Codex also has two valid skill scopes with different invocation names: plugin skills are namespaced, while repo-local skills are not.
+**Decision:** Author all twelve workflow bodies only under `guild-core/workflows/`, render host frontmatter and the thin `init` command suffix from adapters, and ship one stdlib-only `install-project.py` engine in both packages. Claude plugin init preserves project settings and installs the payload plus bounded guidance. Codex plugin init installs the payload, roster, and bounded guidance while relying on plugin skills; repo-local Codex adds `--project-skills` to install `.agents/skills/`. The exact entrypoints are `/agent-guild:job`, `$agent-guild:job`, and `$job`, respectively.
+**Alternatives considered:** Copying Claude skill bodies into a Codex source tree (rejected—it creates a second implementation); maintaining host-specific installation guides or engines (rejected—their safety and ownership rules would drift); always installing repo-local Codex skills (rejected—an installed plugin would expose duplicate skill names); translating Codex skills into slash commands (rejected—Codex's documented explicit syntax is `$skill-name`).
+
 ## 2026-07-26: Codex verifiers return content across a read-only host boundary
 
 **Source:** issue #50

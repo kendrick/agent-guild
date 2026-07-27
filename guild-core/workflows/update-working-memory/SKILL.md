@@ -1,11 +1,3 @@
----
-name: update-working-memory
-description: >
-  Reads the current working memory state, diffs it against recent git changes,
-  and proposes updates. Use when finishing a feature, resolving a decision,
-  or when active context feels stale.
----
-
 # Update Working Memory
 
 When this skill is activated, perform the following:

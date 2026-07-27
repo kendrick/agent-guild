@@ -492,9 +492,15 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         "audition",
         "constitution",
         "decompose",
+        "hydrate-discover",
+        "hydrate-draft",
+        "hydrate-extract",
+        "hydrate-propose",
+        "hydrate-reconcile",
         "init",
         "job",
         "retrospective",
+        "update-working-memory",
     )
     with open(
         os.path.join(codex_out, ".codex-plugin", "plugin.json"),
@@ -502,22 +508,36 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     ) as f:
         codex_manifest = json.load(f)
     skill_diffs = []
-    for name in expected_skills:
-        source = os.path.join(
-            core_dir, "workflows", name
+    core_skill_names = {
+        name
+        for name in os.listdir(os.path.join(core_dir, "workflows"))
+        if os.path.isdir(os.path.join(core_dir, "workflows", name))
+    }
+    if core_skill_names != set(expected_skills):
+        skill_diffs.append(
+            f"shared workflows={sorted(core_skill_names)!r}, "
+            f"expected={sorted(expected_skills)!r}"
         )
-        built = os.path.join(codex_out, "skills", name)
-        if not os.path.isdir(built):
-            skill_diffs.append(f"missing skills/{name}")
-            continue
-        for difference in build_plugin.diff_trees(source, built):
-            if difference == (
-                "missing from a fresh build (committed plugin/ has it): "
-                "results/results.jsonl"
-            ):
+    for target_name, target in (
+        ("claude", claude_out),
+        ("codex", codex_out),
+    ):
+        built_skill_names = {
+            name
+            for name in os.listdir(os.path.join(target, "skills"))
+            if os.path.isdir(os.path.join(target, "skills", name))
+        }
+        if built_skill_names != set(expected_skills):
+            skill_diffs.append(
+                f"{target_name} skills={sorted(built_skill_names)!r}, "
+                f"expected={sorted(expected_skills)!r}"
+            )
+        for name in expected_skills:
+            source = os.path.join(core_dir, "workflows", name)
+            built = os.path.join(target, "skills", name)
+            if not os.path.isdir(source):
                 continue
-            if difference != "content differs: SKILL.md":
-                skill_diffs.append(f"skills/{name}/{difference}")
+            if not os.path.isdir(built):
                 continue
             with open(
                 os.path.join(source, "SKILL.md"), encoding="utf-8"
@@ -527,8 +547,10 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
                 os.path.join(built, "SKILL.md"), encoding="utf-8"
             ) as f:
                 built_body = f.read().split("---", 2)[2].lstrip("\n")
-            if source_body != built_body:
-                skill_diffs.append(f"skills/{name}/body differs")
+            if not built_body.startswith(source_body):
+                skill_diffs.append(
+                    f"{target_name} skills/{name}/body not derived from core"
+                )
     condition = (
         codex_manifest.get("skills") == "./skills/" and skill_diffs == []
     )
@@ -537,9 +559,41 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         + "; ".join(skill_diffs)
     )
     check(
-        "Codex receives shared workflow bodies and assets through target wrappers",
+        "both hosts receive the complete workflow set from one shared core",
         condition,
         detail,
+    )
+
+    codex_workflow_text = []
+    for name in expected_skills:
+        path = os.path.join(codex_out, "skills", name, "SKILL.md")
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                codex_workflow_text.append(f.read())
+    codex_contract_path = os.path.join(
+        codex_out, "project-template", ".agent-guild", "CLAUDE.md"
+    )
+    if os.path.isfile(codex_contract_path):
+        with open(codex_contract_path, encoding="utf-8") as f:
+            codex_workflow_text.append(f.read())
+    codex_workflow_text = "\n".join(codex_workflow_text)
+    forbidden_codex_language = (
+        "${CLAUDE_PLUGIN_ROOT}",
+        ".claude/skills/",
+        "via the Skill tool",
+        "Agent tool",
+        "$ARGUMENTS",
+        "/agent-guild:",
+    )
+    leaked_codex_language = [
+        value
+        for value in forbidden_codex_language
+        if value in codex_workflow_text
+    ]
+    check(
+        "Codex workflow wrappers use Codex-neutral invocation and paths",
+        leaked_codex_language == [],
+        repr(leaked_codex_language),
     )
 
     interface = codex_manifest.get("interface")
@@ -684,6 +738,29 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         "; ".join(role_diffs),
     )
 
+    codex_role_text = []
+    for name in expected_roles:
+        built = os.path.join(agent_dir, f"{name}.toml")
+        if os.path.isfile(built):
+            codex_role_text.append(
+                read_flat_toml(built).get("developer_instructions", "")
+            )
+    codex_role_text = "\n".join(codex_role_text)
+    leaked_role_routing = [
+        value
+        for value in (
+            ".claude/skills/",
+            "../skills/",
+            "@working-memory-synchronizer",
+        )
+        if value in codex_role_text
+    ]
+    check(
+        "Codex role instructions use host-neutral skill routing",
+        leaked_role_routing == [],
+        repr(leaked_role_routing),
+    )
+
     courier_config = read_flat_toml(
         os.path.join(agent_dir, "checker-courier.toml")
     )
@@ -698,12 +775,54 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         courier_instructions[-600:],
     )
 
-    installer = os.path.join(
-        codex_out, "project-template", "install-codex.py"
+    claude_installer = os.path.join(
+        claude_out, "project-template", "install.py"
+    )
+    codex_installer = os.path.join(
+        codex_out, "project-template", "install.py"
+    )
+    shared_installer_ready = (
+        os.path.isfile(claude_installer)
+        and os.path.isfile(codex_installer)
+        and filecmp.cmp(
+            claude_installer, codex_installer, shallow=False
+        )
+        and not os.path.exists(
+            os.path.join(
+                codex_out, "project-template", "install-codex.py"
+            )
+        )
+    )
+    check(
+        "Claude, Codex plugin, and IDE setup share one installer engine",
+        shared_installer_ready,
+        (
+            f"claude={os.path.isfile(claude_installer)} "
+            f"codex={os.path.isfile(codex_installer)} "
+            f"legacy={os.path.exists(os.path.join(codex_out, 'project-template', 'install-codex.py'))}"
+        ),
+    )
+    installer = (
+        codex_installer
+        if os.path.isfile(codex_installer)
+        else os.path.join(
+            codex_out, "project-template", "install-codex.py"
+        )
     )
     project_root = os.path.join(tmp, "codex-project")
     project_agents = os.path.join(project_root, ".codex", "agents")
     os.makedirs(project_agents)
+    project_skills = os.path.join(project_root, ".agents", "skills")
+    os.makedirs(project_skills)
+    gitignore_path = os.path.join(project_root, ".gitignore")
+    with open(gitignore_path, "w", encoding="utf-8") as f:
+        f.write("# keep this project rule\n")
+    custom_payload = os.path.join(
+        project_root, ".agent-guild", "scripts", "custom.py"
+    )
+    os.makedirs(os.path.dirname(custom_payload))
+    with open(custom_payload, "w", encoding="utf-8") as f:
+        f.write("# user-owned extension\n")
     original_agents_md = (
         "# Existing Project\n\n"
         "## Local Rules\n\n"
@@ -715,10 +834,14 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         f.write(original_agents_md)
     config_path = os.path.join(project_root, ".codex", "config.toml")
     unrelated_agent = os.path.join(project_agents, "unrelated.toml")
+    unrelated_skill = os.path.join(project_skills, "unrelated", "SKILL.md")
+    os.makedirs(os.path.dirname(unrelated_skill))
     with open(config_path, "w", encoding="utf-8") as f:
         f.write('model = "user-choice"\n')
     with open(unrelated_agent, "w", encoding="utf-8") as f:
         f.write('name = "unrelated"\n')
+    with open(unrelated_skill, "w", encoding="utf-8") as f:
+        f.write("# Unrelated project skill\n")
     fake_home = os.path.join(tmp, "home")
     os.makedirs(fake_home)
     home_marker = os.path.join(fake_home, "keep.txt")
@@ -727,7 +850,13 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     install_env = dict(os.environ)
     install_env["HOME"] = fake_home
     first_install = subprocess.run(
-        [sys.executable, installer, project_root],
+        [
+            sys.executable,
+            installer,
+            "codex",
+            project_root,
+            "--project-skills",
+        ],
         capture_output=True,
         text=True,
         env=install_env,
@@ -744,15 +873,54 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         installed_config = f.read()
     with open(unrelated_agent, encoding="utf-8") as f:
         installed_unrelated = f.read()
+    with open(unrelated_skill, encoding="utf-8") as f:
+        installed_unrelated_skill = f.read()
     with open(home_marker, encoding="utf-8") as f:
         installed_home_marker = f.read()
+    with open(gitignore_path, encoding="utf-8") as f:
+        installed_gitignore = f.read()
+    with open(custom_payload, encoding="utf-8") as f:
+        installed_custom_payload = f.read()
+    installed_common_payload = all(
+        os.path.isfile(os.path.join(project_root, relative))
+        for relative in (
+            ".agent-guild/CLAUDE.md",
+            ".agent-guild/scripts/new-task.py",
+            ".agent-guild/templates/task.md",
+            ".agent-guild/schemas/verdict.schema.json",
+        )
+    )
+    installed_state = all(
+        os.path.isfile(
+            os.path.join(
+                project_root,
+                ".agent-guild",
+                "state",
+                name,
+                ".gitkeep",
+            )
+        )
+        for name in ("tasks", "verdicts", "disputes", "notes", "log")
+    )
     check(
-        "the Codex initializer installs only the project-local Guild roster",
+        "Codex IDE bootstrap installs the full project-local Guild surface",
         first_install.returncode == 0
         and managed_diffs == []
+        and all(
+            os.path.isfile(
+                os.path.join(project_skills, name, "SKILL.md")
+            )
+            for name in expected_skills
+        )
         and installed_config == 'model = "user-choice"\n'
         and installed_unrelated == 'name = "unrelated"\n'
+        and installed_unrelated_skill == "# Unrelated project skill\n"
         and installed_home_marker == "untouched\n"
+        and installed_common_payload
+        and installed_state
+        and installed_gitignore
+        == "# keep this project rule\n.agent-guild/state/\n"
+        and installed_custom_payload == "# user-owned extension\n"
         and not os.path.exists(os.path.join(fake_home, ".codex")),
         (
             f"rc={first_install.returncode} diffs={managed_diffs!r} "
@@ -787,7 +955,13 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         else ""
     )
     second_install = subprocess.run(
-        [sys.executable, installer, project_root],
+        [
+            sys.executable,
+            installer,
+            "codex",
+            project_root,
+            "--project-skills",
+        ],
         capture_output=True,
         text=True,
         env=install_env,
@@ -806,6 +980,8 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         and all(name in section for name in expected_roles)
         and "read-only" in section
         and "workspace-write" in section
+        and "$job" in section
+        and "$agent-guild:job" not in section
         and second_install.returncode == 0
         and before_second_digest == after_second_digest,
         (
@@ -820,15 +996,33 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     managed_agent = os.path.join(
         project_agents, "worker-standard.toml"
     )
+    managed_skill = os.path.join(
+        project_skills, "job", "SKILL.md"
+    )
     with open(managed_agent, "w", encoding="utf-8") as f:
         f.write("stale generated agent\n")
+    os.makedirs(os.path.dirname(managed_skill), exist_ok=True)
+    with open(managed_skill, "w", encoding="utf-8") as f:
+        f.write("stale generated skill\n")
+    audition_results = os.path.join(
+        project_skills, "audition", "results", "results.jsonl"
+    )
+    os.makedirs(os.path.dirname(audition_results), exist_ok=True)
+    with open(audition_results, "w", encoding="utf-8") as f:
+        f.write('{"candidate":"user-runtime-data"}\n')
     stale_agents_md = first_agents_md.replace(
         section, f"{section_start}\nstale generated section\n{section_end}"
     )
     with open(agents_path, "w", encoding="utf-8") as f:
         f.write(stale_agents_md)
     update_install = subprocess.run(
-        [sys.executable, installer, project_root],
+        [
+            sys.executable,
+            installer,
+            "codex",
+            project_root,
+            "--project-skills",
+        ],
         capture_output=True,
         text=True,
         env=install_env,
@@ -839,6 +1033,8 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         updated_config = f.read()
     with open(unrelated_agent, encoding="utf-8") as f:
         updated_unrelated = f.read()
+    with open(audition_results, encoding="utf-8") as f:
+        updated_audition_results = f.read()
     check(
         "the Codex initializer refreshes only Agent Guild-owned content",
         update_install.returncode == 0
@@ -847,9 +1043,16 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
             os.path.join(agent_dir, "worker-standard.toml"),
             shallow=False,
         )
+        and filecmp.cmp(
+            managed_skill,
+            os.path.join(codex_out, "skills", "job", "SKILL.md"),
+            shallow=False,
+        )
         and updated_agents_md == first_agents_md
         and updated_config == 'model = "user-choice"\n'
-        and updated_unrelated == 'name = "unrelated"\n',
+        and updated_unrelated == 'name = "unrelated"\n'
+        and updated_audition_results
+        == '{"candidate":"user-runtime-data"}\n',
         (
             f"rc={update_install.returncode} "
             f"stdout={update_install.stdout!r} "
@@ -870,7 +1073,13 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     with open(malformed_agents_path, "w", encoding="utf-8") as f:
         f.write(malformed_text)
     malformed_install = subprocess.run(
-        [sys.executable, installer, malformed_project],
+        [
+            sys.executable,
+            installer,
+            "codex",
+            malformed_project,
+            "--project-skills",
+        ],
         capture_output=True,
         text=True,
         env=install_env,
@@ -903,7 +1112,13 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         redirected_codex, os.path.join(redirected_project, ".codex")
     )
     redirected_install = subprocess.run(
-        [sys.executable, installer, redirected_project],
+        [
+            sys.executable,
+            installer,
+            "codex",
+            redirected_project,
+            "--project-skills",
+        ],
         capture_output=True,
         text=True,
         env=install_env,
@@ -923,6 +1138,181 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
             f"outside={sorted(os.listdir(redirected_codex))!r} "
             f"stdout={redirected_install.stdout!r} "
             f"stderr={redirected_install.stderr!r}"
+        ),
+    )
+
+    redirected_state_project = os.path.join(
+        tmp, "redirected-state-project"
+    )
+    redirected_state = os.path.join(tmp, "outside-state")
+    os.makedirs(
+        os.path.join(redirected_state_project, ".agent-guild")
+    )
+    os.makedirs(redirected_state)
+    state_marker = os.path.join(redirected_state, "keep.txt")
+    with open(state_marker, "w", encoding="utf-8") as f:
+        f.write("outside state stays untouched\n")
+    os.symlink(
+        redirected_state,
+        os.path.join(
+            redirected_state_project, ".agent-guild", "state"
+        ),
+    )
+    redirected_state_install = subprocess.run(
+        [
+            sys.executable,
+            claude_installer
+            if os.path.isfile(claude_installer)
+            else installer,
+            "claude",
+            redirected_state_project,
+        ],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    check(
+        "the shared installer rejects redirected state before any write",
+        redirected_state_install.returncode != 0
+        and sorted(os.listdir(redirected_state)) == ["keep.txt"]
+        and not os.path.exists(
+            os.path.join(redirected_state_project, "CLAUDE.md")
+        )
+        and not os.path.exists(
+            os.path.join(
+                redirected_state_project,
+                ".agent-guild",
+                "CLAUDE.md",
+            )
+        )
+        and not os.path.exists(
+            os.path.join(redirected_state_project, ".gitignore")
+        ),
+        (
+            f"rc={redirected_state_install.returncode} "
+            f"outside={sorted(os.listdir(redirected_state))!r} "
+            f"stdout={redirected_state_install.stdout!r} "
+            f"stderr={redirected_state_install.stderr!r}"
+        ),
+    )
+
+    codex_plugin_project = os.path.join(tmp, "codex-plugin-project")
+    os.makedirs(codex_plugin_project)
+    codex_plugin_install = subprocess.run(
+        [sys.executable, installer, "codex", codex_plugin_project],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    codex_plugin_agents_path = os.path.join(
+        codex_plugin_project, "AGENTS.md"
+    )
+    if os.path.isfile(codex_plugin_agents_path):
+        with open(codex_plugin_agents_path, encoding="utf-8") as f:
+            codex_plugin_agents = f.read()
+    else:
+        codex_plugin_agents = ""
+    check(
+        "Codex plugin init avoids duplicate repo skills",
+        codex_plugin_install.returncode == 0
+        and not os.path.exists(
+            os.path.join(codex_plugin_project, ".agents")
+        )
+        and "$agent-guild:job" in codex_plugin_agents
+        and "$job" not in codex_plugin_agents.replace(
+            "$agent-guild:job", ""
+        ),
+        (
+            f"rc={codex_plugin_install.returncode} "
+            f"agents={codex_plugin_agents!r} "
+            f"stdout={codex_plugin_install.stdout!r} "
+            f"stderr={codex_plugin_install.stderr!r}"
+        ),
+    )
+
+    claude_project = os.path.join(tmp, "claude-project")
+    os.makedirs(os.path.join(claude_project, ".claude"))
+    original_claude_md = "# Existing Claude Guidance\n\nKeep this.\n"
+    with open(
+        os.path.join(claude_project, "CLAUDE.md"),
+        "w",
+        encoding="utf-8",
+    ) as f:
+        f.write(original_claude_md)
+    claude_settings_path = os.path.join(
+        claude_project, ".claude", "settings.json"
+    )
+    claude_settings_text = (
+        '{"hooks":{"PreToolUse":[{"hooks":[{"command":'
+        '"python3 .agent-guild/hooks/dispatch-guard.py"}]}]}}\n'
+    )
+    with open(claude_settings_path, "w", encoding="utf-8") as f:
+        f.write(claude_settings_text)
+    runnable_claude_installer = (
+        claude_installer
+        if os.path.isfile(claude_installer)
+        else installer
+    )
+    claude_first_install = subprocess.run(
+        [
+            sys.executable,
+            runnable_claude_installer,
+            "claude",
+            claude_project,
+        ],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    claude_digest = build_plugin.tree_digest(claude_project)
+    claude_second_install = subprocess.run(
+        [
+            sys.executable,
+            runnable_claude_installer,
+            "claude",
+            claude_project,
+        ],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    with open(
+        os.path.join(claude_project, "CLAUDE.md"), encoding="utf-8"
+    ) as f:
+        installed_claude_md = f.read()
+    with open(claude_settings_path, encoding="utf-8") as f:
+        installed_claude_settings = f.read()
+    check(
+        "Claude plugin init uses the shared engine without touching settings",
+        claude_first_install.returncode == 0
+        and claude_second_install.returncode == 0
+        and build_plugin.tree_digest(claude_project) == claude_digest
+        and installed_claude_md.startswith(original_claude_md)
+        and installed_claude_md.count(
+            "<!-- agent-guild:claude:start -->"
+        )
+        == 1
+        and installed_claude_md.count(
+            "<!-- agent-guild:claude:end -->"
+        )
+        == 1
+        and "@.agent-guild/CLAUDE.md" in installed_claude_md
+        and installed_claude_settings == claude_settings_text
+        and "registered twice" in claude_first_install.stdout
+        and os.path.isfile(
+            os.path.join(
+                claude_project, ".agent-guild", "CLAUDE.md"
+            )
+        )
+        and not os.path.exists(os.path.join(claude_project, ".codex"))
+        and not os.path.exists(os.path.join(claude_project, ".agents")),
+        (
+            f"first_rc={claude_first_install.returncode} "
+            f"second_rc={claude_second_install.returncode} "
+            f"CLAUDE.md={installed_claude_md!r} "
+            f"settings={installed_claude_settings!r} "
+            f"stdout={claude_first_install.stdout!r} "
+            f"stderr={claude_first_install.stderr!r}"
         ),
     )
 

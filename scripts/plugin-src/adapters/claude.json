@@ -1,0 +1,64 @@
+{
+  "agents": {
+    "auditor": [
+      "name: auditor",
+      "description: GUILD AUDITOR (opus tier) that holds the orchestrator's own work—the constitution and the task decomposition—to the same bar as workers. Dispatch via the guild lifecycle with an Audit-ID (CON-audit or DEC-audit).",
+      "model: opus",
+      "tools: Read, Bash, Write, Grep, Glob"
+    ],
+    "checker-deterministic": [
+      "name: checker-deterministic",
+      "description: GUILD CHECKER (haiku tier) that runs a task's named check scripts and transcribes the results into a verdict, exercising zero judgment. For clauses whose check is a deterministic script. Dispatch only via the guild lifecycle with a Task-ID.",
+      "model: haiku",
+      "tools: Read, Bash, Write, Grep, Glob"
+    ],
+    "checker-judgment": [
+      "name: checker-judgment",
+      "description: GUILD CHECKER (opus tier) that verifies taste and correctness clauses by re-deriving every claim from the artifacts, ignoring the worker's self-report. For clauses whose check is a judgment rubric. Dispatch only via the guild lifecycle with a Task-ID.",
+      "model: opus",
+      "tools: Read, Bash, Write, Grep, Glob"
+    ],
+    "worker-bulk": [
+      "name: worker-bulk",
+      "description: GUILD WORKER (haiku tier) for mechanical, zero-judgment execution—renames, moves, format conversions, boilerplate, exact-spec data entry. Dispatch only via the guild lifecycle with a Task-ID.",
+      "model: haiku"
+    ],
+    "worker-craft": [
+      "name: worker-craft",
+      "description: GUILD WORKER (opus tier) for user-facing, taste-sensitive work—copy, UI, visual design, anything a person reads or sees and judges on quality of craft. Dispatch only via the guild lifecycle with a Task-ID.",
+      "model: opus"
+    ],
+    "worker-standard": [
+      "name: worker-standard",
+      "description: GUILD WORKER (sonnet tier) for clear-spec implementation—code, config, and structured content where the spec is explicit and the work is judged on correctness. Dispatch only via the guild lifecycle with a Task-ID.",
+      "model: sonnet"
+    ]
+  },
+  "skills": {
+    "audition": [
+      "name: audition",
+      "description: Run a candidate model through a fixed tryout battery before trusting it in the guild—scored, timed, logged. Use when evaluating a new or swapped model for a worker or checker tier, or deciding where a model belongs in the routing table."
+    ],
+    "constitution": [
+      "name: constitution",
+      "description: Phase 0 of a guild job. Interview the user, then write .agent-guild/state/constitution.md—the falsifiable standard every task is checked against. Use when starting a job, defining what \"done right\" means, or writing or refreshing the constitution before decomposing work."
+    ],
+    "decompose": [
+      "name: decompose",
+      "description: Phase 1 of a guild job. Turn .agent-guild/state/spec.md plus the constitution into task files under .agent-guild/state/tasks/, each with an executor, a checker, and a check method. Use after the constitution passes audit, when breaking a job into dispatchable work."
+    ],
+    "init": [
+      "name: init",
+      "description: Finishes a guild plugin install inside a project by copying the per-project payload (the orchestrator contract, check-script tooling, and templates) that a plugin can't ship as always-on config. Explicit-only — the model never invokes this on its own; the user runs it by name. Use when the user says \"finish the guild install here\" or \"set up this project for the guild\".",
+      "disable-model-invocation: true"
+    ],
+    "job": [
+      "name: job",
+      "description: Phase 0 intake for a guild job. Turns an existing GitHub issue or a BYO spec ($ARGUMENTS — issue number, owner/repo#N, issue URL, local file path, or other URL) into .agent-guild/state/spec.md with a provenance header, then flows straight into /constitution. Use when starting a job from an issue or an existing document — \"build issue #12\", \"kick off a job from this spec\"."
+    ],
+    "retrospective": [
+      "name: retrospective",
+      "description: Phase 3 of a guild job. Read the run state and write .agent-guild/state/retrospective.md—what the checkers caught, where retries and escalations clustered, how disputes were ruled. Use at the end of a job, or when reviewing how a build went and what the constitution missed."
+    ]
+  }
+}

@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Build the publishable agent-guild Claude Code plugin from in-repo sources.
+"""Build the Agent Guild's Claude and Codex plugin distributions.
 
-The guild lives across `.claude/` and `.agent-guild/` so it can be dogfooded
-in this repo, but a plugin ships as one self-contained tree: agents, a fixed
-skill set, hooks plus a generated registration, a per-project payload for the
-future init skill, and a manifest. This script assembles that tree from the
-live sources rather than hand-copying, so the published plugin never drifts
-from what this repo actually runs.
+Shared behavior lives in `guild-core/` and the host-neutral `.agent-guild/`
+payload. Thin adapter metadata supplies host representation; the repository's
+Claude dogfood and both packages are generated views of those sources.
 
 Modes:
-    build-plugin.py              build into ./plugin/ (repo root)
-    build-plugin.py --out DIR    build into DIR instead (what the checks use)
-    build-plugin.py --check      rebuild into a temp dir, diff it against the
-                                  committed plugin/, and run
-                                  `claude plugin validate --strict` on it
+    build-plugin.py              build ./plugin/ and stage ./dist/codex-plugin/
+    build-plugin.py --out DIR    build the Claude target into DIR
+    build-plugin.py --check      verify shared-core wrappers, generated output,
+                                  the Codex release lock, and Claude validation
 
 Exit codes: 0 success; 1 a build or check step failed (message on stderr
 names the actual problem, not a bare "failed").
@@ -23,6 +19,7 @@ Stdlib only, so the kit stays copy-in portable -- see
 """
 import argparse
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -34,10 +31,19 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLAUDE_DIR = os.path.join(ROOT, ".claude")
 GUILD_DIR = os.path.join(ROOT, ".agent-guild")
+CORE_DIR = os.path.join(ROOT, "guild-core")
 PLUGIN_SRC_MANIFEST = os.path.join(ROOT, "scripts", "plugin-src", "plugin.json")
+CLAUDE_ADAPTER_PATH = os.path.join(
+    ROOT, "scripts", "plugin-src", "adapters", "claude.json"
+)
+CODEX_ADAPTER_PATH = os.path.join(
+    ROOT, "scripts", "plugin-src", "adapters", "codex.json"
+)
 PLUGIN_SRC_README = os.path.join(ROOT, "docs", "plugin-readme.md")
 CHANGELOG_PATH = os.path.join(ROOT, "CHANGELOG.md")
 DEFAULT_OUT = os.path.join(ROOT, "plugin")
+DEFAULT_CODEX_OUT = os.path.join(ROOT, "dist", "codex-plugin")
+CODEX_LOCK_PATH = os.path.join(ROOT, "scripts", "plugin-src", "codex.sha256")
 
 GUILD_AGENTS = [
     "auditor",
@@ -48,10 +54,9 @@ GUILD_AGENTS = [
     "worker-standard",
 ]
 
-# The lifecycle skills always ship. `init` (#22) and the hooks nudge (#23)
-# join automatically once their sources exist -- they don't today. Treating
-# them as include-when-present, rather than hardcoding their absence, means
-# this script doesn't need a follow-up edit the day either one lands.
+# The lifecycle skills always ship. Optional components join automatically
+# when their source exists, so the source inventory stays the one inclusion
+# boundary for both host targets.
 GUILD_SKILLS = ["constitution", "decompose", "retrospective", "audition", "job"]
 OPTIONAL_SKILLS = ["init"]
 
@@ -95,10 +100,10 @@ class BuildError(Exception):
 
 def _guard_out_dir(out_dir):
     """Refuse to build into a read-only source tree. The build must never
-    modify its inputs, so a careless --out pointed at .claude/ or
-    .agent-guild/ (which starts with rmtree-ing whatever's already there) is
-    a mistake to catch up front, not a git diff to notice after the fact."""
-    for protected in (CLAUDE_DIR, GUILD_DIR):
+    modify its inputs, so a careless --out pointed at .claude/,
+    .agent-guild/, or guild-core/ is a mistake to catch up front, not a git
+    diff to notice after the builder removes the target."""
+    for protected in (CLAUDE_DIR, GUILD_DIR, CORE_DIR):
         if out_dir == protected or out_dir.startswith(protected + os.sep):
             raise BuildError(
                 f"--out {out_dir} is inside a read-only source tree "
@@ -106,24 +111,71 @@ def _guard_out_dir(out_dir):
             )
 
 
-def copy_agents(out_dir):
-    """Copy exactly the six guild agents byte-identical into agents/."""
-    src_dir = os.path.join(CLAUDE_DIR, "agents")
+def _load_json(path, label):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as error:
+        raise BuildError(f"cannot read {label} {path}: {error}") from error
+
+
+def _render_frontmatter(lines, body):
+    return "---\n" + "\n".join(lines) + "\n---\n\n" + body
+
+
+def _adapter_frontmatter(kind, name, target):
+    adapter = _load_json(CLAUDE_ADAPTER_PATH, "Claude adapter")
+    try:
+        lines = list(adapter[kind][name])
+    except KeyError as error:
+        raise BuildError(
+            f"Claude adapter has no {kind} metadata for {name}"
+        ) from error
+    if target == "codex":
+        codex = _load_json(CODEX_ADAPTER_PATH, "Codex adapter")
+        overrides = codex.get("skill_frontmatter_overrides", {}).get(name, {})
+        for key, value in overrides.items():
+            prefix = f"{key}:"
+            matching = [
+                i for i, line in enumerate(lines) if line.startswith(prefix)
+            ]
+            replacement = f"{key}: {value}"
+            if matching:
+                lines[matching[0]] = replacement
+            else:
+                lines.append(replacement)
+    return lines
+
+
+def copy_agents(out_dir, core_dir=CORE_DIR):
+    """Render Claude agent wrappers around host-neutral role behavior."""
+    src_dir = os.path.join(core_dir, "roles")
     dst_dir = os.path.join(out_dir, "agents")
     os.makedirs(dst_dir, exist_ok=True)
     for name in GUILD_AGENTS:
         src = os.path.join(src_dir, f"{name}.md")
         if not os.path.isfile(src):
-            raise BuildError(f"missing guild agent source: {src}")
-        shutil.copy2(src, os.path.join(dst_dir, f"{name}.md"))
+            raise BuildError(f"missing shared role source: {src}")
+        with open(src, encoding="utf-8") as f:
+            body = f.read()
+        rendered = _render_frontmatter(
+            _adapter_frontmatter("agents", name, "claude"), body
+        )
+        with open(
+            os.path.join(dst_dir, f"{name}.md"), "w", encoding="utf-8"
+        ) as f:
+            f.write(rendered)
 
 
-def copy_skills(out_dir):
-    """Copy the guild skill directories (full contents) into skills/.
+def copy_skills(
+    out_dir, core_dir=CORE_DIR, target="claude", seed_runtime=True
+):
+    """Render target skill wrappers around shared workflow bodies and assets.
+
     Returns the list of skill names actually shipped, so callers that only
     care about what's really in the output (hooks.json, namespacing) don't
     have to re-derive the include-when-present logic themselves."""
-    src_dir = os.path.join(CLAUDE_DIR, "skills")
+    src_dir = os.path.join(core_dir, "workflows")
     dst_dir = os.path.join(out_dir, "skills")
     os.makedirs(dst_dir, exist_ok=True)
     shipped = list(GUILD_SKILLS)
@@ -133,11 +185,66 @@ def copy_skills(out_dir):
     for name in shipped:
         src = os.path.join(src_dir, name)
         if not os.path.isdir(src):
-            raise BuildError(f"missing guild skill source: {src}")
+            raise BuildError(f"missing shared workflow source: {src}")
         shutil.copytree(
             src, os.path.join(dst_dir, name), ignore=_IGNORE_BUILD_BYPRODUCTS
         )
+        skill_path = os.path.join(dst_dir, name, "SKILL.md")
+        with open(skill_path, encoding="utf-8") as f:
+            body = f.read()
+        rendered = _render_frontmatter(
+            _adapter_frontmatter("skills", name, target), body
+        )
+        with open(skill_path, "w", encoding="utf-8") as f:
+            f.write(rendered)
+        if name == "audition" and seed_runtime:
+            results_dir = os.path.join(dst_dir, name, "results")
+            os.makedirs(results_dir, exist_ok=True)
+            with open(
+                os.path.join(results_dir, "results.jsonl"),
+                "w",
+                encoding="utf-8",
+            ):
+                pass
     return shipped
+
+
+def copy_codex_role_sources(out_dir, core_dir=CORE_DIR):
+    """Stage neutral role prompts for the later Codex TOML adapter."""
+    src_dir = os.path.join(core_dir, "roles")
+    dst_dir = os.path.join(out_dir, "core", "roles")
+    shutil.copytree(src_dir, dst_dir, ignore=_IGNORE_BUILD_BYPRODUCTS)
+
+
+def build_dogfood(out_dir, core_dir=CORE_DIR):
+    """Render the Claude wrappers this repository uses while developing."""
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+    os.makedirs(out_dir)
+    copy_agents(out_dir, core_dir)
+    copy_skills(out_dir, core_dir, seed_runtime=False)
+
+
+def sync_dogfood(out_dir=CLAUDE_DIR, core_dir=CORE_DIR):
+    """Overlay generated shared wrappers without touching host-only content."""
+    with tempfile.TemporaryDirectory(prefix="build-dogfood-") as tmp:
+        fresh = os.path.join(tmp, "claude")
+        build_dogfood(fresh, core_dir)
+        os.makedirs(os.path.join(out_dir, "agents"), exist_ok=True)
+        os.makedirs(os.path.join(out_dir, "skills"), exist_ok=True)
+        for name in GUILD_AGENTS:
+            shutil.copy2(
+                os.path.join(fresh, "agents", f"{name}.md"),
+                os.path.join(out_dir, "agents", f"{name}.md"),
+            )
+        for name in [*GUILD_SKILLS, *OPTIONAL_SKILLS]:
+            source = os.path.join(fresh, "skills", name)
+            if os.path.isdir(source):
+                shutil.copytree(
+                    source,
+                    os.path.join(out_dir, "skills", name),
+                    dirs_exist_ok=True,
+                )
 
 
 def copy_hooks(out_dir):
@@ -229,7 +336,7 @@ def generate_hooks_json(out_dir, shipped_hooks):
 
 def assemble_project_template(out_dir):
     """Build project-template/.agent-guild/ -- the per-project payload the
-    future init skill copies into a user's repo: the orchestrator contract,
+    init skill copies into a user's repo: the orchestrator contract,
     the check scripts, the task/verdict templates, and the verdict schema."""
     dst_root = os.path.join(out_dir, "project-template", ".agent-guild")
     os.makedirs(dst_root, exist_ok=True)
@@ -321,7 +428,44 @@ def write_plugin_manifest(out_dir):
     shutil.copy2(PLUGIN_SRC_MANIFEST, os.path.join(dst_dir, "plugin.json"))
 
 
-def build(out_dir):
+def build_codex(out_dir, core_dir=CORE_DIR):
+    """Build the initial Codex target from the same authored release metadata.
+
+    Later target-specific issues add Codex agent, hook, and skill adapters;
+    this substrate owns the output root and the shared version boundary now.
+    """
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+    os.makedirs(os.path.join(out_dir, ".codex-plugin"))
+    copy_codex_role_sources(out_dir, core_dir)
+    copy_skills(out_dir, core_dir, target="codex")
+    manifest = _load_json(PLUGIN_SRC_MANIFEST, "release manifest")
+    codex_adapter = _load_json(CODEX_ADAPTER_PATH, "Codex adapter")
+    manifest.update(
+        {
+            key: value
+            for key, value in codex_adapter.items()
+            if key != "skill_frontmatter_overrides"
+        }
+    )
+    manifest["interface"]["developerName"] = manifest["author"]["name"]
+    with open(
+        os.path.join(out_dir, ".codex-plugin", "plugin.json"),
+        "w",
+        encoding="utf-8",
+    ) as f:
+        json.dump(manifest, f, indent=2)
+        f.write("\n")
+    assemble_project_template(out_dir)
+
+
+def build_distributions(claude_out, codex_out, core_dir=CORE_DIR):
+    """Build both host distributions from the repository's authored inputs."""
+    build(claude_out, core_dir)
+    build_codex(codex_out, core_dir)
+
+
+def build(out_dir, core_dir=CORE_DIR):
     """Run the full build into out_dir, replacing whatever was there. Steps
     run in dependency order: hooks.json needs the hook files already copied
     (to validate against), namespacing needs the skills, project-template, and
@@ -329,8 +473,8 @@ def build(out_dir):
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(out_dir)
-    copy_agents(out_dir)
-    shipped_skills = copy_skills(out_dir)
+    copy_agents(out_dir, core_dir)
+    shipped_skills = copy_skills(out_dir, core_dir)
     shipped_hooks = copy_hooks(out_dir)
     generate_hooks_json(out_dir, shipped_hooks)
     assemble_project_template(out_dir)
@@ -359,9 +503,112 @@ def diff_trees(built, committed):
     for rel in sorted(committed_files - built_files):
         diffs.append(f"missing from a fresh build (committed plugin/ has it): {rel}")
     for rel in sorted(built_files & committed_files):
-        if not filecmp.cmp(os.path.join(built, rel), os.path.join(committed, rel), shallow=False):
+        if not filecmp.cmp(
+            os.path.join(built, rel),
+            os.path.join(committed, rel),
+            shallow=False,
+        ):
             diffs.append(f"content differs: {rel}")
     return diffs
+
+
+def dogfood_diffs(committed, core_dir=CORE_DIR):
+    """Return drift in generated shared wrappers, ignoring host-only siblings."""
+    with tempfile.TemporaryDirectory(prefix="build-dogfood-check-") as tmp:
+        fresh = os.path.join(tmp, "claude")
+        build_dogfood(fresh, core_dir)
+        diffs = []
+        for name in GUILD_AGENTS:
+            rel = os.path.join("agents", f"{name}.md")
+            expected = os.path.join(fresh, rel)
+            actual = os.path.join(committed, rel)
+            if not os.path.isfile(actual):
+                diffs.append(f"missing generated dogfood wrapper: {rel}")
+            elif not filecmp.cmp(expected, actual, shallow=False):
+                diffs.append(f"content differs: {rel}")
+        for name in [*GUILD_SKILLS, *OPTIONAL_SKILLS]:
+            expected = os.path.join(fresh, "skills", name)
+            if not os.path.isdir(expected):
+                continue
+            actual = os.path.join(committed, "skills", name)
+            if not os.path.isdir(actual):
+                diffs.append(f"missing generated dogfood wrapper: skills/{name}")
+                continue
+            diffs.extend(
+                f"skills/{name}/{diff}"
+                for diff in diff_trees(expected, actual)
+                if not (
+                    name == "audition"
+                    and diff.endswith("results/results.jsonl")
+                )
+            )
+        return diffs
+
+
+def tree_digest(root):
+    """Hash a generated tree's paths, executable bits, and bytes."""
+    digest = hashlib.sha256()
+    for current, dirs, files in os.walk(root):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(current, name)
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            with open(path, "rb") as f:
+                payload = f.read()
+            executable = b"1" if os.stat(path).st_mode & 0o111 else b"0"
+            digest.update(rel.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(executable)
+            digest.update(b"\0")
+            digest.update(payload)
+            digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def write_codex_lock(codex_out, lock_path=CODEX_LOCK_PATH):
+    """Record a compact release-artifact fingerprint, never its copied files."""
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as f:
+        f.write(tree_digest(codex_out) + "\n")
+
+
+def codex_lock_problem(lock_path=CODEX_LOCK_PATH, core_dir=CORE_DIR):
+    """Return None when a fresh Codex artifact matches its compact lock."""
+    try:
+        with open(lock_path, encoding="utf-8") as f:
+            expected = f.read().strip()
+    except OSError as error:
+        return f"cannot read Codex release lock {lock_path}: {error}"
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        return f"Codex release lock {lock_path} is malformed"
+    with tempfile.TemporaryDirectory(prefix="build-codex-lock-") as tmp:
+        fresh = os.path.join(tmp, "codex")
+        build_codex(fresh, core_dir)
+        actual = tree_digest(fresh)
+    if actual != expected:
+        return (
+            f"Codex release lock {lock_path} is stale -- run "
+            "`python3 scripts/build-plugin.py`"
+        )
+    return None
+
+
+def distribution_diffs(committed_claude, committed_codex):
+    """Rebuild both targets and return target-prefixed drift diagnostics."""
+    with tempfile.TemporaryDirectory(prefix="build-distributions-check-") as tmp:
+        fresh_claude = os.path.join(tmp, "claude")
+        fresh_codex = os.path.join(tmp, "codex")
+        build_distributions(fresh_claude, fresh_codex)
+        return [
+            *(
+                f"claude: {diff}"
+                for diff in diff_trees(fresh_claude, committed_claude)
+            ),
+            *(
+                f"codex: {diff}"
+                for diff in diff_trees(fresh_codex, committed_codex)
+            ),
+        ]
 
 
 def check_changelog_section():
@@ -393,56 +640,80 @@ def check_changelog_section():
 
 
 def run_check():
-    """Rebuild into a temp dir and compare against the committed plugin/.
+    """Verify generated dogfood, the published Claude tree, and Codex lock.
+
     Exits 0 only when the changelog has caught up with the manifest version,
-    the trees match, AND `claude plugin validate --strict` passes -- a
-    missing plugin/, a content drift, a missing `claude` CLI, or a
-    forgotten changelog section must all fail loudly rather than let a
-    skipped check read as green."""
+    generated wrappers and artifacts match the shared core, AND
+    `claude plugin validate --strict` passes on the Claude target."""
     changelog_problem = check_changelog_section()
     if changelog_problem:
         sys.stderr.write(f"build-plugin.py --check: {changelog_problem}\n")
         return 1
 
-    committed = DEFAULT_OUT
-    if not os.path.isdir(committed):
+    if not os.path.isdir(DEFAULT_OUT):
         sys.stderr.write(
-            f"build-plugin.py --check: {committed} does not exist -- run a "
-            f"build first\n"
+            f"build-plugin.py --check: Claude output {DEFAULT_OUT} does not "
+            "exist -- run a build first\n"
         )
         return 1
 
-    with tempfile.TemporaryDirectory(prefix="build-plugin-check-") as tmp:
-        fresh = os.path.join(tmp, "plugin")
-        build(fresh)
-        diffs = diff_trees(fresh, committed)
-        if diffs:
-            sys.stderr.write(
-                f"build-plugin.py --check: {committed} is stale relative to a "
-                f"fresh build ({len(diffs)} difference(s)):\n"
-            )
-            for d in diffs:
-                sys.stderr.write(f"  - {d}\n")
-            return 1
+    wrapper_diffs = dogfood_diffs(CLAUDE_DIR)
+    if wrapper_diffs:
+        sys.stderr.write(
+            "build-plugin.py --check: dogfooded Claude wrappers diverge from "
+            f"the shared core ({len(wrapper_diffs)} difference(s)):\n"
+        )
+        for diff in wrapper_diffs:
+            sys.stderr.write(f"  - {diff}\n")
+        return 1
 
-        claude_bin = shutil.which("claude")
-        if claude_bin is None:
-            sys.stderr.write(
-                "build-plugin.py --check: the `claude` CLI is not on PATH -- "
-                "cannot run `claude plugin validate --strict`, and a skipped "
-                "validation must never report success\n"
-            )
-            return 1
+    if os.path.isdir(DEFAULT_CODEX_OUT):
+        diffs = distribution_diffs(DEFAULT_OUT, DEFAULT_CODEX_OUT)
+    else:
+        with tempfile.TemporaryDirectory(prefix="build-claude-check-") as tmp:
+            fresh_claude = os.path.join(tmp, "claude")
+            build(fresh_claude)
+            diffs = [
+                f"claude: {diff}"
+                for diff in diff_trees(fresh_claude, DEFAULT_OUT)
+            ]
+    if diffs:
+        sys.stderr.write(
+            "build-plugin.py --check: generated distributions are stale "
+            f"relative to a fresh build ({len(diffs)} difference(s)):\n"
+        )
+        for d in diffs:
+            sys.stderr.write(f"  - {d}\n")
+        return 1
 
-        proc = subprocess.run([claude_bin, "plugin", "validate", "--strict", committed])
-        if proc.returncode != 0:
-            sys.stderr.write(
-                f"build-plugin.py --check: `claude plugin validate --strict "
-                f"{committed}` failed (exit {proc.returncode})\n"
-            )
-            return proc.returncode
+    lock_problem = codex_lock_problem()
+    if lock_problem:
+        sys.stderr.write(f"build-plugin.py --check: {lock_problem}\n")
+        return 1
 
-    print(f"OK: {committed} matches a fresh build and passes claude plugin validate --strict")
+    claude_bin = shutil.which("claude")
+    if claude_bin is None:
+        sys.stderr.write(
+            "build-plugin.py --check: the `claude` CLI is not on PATH -- "
+            "cannot run `claude plugin validate --strict`, and a skipped "
+            "validation must never report success\n"
+        )
+        return 1
+
+    proc = subprocess.run(
+        [claude_bin, "plugin", "validate", "--strict", DEFAULT_OUT]
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(
+            f"build-plugin.py --check: `claude plugin validate --strict "
+            f"{DEFAULT_OUT}` failed (exit {proc.returncode})\n"
+        )
+        return proc.returncode
+
+    print(
+        "OK: shared-core wrappers, Claude output, and the Codex release lock "
+        "match fresh builds; the Claude plugin passes strict validation"
+    )
     return 0
 
 
@@ -450,13 +721,12 @@ def main():
     parser = argparse.ArgumentParser(
         prog="build-plugin.py",
         description=(
-            "Build the publishable agent-guild plugin from in-repo sources.\n\n"
+            "Build Agent Guild host distributions from shared sources.\n\n"
             "Modes:\n"
-            "  build-plugin.py              build into ./plugin/ (repo root)\n"
-            "  build-plugin.py --out DIR    build into DIR instead (used by tests)\n"
-            "  build-plugin.py --check      rebuild into a temp dir, diff against\n"
-            "                               the committed plugin/, and run\n"
-            "                               `claude plugin validate --strict` on it"
+            "  build-plugin.py              build ./plugin/; stage Codex in ./dist/\n"
+            "  build-plugin.py --out DIR    build the Claude target into DIR\n"
+            "  build-plugin.py --check      verify core-derived wrappers, outputs,\n"
+            "                               the Codex lock, and Claude validation"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -464,7 +734,7 @@ def main():
     mode.add_argument(
         "--out",
         metavar="DIR",
-        help="build into DIR instead of the default ./plugin/ (repo root)",
+        help="build only the Claude target into DIR",
     )
     mode.add_argument(
         "--check",
@@ -476,10 +746,21 @@ def main():
     try:
         if args.check:
             return run_check()
-        out_dir = os.path.abspath(args.out) if args.out else DEFAULT_OUT
-        _guard_out_dir(out_dir)
-        build(out_dir)
-        print(f"OK: built plugin at {out_dir}")
+        if args.out:
+            out_dir = os.path.abspath(args.out)
+            _guard_out_dir(out_dir)
+            build(out_dir)
+            print(f"OK: built Claude plugin at {out_dir}")
+            return 0
+        _guard_out_dir(DEFAULT_OUT)
+        _guard_out_dir(DEFAULT_CODEX_OUT)
+        sync_dogfood()
+        build_distributions(DEFAULT_OUT, DEFAULT_CODEX_OUT)
+        write_codex_lock(DEFAULT_CODEX_OUT)
+        print(
+            f"OK: built Claude plugin at {DEFAULT_OUT} and Codex plugin at "
+            f"{DEFAULT_CODEX_OUT}"
+        )
         return 0
     except BuildError as e:
         sys.stderr.write(f"build-plugin.py: {e}\n")

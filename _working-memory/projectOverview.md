@@ -7,19 +7,21 @@ The Agent Guild is a copy-in kit that runs Claude Code as an org chart: an expen
 ## Stack
 
 - Language: Python 3 for the enforcement hooks (stdlib only, zero deps); Bash and one Node/ESM script for the check scripts.
-- Framework: none. Pure Claude Code primitives—custom agents, skills, hooks, and `CLAUDE.md` memory.
+- Framework: none. Host primitives only—agents, skills, hooks, and persistent project guidance—with Claude and Codex packages generated from one source set.
 - Data layer: a file-based message bus under `.agent-guild/state/` (Markdown with YAML frontmatter). No database.
 - Only manifest: `.agent-guild/scripts/package.json` (`playwright` + `@axe-core/playwright`), self-installed on first run for `check-a11y.mjs` alone. Every other check is dependency-free.
 - Deployment: copy two directories into a host repo. No build step.
 
 ## Repository Structure
 
-- `.claude/` — the guild's agents, skills, and the `settings.json` hooks block. Claude Code discovers these here by location and nowhere else. `agents/checker-courier.md` is the first external-lane member: a haiku courier relaying judgment checks to a vendor CLI.
+- `guild-core/` — the only authored home for shared role behavior and published workflow bodies/assets. It contains no Claude agent frontmatter or Codex TOML; host representation belongs to adapters.
+- `.claude/` — generated shared wrappers plus host-only agents, skills, and the `settings.json` hooks block used to dogfood the Claude host. Claude Code discovers these here by location and nowhere else. `agents/checker-courier.md` is the first external-lane member: a haiku courier relaying judgment checks to a vendor CLI.
 - `.agent-guild/` — everything else the kit owns: `hooks/`, `scripts/`, `templates/`, `schemas/` (the verdict and vendor-call JSON contracts), the orchestrator contract at `.agent-guild/CLAUDE.md`, and the runtime `state/` bus (gitignored).
 - `CLAUDE.md` (root) — a one-line `@.agent-guild/CLAUDE.md` import that loads the contract every session.
-- `plugin/` — the committed, built plugin tree (agents, skills, hooks, and the per-project `project-template/` payload), assembled from in-repo sources by `scripts/build-plugin.py`. Never hand-edited (see [[conventions]]).
+- `plugin/` — the committed Claude plugin tree (agents, skills, hooks, and the per-project `project-template/` payload), assembled from in-repo sources by `scripts/build-plugin.py`. Never hand-edited (see [[conventions]]).
+- `dist/codex-plugin/` — the ignored, release-stage Codex artifact generated from the shared core. Only its compact `scripts/plugin-src/codex.sha256` drift lock is committed until #53 defines the publishing surface; later v0.5.1 issues add the active Codex agent, hook, installer, and invocation adapters.
 - `.claude-plugin/marketplace.json` — makes this repo its own plugin marketplace, sourcing `./plugin`.
-- `scripts/build-plugin.py` — assembles and `--check`-validates `plugin/`; `scripts/make-changelog.py` — generates `CHANGELOG.md` sections from version-bump boundaries. `docs/` — `roles.md` (the guild roster), `publishing.md` (the release ritual), `vendor-ledger.md` (the ledger contract), `handoff-cost.md` (what an external dispatch costs, measured), `plugin-readme.md` (built into `plugin/README.md`), and `plugin-publish-plan.md`.
+- `scripts/plugin-src/adapters/` — thin host-bound frontmatter and Codex interface metadata. `scripts/build-plugin.py` renders dogfood and both packages from core plus adapters, and `--check` verifies generated wrappers, the published Claude tree, the staged Codex tree when present, and its committed lock; `scripts/make-changelog.py` generates `CHANGELOG.md` sections from version-bump boundaries. `docs/` — `roles.md` (the guild roster), `publishing.md` (the release ritual), `vendor-ledger.md` (the ledger contract), `handoff-cost.md` (what an external dispatch costs, measured), `plugin-readme.md` (built into `plugin/README.md`), and `plugin-publish-plan.md`.
 - `_working-memory/`, `scripts/`, `.github/`, `AGENTS.md` — the working-memory kit, a separate copy-in tool layered on top of the guild, committed into this repo (see [[decisionLog]]).
 
 ## Key Constraints

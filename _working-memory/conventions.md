@@ -4,7 +4,8 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 
 ## Dispatch Protocol
 
-- Every worker or checker dispatch prompt must carry a `Task-ID: T-NNN` line; the auditor carries `Audit-ID: CON-audit` or `DEC-audit`; auditions carry `Audition-ID: A-NNN`. `dispatch-guard` blocks any guild dispatch missing its id. (`.agent-guild/hooks/dispatch-guard.py`)
+- Every worker or checker dispatch must carry a `Task-ID: T-NNN`; the auditor carries `Audit-ID: CON-audit` or `DEC-audit`; auditions carry `Audition-ID: A-NNN`. `dispatch-guard` blocks any guild dispatch missing its id. (`.agent-guild/hooks/dispatch-guard.py`)
+- Where that id rides depends on the host. A Claude dispatch puts it in the prompt; a Codex dispatch puts it in `task_name`, because Codex encrypts the prompt before any hook runs. `dispatch-guard` reads the structured field first and falls back to the prompt line, so one dispatch shape works on both. (#71)
 - Never pass a `model` override that disagrees with the task's `executor_model`. `dispatch-guard` blocks the mismatch—it's the backstop for a tier bump you recorded but forgot to apply.
 - A FAIL comes back to the same worker on the same model with the checker's verbatim diagnosis copied into the task's `## Rework diagnosis`. A tier gets `max_retries` (default 2) tries before escalation.
 - Dual-check regime: until #34 closes, every task reaching `checking` also gets a `checker-courier` second opinion after its checker of record returns. Claude hosts use the `codex` suffix/lane; Codex hosts use `claude`. The suffixed verdict is comparison data—it never outvotes the standard stem—and a disagreement is dispute-grade input the orchestrator reads directly.

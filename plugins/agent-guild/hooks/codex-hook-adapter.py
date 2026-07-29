@@ -32,6 +32,9 @@ PATCH_TARGET_RE = re.compile(
     re.MULTILINE,
 )
 TIER_NAMES = {"haiku", "sonnet", "opus", "fable"}
+DISPATCH_TOOLS = ("Agent", "spawn_agent")
+WRITE_TOOLS = ("Edit", "Write", "apply_patch")
+KNOWN_TOOLS = DISPATCH_TOOLS + WRITE_TOOLS
 
 
 class AdapterError(Exception):
@@ -103,10 +106,13 @@ def _dispatch_input(data):
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         raise AdapterError("PreToolUse dispatch has no object tool_input")
+    # `task_name` carries the guild id (#71), so it can't also back-stop the
+    # agent name here. A dispatch naming no agent is better off failing the
+    # guild-membership test than being handed an id to match against
+    # GUILD_AGENTS.
     agent = (
         tool_input.get("agent_type")
         or tool_input.get("subagent_type")
-        or tool_input.get("task_name")
         or ""
     )
     prompt_parts = []
@@ -127,6 +133,12 @@ def _dispatch_input(data):
     # selected Guild role's default tier unless an explicit tier label arrived.
     if isinstance(model, str) and model.strip().lower() in TIER_NAMES:
         mapped["model"] = model.strip().lower()
+    # The one field that survives both host boundaries in the clear. Passed
+    # through verbatim rather than parsed here: sorting a bare id into its
+    # namespace is gate policy, and this file owns host representation only.
+    task_name = tool_input.get("task_name")
+    if isinstance(task_name, str) and task_name.strip():
+        mapped["dispatch_id"] = task_name.strip()
     return {**data, "tool_input": mapped}
 
 
@@ -215,7 +227,20 @@ def _mapped_input(gate, data, skill_prefix):
 def _bare_tool_name(value):
     if not isinstance(value, str):
         return ""
-    return re.split(r"(?:__|[.:])", value)[-1]
+    name = re.split(r"(?:__|[.:])", value)[-1]
+    if name in KNOWN_TOOLS:
+        return name
+    # Codex glues a tool's namespace to its name with no separator at all:
+    # `collaboration` + `spawn_agent` arrives as `collaborationspawn_agent`.
+    # The session transcript keeps the two as distinct fields, so this is a
+    # presentation quirk of the hook layer rather than a rename, and the
+    # longest known suffix recovers the real tool (#71). The registered
+    # matchers bound what reaches here, so this can't quietly fold an
+    # unrelated tool into a guild-relevant one.
+    for known in sorted(KNOWN_TOOLS, key=len, reverse=True):
+        if name.endswith(known):
+            return known
+    return name
 
 
 def main(argv):
@@ -240,19 +265,12 @@ def main(argv):
                 f"{actual_event or 'no hook_event_name'}"
             )
         tool_name = _bare_tool_name(data.get("tool_name"))
-        if gate == "dispatch-guard" and tool_name not in {
-            "Agent",
-            "spawn_agent",
-        }:
+        if gate == "dispatch-guard" and tool_name not in DISPATCH_TOOLS:
             raise AdapterError(
                 f"dispatch-guard expected Agent or spawn_agent, got "
                 f"{data.get('tool_name') or 'no tool_name'}"
             )
-        if gate == "orchestrator-write-guard" and tool_name not in {
-            "Edit",
-            "Write",
-            "apply_patch",
-        }:
+        if gate == "orchestrator-write-guard" and tool_name not in WRITE_TOOLS:
             raise AdapterError(
                 "orchestrator-write-guard expected Edit, Write, or "
                 f"apply_patch, got {data.get('tool_name') or 'no tool_name'}"

@@ -62,7 +62,7 @@ Statuses and who moves them:
 
 The loop:
 
-1. Move a `pending` task to `assigned` and dispatch its executor. **Every worker/checker dispatch prompt must contain a `Task-ID: T-NNN` line** (auditor: `Audit-ID:`). `dispatch-guard` blocks any dispatch that omits it.
+1. Move a `pending` task to `assigned` and dispatch its executor. **Every worker/checker dispatch must carry a `Task-ID: T-NNN`** (auditor: `Audit-ID:`)—as a line in the prompt on a Claude host, and in the dispatch's `task_name` field on a Codex host, which encrypts the prompt before any gate can read it. `dispatch-guard` blocks any dispatch it can't identify.
 2. The worker returns with the task at `needs-check`. Set it to `checking` and dispatch its checker.
 3. A checker's verdict of record is JSON at `.agent-guild/state/verdicts/T-NNN-<tier>-r<retries>.json` (schema: `.agent-guild/schemas/verdict.schema.json`), with a rendered `.md` sibling at the same stem for you to read:
    - **pass** → set `complete`.

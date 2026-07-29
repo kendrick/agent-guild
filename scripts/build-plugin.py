@@ -360,7 +360,8 @@ def generate_codex_agents(out_dir, core_dir=CORE_DIR):
         f.write(
             "- Worker and checker dispatches carry `Task-ID: T-NNN`; "
             "auditor dispatches carry `Audit-ID: CON-audit` or "
-            "`Audit-ID: DEC-audit`.\n"
+            "`Audit-ID: DEC-audit`. Put the id in the prompt on a Claude "
+            "host, in `task_name` on a Codex host.\n"
         )
         f.write(
             "- Read-only agents return the intended state-file path and "
@@ -524,6 +525,18 @@ def generate_hooks_json(out_dir, shipped_hooks):
         f.write("\n")
 
 
+# Codex reports a namespaced tool as its namespace and name run together, so
+# `collaboration` + `spawn_agent` arrives as `collaborationspawn_agent`. Its
+# matchers are anchored regexes: `Agent|spawn_agent` never fired against that
+# name while `.*` did, so the namespace has to be spelled out here or the
+# dispatch gate is silently absent (#71). Bounded to a lowercase prefix and
+# to `spawn_agent` on purpose: `collaborationwait_agent` rides the same
+# namespace and must not reach a gate that would then block it. The write
+# tools need no equivalent, `apply_patch` arrives unnamespaced.
+CODEX_DISPATCH_MATCHER = "[a-z]*spawn_agent|Agent"
+CODEX_WRITE_MATCHER = "Edit|Write|apply_patch"
+
+
 def _codex_hook_groups(command_root, skill_prefix):
     adapter = f'python3 "{command_root}/codex-hook-adapter.py"'
     nudge_command = f"{adapter} session-nudge"
@@ -545,7 +558,7 @@ def _codex_hook_groups(command_root, skill_prefix):
         ],
         "PreToolUse": [
             {
-                "matcher": "Agent|spawn_agent",
+                "matcher": CODEX_DISPATCH_MATCHER,
                 "hooks": [
                     {
                         "type": "command",
@@ -555,7 +568,7 @@ def _codex_hook_groups(command_root, skill_prefix):
                 ],
             },
             {
-                "matcher": "Edit|Write|apply_patch",
+                "matcher": CODEX_WRITE_MATCHER,
                 "hooks": [
                     {
                         "type": "command",

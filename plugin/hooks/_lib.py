@@ -63,6 +63,32 @@ AUDIT_ID_RE = re.compile(r"\bAudit-ID:\s*(CON-audit|DEC-audit)", re.IGNORECASE)
 # gate—so they carry their own id namespace that the gates log and wave through.
 AUDITION_ID_RE = re.compile(r"\bAudition-ID:\s*(A-\d+)", re.IGNORECASE)
 
+# Issue #71: Codex encrypts a dispatch's `message` before any hook sees it, so
+# the labelled forms above have nothing to match against on that host. The id
+# instead rides in `task_name`, which the dispatcher sets and which stays clear
+# through both the dispatch payload and the transcript. A bare field value has
+# no label to key on, so these sort it by shape.
+BARE_ID_RES = (
+    ("task", re.compile(r"^(T-\d+)$", re.IGNORECASE)),
+    ("audit", re.compile(r"^(CON-audit|DEC-audit)$", re.IGNORECASE)),
+    ("audition", re.compile(r"^(A-\d+)$", re.IGNORECASE)),
+)
+
+
+def bare_id(value):
+    """Sort a bare dispatch id into ``(kind, id)``—kind being 'task', 'audit',
+    or 'audition'. Returns ``(None, None)`` for a value in no known namespace,
+    which is the common case: `task_name` is a free-text field and most of what
+    arrives there is a dispatcher's own label, not a guild id."""
+    if not isinstance(value, str):
+        return None, None
+    value = value.strip()
+    for kind, pattern in BARE_ID_RES:
+        match = pattern.match(value)
+        if match:
+            return kind, match.group(1)
+    return None, None
+
 
 def project_dir():
     d = os.environ.get("CLAUDE_PROJECT_DIR")
@@ -327,6 +353,15 @@ def id_from_transcript(transcript_path):
                     except json.JSONDecodeError:
                         arguments = {}
                 got = _id_in(_dispatch_prompt(arguments))
+                if not got:
+                    # The prompt scan above finds nothing on a Codex host,
+                    # where `message` is encrypted here exactly as it is in
+                    # the dispatch payload. `task_name` is clear at both ends,
+                    # which is why the id rides there (#71). PROVISIONAL: no
+                    # SubagentStop has ever fired on Codex, so this branch is
+                    # inferred from transcript structure rather than observed
+                    # against a real return—see #68.
+                    got = bare_id(arguments.get("task_name"))[1]
                 if got:
                     tool_ids.append(got)
 

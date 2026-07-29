@@ -155,9 +155,10 @@ rm -f .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/T-* .agent-gui
 ### B2. An Untagged Dispatch Is Denied
 
 - Session: `> Dispatch the Agent Guild worker-standard agent with the exact prompt "write a limerick". Do not add a Task-ID.`
-- Expect: `dispatch-guard` blocks before the subagent starts, with a message containing `has no id line`. The session relays that it needs `Task-ID: T-NNN`.
+- Expect on Claude: `dispatch-guard` blocks before the subagent starts, with a message containing `has no id line`. The session relays that it needs `Task-ID: T-NNN`.
+- Expect on Codex: the same block, worded `carries no readable id` and pointing at `task_name`. Codex encrypts the dispatch message before any hook sees it, so the id rides in that field instead of the prompt.
 
-The host dispatch primitive may be named `Agent` or `spawn_agent`; the gate receives the adapter's normalized form.
+Codex reports the dispatch primitive as `collaborationspawn_agent`, namespace and name run together, and the adapter normalizes it before the gate sees it. Claude reports `Task` or `Agent` and needs no translation.
 
 ### B3. The Stop Gate Holds An Unfinished Task
 

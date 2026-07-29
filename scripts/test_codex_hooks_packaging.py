@@ -6,6 +6,7 @@ Run: python3 scripts/test_codex_hooks_packaging.py
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -141,8 +142,28 @@ class CodexHookPackagingTest(unittest.TestCase):
         pre_tool_groups = plugin_config["hooks"]["PreToolUse"]
         self.assertEqual(
             {group["matcher"] for group in pre_tool_groups},
-            {"Agent|spawn_agent", "Edit|Write|apply_patch"},
+            {BUILD.CODEX_DISPATCH_MATCHER, BUILD.CODEX_WRITE_MATCHER},
         )
+
+    def test_dispatch_matcher_covers_the_namespaced_tool_name(self):
+        """The registered matcher is the whole gate on a Codex host: when it
+        misses, dispatch-guard is silently absent rather than blocking, which
+        is how v0.5.1 shipped an unenforced host (#71). Codex anchors its
+        matchers, since `Agent|spawn_agent` never fired against the
+        concatenated name while `.*` did, so these assert under fullmatch,
+        the strictest of the plausible semantics."""
+        dispatch = re.compile(BUILD.CODEX_DISPATCH_MATCHER)
+        for name in ("collaborationspawn_agent", "spawn_agent", "Agent"):
+            self.assertTrue(dispatch.fullmatch(name), name)
+        # A sibling in the same namespace. Matching it would drag a tool the
+        # gate can't read into a gate that fails closed.
+        for name in ("collaborationwait_agent", "Bash", "spawn_agents"):
+            self.assertIsNone(dispatch.fullmatch(name), name)
+
+        write = re.compile(BUILD.CODEX_WRITE_MATCHER)
+        # Unnamespaced in every capture, unlike the dispatch tool.
+        for name in ("apply_patch", "Edit", "Write"):
+            self.assertTrue(write.fullmatch(name), name)
 
     def test_ide_install_merges_only_guild_handlers_and_is_idempotent(self):
         project = os.path.join(self.tempdir.name, "project")

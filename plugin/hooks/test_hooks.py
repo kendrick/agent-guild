@@ -406,6 +406,49 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-bulk", "prompt": "just sort the lines"}}, proj_aud)
 check("no Task-ID and no Audition-ID → exit 2", rc == 2 and "no id line" in err, err)
 
+# ------------------------------------------- dispatch-guard: structured id field
+# Issue #71: Codex encrypts the dispatch message before any hook runs, so the id
+# arrives in a field instead of a prompt line. The gate is host-neutral and takes
+# either. Pinned here and not only in the adapter suite, so that losing the field
+# branch fails against dispatch-guard itself rather than against one host's
+# translation of it.
+print("dispatch-guard.py: structured dispatch_id (issue #71)")
+proj_id = fresh_proj()
+con_pass(proj_id)
+write_task(proj_id, "T-001", status="assigned")
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "dispatch_id": "T-001",
+                                        "prompt": "no id line here, the host encrypted it"}}, proj_id)
+check("dispatch_id carries a Task-ID → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# With no field to read, the prompt line still decides. That's every Claude
+# dispatch, so this is the check that #71 left that host alone.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-001"}}, proj_id)
+check("prompt line still works with no dispatch_id → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# A free-text task_name is the common case: it's the dispatcher's own label,
+# and reading one as an id would attach the dispatch to a task nobody named.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "dispatch_id": "lifecycle_payload",
+                                        "prompt": "no id line"}}, proj_id)
+check("dispatch_id in no known namespace → exit 2", rc == 2 and "no id line" in err, err)
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor", "dispatch_id": "CON-audit"}}, proj_id)
+check("dispatch_id carries an Audit-ID → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# The auditor takes an Audit-ID and nothing else. This used to raise instead of
+# block, which on a PreToolUse hook means exit 1—waved through, not stopped.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor", "prompt": "Task-ID: T-001"}}, proj_id)
+check("auditor handed a Task-ID → exit 2", rc == 2 and "takes an" in err, f"rc={rc} err={err}")
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-bulk", "dispatch_id": "A-001"}}, fresh_proj())
+check("dispatch_id carries an Audition-ID → exit 0", rc == 0, f"rc={rc} err={err}")
+
 # ---------------------------------------- dispatch-guard: namespaced subagent_type
 # Issue #27: a plugin-installed guild ships subagent_type as `<plugin>:<name>`
 # (e.g. `agent-guild:worker-standard`), and a bare-name GUILD_AGENTS membership

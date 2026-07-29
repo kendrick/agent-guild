@@ -4,8 +4,9 @@
 Non-guild subagents pass through untouched. For a worker/checker/auditor
 dispatch, this blocks unless:
 
-  - the prompt carries a `Task-ID: T-NNN` (or `Audit-ID:`) line, so
-    subagent-return can later identify what finished;
+  - the dispatch carries a `Task-ID: T-NNN` (or `Audit-ID:`), so
+    subagent-return can later identify what finished—as a prompt line, or in
+    `task_name` on a host that encrypts the prompt;
   - that task file exists;
   - the dispatch is state-legal for the role (worker ⇒ assigned,
     checker ⇒ checking);
@@ -53,19 +54,40 @@ def main(data):
     prompt = ti.get("prompt", "") or ""
     override = (ti.get("model") or "").strip().lower()
 
+    # Two mechanisms carry the same id, because one host makes the other
+    # impossible: Codex encrypts the dispatch `message` before any hook runs,
+    # so a labelled line in the prose has nothing to match against. There the
+    # adapter lifts the dispatcher-set `task_name` into `dispatch_id`, which is
+    # readable at dispatch and again at return (#71). The structured field wins
+    # where both exist—it's the one the dispatcher set deliberately.
+    kind, ident = _lib.bare_id(ti.get("dispatch_id"))
+    if kind is None:
+        aud = _lib.AUDITION_ID_RE.search(prompt)
+        tm = _lib.TASK_ID_RE.search(prompt)
+        am = _lib.AUDIT_ID_RE.search(prompt)
+        match = aud or tm or am
+        if match:
+            kind = "audition" if aud else ("task" if tm else "audit")
+            ident = match.group(1)
+
     # Audition path: a tryout runs outside the lifecycle—no task file, no tier,
     # no CON-audit precondition. An Audition-ID is enough to log and pass; the
     # battery's score.py judges the output, not this gate.
-    aud = _lib.AUDITION_ID_RE.search(prompt)
-    if aud:
-        _log(raw, aud.group(1), override or _lib.DEFAULT_MODEL[agent])
+    if kind == "audition":
+        _log(raw, ident, override or _lib.DEFAULT_MODEL[agent])
         return 0
 
     # 1. The dispatch must name what it's working on.
-    tm = _lib.TASK_ID_RE.search(prompt)
-    am = _lib.AUDIT_ID_RE.search(prompt)
-    if not tm and not am:
+    if kind is None:
         want = "Audit-ID: CON-audit" if agent == "auditor" else "Task-ID: T-NNN"
+        if str(data.get("hook_host", "")).strip().lower() == "codex":
+            bare = "CON-audit" if agent == "auditor" else "T-NNN"
+            return _lib.block(
+                f"Dispatch to {agent} carries no readable id. This host "
+                f"encrypts the dispatch message, so set task_name to `{bare}` "
+                "instead. That field survives to the return gate, which is "
+                "what identifies this subagent's work when it finishes."
+            )
         return _lib.block(
             f"Dispatch to {agent} has no id line. Put `{want}` in the prompt so "
             "the return gate can identify this subagent's work when it finishes."
@@ -73,10 +95,16 @@ def main(data):
 
     # Auditor path: id is CON-audit / DEC-audit, no task file, no tier logic.
     if agent == "auditor":
-        _log(raw, am.group(1), override or _lib.DEFAULT_MODEL[agent])
+        if kind != "audit":
+            return _lib.block(
+                f"Dispatch to auditor names {ident}, but the auditor takes an "
+                "Audit-ID (CON-audit or DEC-audit). Workers and checkers take "
+                "a Task-ID."
+            )
+        _log(raw, ident, override or _lib.DEFAULT_MODEL[agent])
         return 0
 
-    tid = tm.group(1) if tm else None
+    tid = ident if kind == "task" else None
     if tid is None:
         return _lib.block(
             f"Dispatch to {agent} names an Audit-ID but {agent} is not the "

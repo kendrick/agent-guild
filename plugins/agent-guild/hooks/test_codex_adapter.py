@@ -22,6 +22,45 @@ ADAPTER = os.path.join(HOOKS, "codex-hook-adapter.py")
 KIT_ROOT = os.path.dirname(HOOKS)
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
+# Copied verbatim from a codex-cli 0.145.0 dispatch captured while probing
+# issue #67, minus `cwd`, which each test points at its own temp project. Two
+# things here are the whole of issue #71 and neither survives paraphrase: the
+# tool arrives as its namespace and name run together, and `message` is a
+# Fernet token no hook can read. Anything that regresses either one should
+# fail against this payload rather than against a tidied-up fixture.
+LIVE_DISPATCH = {
+    "session_id": "019fac53-247f-7290-b07f-38d4e4be17dd",
+    "turn_id": "019fac53-252d-7083-8c73-13adb5dcc587",
+    "transcript_path": (
+        "/Users/karnett/.codex/sessions/2026/07/29/"
+        "rollout-2026-07-29T00-22-37-019fac53-247f-7290-b07f-38d4e4be17dd"
+        ".jsonl"
+    ),
+    "hook_event_name": "PreToolUse",
+    "model": "gpt-5.6-terra",
+    "permission_mode": "bypassPermissions",
+    "tool_name": "collaborationspawn_agent",
+    "tool_input": {
+        "task_name": "lifecycle_payload",
+        "agent_type": "worker-standard",
+        "fork_turns": "none",
+        "message": (
+            "gAAAAABqaY4itlnl6FTGVOtwGIrOMQjBuCTHUBgGHBP-_xNXZCUOxpZMK8jF"
+            "_LCb8d0Z8mYEHUBHuz9vTuUc-waaUmXI_7Oa6flLWFWxYY6_62cHUGZ5LdKb"
+            "E_zTaHut3apNuOy2TrwU"
+        ),
+    },
+    "tool_use_id": "call_RwoZAd8u0GQcwDzfikH4RrHx",
+}
+
+
+def live_dispatch(project, task_name=None):
+    payload = json.loads(json.dumps(LIVE_DISPATCH))
+    payload["cwd"] = project
+    if task_name is not None:
+        payload["tool_input"]["task_name"] = task_name
+    return payload
+
 
 def write_task(project, task_id, **overrides):
     fields = {
@@ -42,6 +81,20 @@ def write_task(project, task_id, **overrides):
     )
     with open(path, "w", encoding="utf-8") as stream:
         stream.write("\n".join(body))
+
+
+def con_pass(project):
+    """dispatch-guard blocks every worker until the constitution has a PASS
+    audit, so any worker-dispatch fixture has to seed one first."""
+    body = (
+        "---\ntask: T\ntier: sonnet\nretry: 0\n"
+        "checker: checker-deterministic\nverdict: PASS\n---\n"
+    )
+    path = os.path.join(
+        project, ".agent-guild", "state", "verdicts", "CON-audit-r0.md"
+    )
+    with open(path, "w", encoding="utf-8") as stream:
+        stream.write(body)
 
 
 def codex_input(event, project, **fields):
@@ -76,6 +129,30 @@ def codex_transcript(project, text, shape="response_item"):
                     "content": [{"type": "input_text", "text": text}],
                 },
             },
+        ]
+    elif shape == "function_call":
+        # How the dispatch above is recorded in the session transcript. `name`
+        # and `namespace` are separate fields here, since the hook layer is
+        # what glues them, and `arguments` arrives as a JSON string carrying
+        # the same encrypted message the dispatch payload did.
+        records = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "spawn_agent",
+                    "namespace": "collaboration",
+                    "arguments": json.dumps(
+                        {
+                            "task_name": text,
+                            "agent_type": "worker-standard",
+                            "fork_turns": "none",
+                            "message": LIVE_DISPATCH["tool_input"]["message"],
+                        }
+                    ),
+                    "call_id": "call_6HoWG9EfZWdrJJnbABRVhxk6",
+                },
+            }
         ]
     elif shape == "event_msg":
         records = [
@@ -182,7 +259,9 @@ class CodexAdapterTest(unittest.TestCase):
         )
         blocked = self.run_adapter("dispatch-guard", untagged)
         self.assertEqual(blocked.returncode, 2, blocked.stderr)
-        self.assertIn("has no id line", blocked.stderr)
+        # Every dispatch through this adapter is a Codex one, so the block
+        # names the field that host can actually read.
+        self.assertIn("no readable id", blocked.stderr)
 
         tagged = {
             **untagged,
@@ -193,6 +272,90 @@ class CodexAdapterTest(unittest.TestCase):
         }
         allowed = self.run_adapter("dispatch-guard", tagged)
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+    def test_live_dispatch_payload_reaches_the_gate_and_is_identified(self):
+        # The gate has to survive the real payload end to end: the glued tool
+        # name, the unreadable message, and an id it can only get from
+        # task_name. Any one of those left unhandled makes the host unusable,
+        # every dispatch rejected for carrying no readable id.
+        write_task(self.project, "T-001", status="assigned")
+        con_pass(self.project)
+
+        as_captured = self.run_adapter(
+            "dispatch-guard", live_dispatch(self.project)
+        )
+        self.assertEqual(as_captured.returncode, 2, as_captured.stderr)
+        self.assertIn("no readable id", as_captured.stderr)
+        # An operator told to fix this by editing the prompt would be chasing
+        # a field this host encrypts. The block has to name task_name.
+        self.assertIn("task_name", as_captured.stderr)
+        self.assertNotIn("in the prompt", as_captured.stderr)
+
+        tagged = self.run_adapter(
+            "dispatch-guard", live_dispatch(self.project, "T-001")
+        )
+        self.assertEqual(tagged.returncode, 0, tagged.stderr)
+        with open(
+            os.path.join(
+                self.project, ".agent-guild", "state", "log", "dispatches.log"
+            ),
+            encoding="utf-8",
+        ) as stream:
+            self.assertIn("T-001", stream.read())
+
+    def test_task_name_carries_audit_and_audition_ids_too(self):
+        auditor = live_dispatch(self.project, "CON-audit")
+        auditor["tool_input"]["agent_type"] = "auditor"
+        allowed = self.run_adapter("dispatch-guard", auditor)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+        # An auditor id on a worker is the same mismatch the prompt path
+        # rejects; arriving in a structured field doesn't excuse it.
+        misrouted = live_dispatch(self.project, "CON-audit")
+        blocked = self.run_adapter("dispatch-guard", misrouted)
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertIn("Task-ID", blocked.stderr)
+
+        # An audition runs outside the lifecycle: no task file, no CON-audit.
+        audition = live_dispatch(self.project, "A-001")
+        audition["tool_input"]["agent_type"] = "worker-bulk"
+        tryout = self.run_adapter("dispatch-guard", audition)
+        self.assertEqual(tryout.returncode, 0, tryout.stderr)
+
+    def test_task_name_is_no_longer_read_as_the_agent_name(self):
+        # agent_type is the only source for the agent. task_name once backed
+        # it up, which would now route a dispatch by its id whenever that id
+        # happened to read like an agent name.
+        payload = live_dispatch(self.project, "worker-standard")
+        del payload["tool_input"]["agent_type"]
+        result = self.run_adapter("dispatch-guard", payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(
+                    self.project,
+                    ".agent-guild",
+                    "state",
+                    "log",
+                    "dispatches.log",
+                )
+            )
+        )
+
+    def test_sibling_namespaced_tool_is_not_folded_into_a_dispatch(self):
+        # `collaborationwait_agent` rides the same namespace as the dispatch
+        # tool. Suffix recovery must not claim it, or the gate would block a
+        # tool it has no business seeing.
+        payload = codex_input(
+            "PreToolUse",
+            self.project,
+            tool_name="collaborationwait_agent",
+            tool_use_id="call_JYbdZh1I2GPvoWUSecH8pTOk",
+            tool_input={"timeout_ms": 60000},
+        )
+        result = self.run_adapter("dispatch-guard", payload)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("expected Agent or spawn_agent", result.stderr)
 
     def test_dispatch_accepts_documented_structured_items_input(self):
         write_task(self.project, "T-056", status="checking")
@@ -365,6 +528,45 @@ class CodexAdapterTest(unittest.TestCase):
         )
         result = self.run_adapter("subagent-return", payload)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_return_recovers_the_id_from_an_encrypted_dispatch_record(self):
+        # PROVISIONAL, and the test can't fix that: SubagentStop has never
+        # been observed firing on a Codex host (#68), so this proves the
+        # parser against the transcript shape rather than against a real
+        # return. What it does rule out is the parser going looking for the
+        # id in the one field the host encrypts.
+        write_task(
+            self.project,
+            "T-056",
+            status="needs-check",
+            artifacts="[README.md]",
+        )
+        transcript = codex_transcript(
+            self.project, "T-056", "function_call"
+        )
+        payload = codex_input(
+            "SubagentStop",
+            self.project,
+            agent_transcript_path=transcript,
+            agent_id="019fa0c0-worker",
+            agent_type="worker-standard",
+            stop_hook_active=False,
+            last_assistant_message="Done.",
+        )
+        result = self.run_adapter("subagent-return", payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # A task_name in no guild namespace is not an id, and inventing one
+        # from it would silently attach a return to the wrong task.
+        unlabelled = codex_transcript(
+            self.project, "lifecycle_payload", "function_call"
+        )
+        blind = self.run_adapter(
+            "subagent-return",
+            {**payload, "agent_transcript_path": unlabelled},
+        )
+        self.assertEqual(blind.returncode, 0, blind.stderr)
+        self.assertIn("could not identify", blind.stderr)
 
     def test_read_only_codex_courier_returns_a_validated_claude_outcome(self):
         seed_verdict_toolchain(self.project)

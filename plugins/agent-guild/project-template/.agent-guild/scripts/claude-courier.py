@@ -44,7 +44,8 @@ VALIDATOR_PATH = os.path.join(SCRIPT_DIR, "validate-verdict.py")
 MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 QUOTA_RE = re.compile(
-    r"(?:rate[ -]?limit|quota|usage[ -]?limit|spend(?:ing)?[ -]?cap|429)",
+    r"(?:rate[ -]?limit|quota|usage[ -]?limit|spend(?:ing)?[ -]?cap"
+    r"|(?<![\w.])429(?![\w.]))",
     re.IGNORECASE,
 )
 
@@ -194,6 +195,10 @@ def _parse_envelope(call):
 
 
 def _is_quota(call, envelope):
+    # Structural signal outranks wording: a real 429 status classifies as
+    # quota even outside the errorish gate (e.g. a "completed" envelope
+    # whose api_error_status still reports the retry-exhausted 429 #52
+    # never observed but the fallback guards against).
     if isinstance(envelope, dict) and envelope.get("api_error_status") == 429:
         return True
     errorish = call["returncode"] != 0 or (
@@ -201,15 +206,20 @@ def _is_quota(call, envelope):
     )
     if not errorish:
         return False
-    text = "\n".join(
-        [
-            call["stdout"],
-            call["stderr"],
-            str(envelope.get("result", ""))
-            if isinstance(envelope, dict)
-            else "",
-        ]
-    )
+    # stdout carries the serialized JSON envelope, so scanning it as text
+    # reads numeric fields like duration_ms as if they were prose — the
+    # bug this task exists to fix. Only stderr (always) and result (only
+    # on an API-error envelope) are prose surfaces worth pattern-matching.
+    # They're joined with a separator, not concatenated raw, so a digit
+    # trailing one surface can never complete "429" with a digit leading
+    # the other.
+    surfaces = [call["stderr"]]
+    if (
+        isinstance(envelope, dict)
+        and envelope.get("terminal_reason") == "api_error"
+    ):
+        surfaces.append(str(envelope.get("result", "")))
+    text = "\n".join(surfaces)
     return bool(QUOTA_RE.search(text))
 
 

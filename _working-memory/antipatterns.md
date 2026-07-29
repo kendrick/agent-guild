@@ -55,3 +55,13 @@
 **What broke:** SubagentStop hands the hook the PARENT transcript, where the dispatch is an assistant `tool_use(Task|Agent)` block, not a user message. The id was never found, the gate failed closed, and the worker hung.
 **Why we backed out:** Wrong place to look; the authoritative dispatch record is the assistant tool_use.
 **Don't suggest:** reading the dispatch id from user messages. Read it from the assistant `tool_use(Task|Agent)` `input.prompt` (last dispatch). See #17.
+
+## 2026-07-28: Don't add courier vendors as a failsafe against courier plumbing bugs
+
+**Tried:** Not a post-mortem — a design on record plus what #69 exposed about it. #11 factors the multi-vendor substrate so that only two clusters differ per lane: the invocation, and "the failure detection (quota and rate-limit strings)," the latter living as per-lane manifest data. The intuition under review was that more lanes (gemini, opencode, qwen) would cross-check each other's failures.
+
+**What broke:** #69's classifier bug is local Python, not model judgment. `_is_quota` sorts an exit code, stdout, stderr, and a parsed envelope into `{verdict, quota, blocked}` with no model in the loop, so a second lane cannot second-guess it — it ships its own copy. The divergence is already visible at N=2: the Codex-host `claude` lane classifies deterministically in `claude-courier.py`, while the Claude-host `codex` lane has no equivalent script and leaves the agent to judge `codex exec` output. Two lanes, two mechanisms, one of them never tested. Five CON-audit rounds on #69 were spent specifying the one that exists.
+
+**Why we backed out:** The classification *algorithm* is vendor-independent — structural signal before wording, the errorish gate, restricting the search surface, bounding the numeric token. Only the inputs are vendor-specific: which field carries error text, which carries the status code, which values mean "this is an API error." #11 lumps the two together, so every new vendor reimplements the algorithm alongside its descriptor.
+
+**Don't suggest:** adding a courier lane to harden failure classification, or treating per-lane quota patterns as sufficient vendor isolation. Amend #11 to share one outcome classifier fed by a small per-vendor descriptor, and make #69's ten-row behavior table a conformance suite every lane runs. Two standing preconditions before any new lane: #34 has to answer whether cross-family checking pays at all, and each vendor needs its own live-probe issue in the shape of #52 (success envelope, malformed output, auth failure, invalid model, quota) before its courier is written.

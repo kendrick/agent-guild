@@ -45,6 +45,105 @@ FAKE_CLAUDE = textwrap.dedent(
     import sys
     import time
 
+    # C-10's table, rows (a) through (p): each maps a row's cells (exit
+    # code, envelope fields the row names, stderr) to a fixed fake-CLI
+    # mode. A row with no envelope at all (k) carries None; the fake CLI
+    # then prints non-JSON stdout so the courier parses no envelope.
+    ROWS = {
+        "a": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "Not logged in · Please run /login",
+            "duration_ms": 14290,
+        }, ""),
+        "b": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "Request rejected (500) · retry after 14290 ms",
+        }, ""),
+        "c": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "No further detail.",
+        }, "Rate limit exceeded"),
+        "d": (0, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "aborted_streaming",
+            "result": "model text mentioning rate limits and quota",
+        }, ""),
+        "e": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "No further detail.",
+        }, "attempt 3/11 · elapsed 14290 ms, 0.429 s, 429.15 s, trace_429_ok"),
+        "f": (0, {
+            "is_error": False,
+            "api_error_status": None,
+            "terminal_reason": "completed",
+            "result": "No further detail.",
+        }, "Rate limit exceeded"),
+        "g": (0, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "No further detail.",
+        }, "monthly quota exhausted"),
+        "h": (1, {
+            "is_error": False,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "spending cap reached for your plan",
+        }, ""),
+        "i": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "aborted_streaming",
+            "result": "No further detail.",
+        }, "Rate limit exceeded"),
+        "j": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "No further detail.",
+        }, "HTTP 429"),
+        "k": (1, None, "Rate limit exceeded"),
+        "l": (0, {
+            "is_error": False,
+            "api_error_status": 429,
+            "terminal_reason": "completed",
+            "result": "No further detail.",
+        }, ""),
+        "m": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "No further detail.",
+        }, "usage limit reached for your plan"),
+        "n": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "No further detail.",
+        }, "the request was rate-limited"),
+        "o": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "29 requests still queued, worker 4",
+        }, "29 tasks queued behind worker 4"),
+        "p": (1, {
+            "is_error": True,
+            "api_error_status": None,
+            "terminal_reason": "api_error",
+            "result": "No further detail.",
+        }, "req_01Hx429fk2 failed"),
+    }
+
     mode = os.environ["FAKE_CLAUDE_MODE"]
     task_id = os.environ["FAKE_CLAUDE_TASK_ID"]
     calls_path = os.environ["FAKE_CLAUDE_CALLS"]
@@ -121,6 +220,16 @@ FAKE_CLAUDE = textwrap.dedent(
             "result": "Not logged in · Please run /login",
         }))
         raise SystemExit(1)
+    elif mode == "invalid_model":
+        print(json.dumps({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "api_error_status": 404,
+            "terminal_reason": "api_error",
+            "result": "Model not found: claude-haiku-4-5-20251001",
+        }))
+        raise SystemExit(1)
     elif mode == "malformed" or (mode == "malformed_once" and count == 1):
         print(json.dumps({
             "type": "result",
@@ -141,6 +250,15 @@ FAKE_CLAUDE = textwrap.dedent(
     elif mode == "wrong_identity":
         success["structured_output"]["task_id"] = "T-999"
         print(json.dumps(success))
+    elif mode.startswith("row_"):
+        exit_code, envelope, stderr_text = ROWS[mode[len("row_"):]]
+        if stderr_text:
+            sys.stderr.write(stderr_text)
+        if envelope is None:
+            sys.stdout.write("boom: no JSON envelope produced")
+        else:
+            sys.stdout.write(json.dumps(envelope))
+        raise SystemExit(exit_code)
     else:
         print(json.dumps(success))
     """
@@ -385,6 +503,72 @@ try:
     )
 finally:
     temp.cleanup()
+
+temp, process, outcome, calls, _prompt = run_courier("invalid_model")
+try:
+    check(
+        "an invalid/unavailable model (api_error_status 404) is a blocked "
+        "opinion, not quota",
+        process.returncode == 0
+        and outcome is not None
+        and outcome["status"] == "verdict"
+        and outcome["verdict"]["verdict"] == "blocked"
+        and outcome["ledger"]["exit_code"] == 1
+        and outcome["attempts"] == 1
+        and len(calls) == 1,
+        f"rc={process.returncode} outcome={outcome!r}",
+    )
+finally:
+    temp.cleanup()
+
+# C-10's table, rows (a) through (p): each row is the sole catcher of one
+# specific way to misread a failed CLI call as lane exhaustion. `expect_quota`
+# names the row's one graded cell — status "quota" vs a verdict outcome,
+# which by construction is "not quota".
+C10_ROWS = [
+    ("a", False, "auth failure is not exhaustion, whatever digits ride along"),
+    ("b", False, "the 429 boundary holds inside result"),
+    ("c", True, "stderr is scanned in addition to result"),
+    ("d", False, "result is not scanned off api_error; a bounded stdout scan would fail this"),
+    ("e", False, "all four digit/decimal/underscore adjacency shapes in one stderr"),
+    ("f", False, "the errorish gate is retained"),
+    ("g", True, "the is_error gate limb alone suffices; the quota alternative survives"),
+    ("h", True, "the returncode gate limb alone suffices; result is scanned; spending cap survives"),
+    ("i", True, "stderr is scanned regardless of terminal_reason"),
+    ("j", True, "the boundary does not over-narrow a genuine standalone 429"),
+    ("k", True, "stderr is read when the envelope is absent or not a dict"),
+    ("l", True, "the structural test runs before the gate"),
+    ("m", True, "a non-rate-limit alternative, lowercase, survives"),
+    ("n", True, "hyphenated and suffixed wording survives"),
+    ("o", False, "the two surfaces are joined so neither lends digits to the other"),
+    ("p", False, "alphanumeric adjacency, which a digit-only boundary misses"),
+]
+
+for letter, expect_quota, pin in C10_ROWS:
+    temp, process, outcome, calls, _prompt = run_courier(f"row_{letter}")
+    try:
+        if expect_quota:
+            condition = (
+                process.returncode == 0
+                and outcome is not None
+                and outcome["status"] == "quota"
+                and outcome["verdict"] is None
+                and outcome["ledger"]["quota_event"] is True
+            )
+        else:
+            condition = (
+                process.returncode == 0
+                and outcome is not None
+                and outcome["status"] == "verdict"
+            )
+        check(
+            f"C-10 row ({letter}): "
+            f"{'quota' if expect_quota else 'not quota'} — {pin}",
+            condition,
+            f"rc={process.returncode} outcome={outcome!r}",
+        )
+    finally:
+        temp.cleanup()
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -46,6 +46,10 @@ The courier writes to a host-mapped lane suffix: `verdicts/T-NNN-<tier>-r<retrie
 
 A read-only Codex courier returns `AGENT_GUILD_COURIER_OUTCOME\n<json>` rather than writing state. The object has exactly `status`, `verdict`, `ledger`, `attempts`, and `diagnostic`; the return gate validates its task/lane/model identities, ledger field types, quota consistency, and canonical verdict before the parent persists it. For `status: verdict`, the parent writes the unchanged `-claude` verdict, validates/renders it, then appends the ledger. For `status: quota`, the parent appends the quota ledger line first, then creates `state/exhausted/claude`, with no verdict.
 
+## Read-Only In-Family Returns
+
+A Codex in-family checker (`checker-deterministic`, `checker-judgment`) runs `sandbox_mode: read-only` and cannot write its own verdict, so it returns `AGENT_GUILD_VERDICT\n<json>` as its last message. The object is the canonical schema verdict with no envelope around it, unlike the courier's outcome above, because an in-family checker produces no ledger and has no quota protocol. The return gate validates it against the schema and confirms `task_id` and `checker` match the return it belongs to, then the parent writes it unchanged to the standard stem and renders the `.md` sibling. The file stays the verdict of record wherever a checker can write one: the inline branch opens only when the file is missing or invalid and the host is Codex, so the Claude path never reaches it.
+
 ## Lane Exhaustion
 
 `state/exhausted/<lane>` — a per-lane sentinel (directory form, so one `ls` shows every downed lane), created by a courier on a quota signal *after* its ledger line lands, so the ledger always explains the sentinel. While it exists, `dispatch-guard` denies dispatches on that lane; only the user clears it, the same contract as PAUSED.

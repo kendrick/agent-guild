@@ -210,11 +210,23 @@ def _mapped_input(gate, data, skill_prefix):
     if gate == "dispatch-guard":
         return _dispatch_input(data)
     if gate == "subagent-return":
-        transcript = (
-            data.get("agent_transcript_path")
-            or data.get("transcript_path")
+        # The id lives in the PARENT's transcript, in the `task_name` argument
+        # of the spawn_agent call. The child never sees it: its dispatch
+        # message is encrypted, which is the whole reason #71 moved the id to
+        # a field. Reading the child instead finds whatever `Audit-ID:` string
+        # happens to sit in the role instructions, which is how a live probe
+        # got a worker's return attributed to CON-audit.
+        #
+        # Falls back to the child when the parent path is unusable, which is
+        # what a host that only supplies `agent_transcript_path` looks like.
+        parent = data.get("transcript_path")
+        child = data.get("agent_transcript_path")
+        usable = (
+            parent
+            if isinstance(parent, str) and os.path.isfile(parent)
+            else child
         )
-        return {**data, "transcript_path": transcript}
+        return {**data, "transcript_path": usable or parent}
     if gate == "session-nudge":
         return {
             **data,

@@ -587,6 +587,47 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(blind.returncode, 0, blind.stderr)
         self.assertIn("could not identify", blind.stderr)
 
+    def test_return_gate_reads_the_parent_transcript_not_the_child(self):
+        # A live SubagentStop payload carries both transcripts. Only the
+        # parent's holds the id, in the spawn_agent `task_name` argument; the
+        # child sees an encrypted dispatch message and a role prompt that
+        # happens to mention an Audit-ID. Reading the child attributed a
+        # worker's return to CON-audit on a real host.
+        write_task(
+            self.project,
+            "T-001",
+            status="needs-check",
+            artifacts="[README.md]",
+        )
+        parent = codex_transcript(self.project, "t_001", "function_call")
+        child = codex_transcript(
+            self.project, "Audit-ID: CON-audit", "response_item"
+        )
+        payload = codex_input(
+            "SubagentStop",
+            self.project,
+            transcript_path=parent,
+            agent_transcript_path=child,
+            agent_id="019fb613-e38e-7482-bedf-0ef115aa4fc8",
+            agent_type="worker-standard",
+            stop_hook_active=False,
+            last_assistant_message="ACKNOWLEDGED",
+        )
+
+        result = self.run_adapter("subagent-return", payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("could not identify", result.stderr)
+        self.assertNotIn("CON-audit", result.stderr)
+
+        # A host that sends only the child transcript still works. The
+        # fallback is what keeps the earlier Codex shapes readable.
+        fallback = self.run_adapter(
+            "subagent-return",
+            {**payload, "transcript_path": "/nonexistent/parent.jsonl"},
+        )
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertIn("could not identify", fallback.stderr)
+
     def test_read_only_codex_courier_returns_a_validated_claude_outcome(self):
         seed_verdict_toolchain(self.project)
         write_task(

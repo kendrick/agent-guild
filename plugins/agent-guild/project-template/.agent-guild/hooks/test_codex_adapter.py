@@ -291,8 +291,12 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertIn("task_name", as_captured.stderr)
         self.assertNotIn("in the prompt", as_captured.stderr)
 
+        # The wire form, because this host rejects a task_name outside
+        # [a-z0-9_] with "agent_name must use only lowercase letters, digits,
+        # and underscores". `T-001` is unsendable here, so a fixture that used
+        # it would be testing a dispatch Codex would never make.
         tagged = self.run_adapter(
-            "dispatch-guard", live_dispatch(self.project, "T-001")
+            "dispatch-guard", live_dispatch(self.project, "t_001")
         )
         self.assertEqual(tagged.returncode, 0, tagged.stderr)
         with open(
@@ -301,23 +305,38 @@ class CodexAdapterTest(unittest.TestCase):
             ),
             encoding="utf-8",
         ) as stream:
+            # Canonical on the way out. Task files, verdict stems, and this
+            # log all key on `T-001`, and only the wire spelling differs.
             self.assertIn("T-001", stream.read())
 
+        # A host that lifts the charset later shouldn't need a gate change.
+        canonical = self.run_adapter(
+            "dispatch-guard", live_dispatch(self.project, "T-001")
+        )
+        self.assertEqual(canonical.returncode, 0, canonical.stderr)
+
     def test_task_name_carries_audit_and_audition_ids_too(self):
-        auditor = live_dispatch(self.project, "CON-audit")
+        auditor = live_dispatch(self.project, "con_audit")
         auditor["tool_input"]["agent_type"] = "auditor"
         allowed = self.run_adapter("dispatch-guard", auditor)
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        with open(
+            os.path.join(
+                self.project, ".agent-guild", "state", "log", "dispatches.log"
+            ),
+            encoding="utf-8",
+        ) as stream:
+            self.assertIn("CON-audit", stream.read())
 
         # An auditor id on a worker is the same mismatch the prompt path
         # rejects; arriving in a structured field doesn't excuse it.
-        misrouted = live_dispatch(self.project, "CON-audit")
+        misrouted = live_dispatch(self.project, "con_audit")
         blocked = self.run_adapter("dispatch-guard", misrouted)
         self.assertEqual(blocked.returncode, 2, blocked.stderr)
         self.assertIn("Task-ID", blocked.stderr)
 
         # An audition runs outside the lifecycle: no task file, no CON-audit.
-        audition = live_dispatch(self.project, "A-001")
+        audition = live_dispatch(self.project, "a_001")
         audition["tool_input"]["agent_type"] = "worker-bulk"
         tryout = self.run_adapter("dispatch-guard", audition)
         self.assertEqual(tryout.returncode, 0, tryout.stderr)
@@ -542,7 +561,7 @@ class CodexAdapterTest(unittest.TestCase):
             artifacts="[README.md]",
         )
         transcript = codex_transcript(
-            self.project, "T-056", "function_call"
+            self.project, "t_056", "function_call"
         )
         payload = codex_input(
             "SubagentStop",

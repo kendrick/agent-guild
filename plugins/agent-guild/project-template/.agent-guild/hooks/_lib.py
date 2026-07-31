@@ -68,25 +68,34 @@ AUDITION_ID_RE = re.compile(r"\bAudition-ID:\s*(A-\d+)", re.IGNORECASE)
 # instead rides in `task_name`, which the dispatcher sets and which stays clear
 # through both the dispatch payload and the transcript. A bare field value has
 # no label to key on, so these sort it by shape.
-BARE_ID_RES = (
-    ("task", re.compile(r"^(T-\d+)$", re.IGNORECASE)),
-    ("audit", re.compile(r"^(CON-audit|DEC-audit)$", re.IGNORECASE)),
-    ("audition", re.compile(r"^(A-\d+)$", re.IGNORECASE)),
-)
+# Codex validates task_name as an agent name: `agent_name must use only
+# lowercase letters, digits, and underscores`. So `T-001` cannot be sent
+# verbatim, and the underscore spelling `t_001` is the wire form. Accept either
+# separator in either case and hand back the canonical id, because everything
+# downstream—task filenames, verdict stems, the dispatch log—is `T-001`.
+_BARE_TASK_RE = re.compile(r"^T[-_](\d+)$", re.IGNORECASE)
+_BARE_AUDIT_RE = re.compile(r"^(CON|DEC)[-_]audit$", re.IGNORECASE)
+_BARE_AUDITION_RE = re.compile(r"^A[-_](\d+)$", re.IGNORECASE)
 
 
 def bare_id(value):
     """Sort a bare dispatch id into ``(kind, id)``—kind being 'task', 'audit',
-    or 'audition'. Returns ``(None, None)`` for a value in no known namespace,
-    which is the common case: `task_name` is a free-text field and most of what
-    arrives there is a dispatcher's own label, not a guild id."""
+    or 'audition', and id always in canonical form. Returns ``(None, None)``
+    for a value in no known namespace, which is the common case: `task_name`
+    is a free-text field and most of what arrives there is a dispatcher's own
+    label, not a guild id."""
     if not isinstance(value, str):
         return None, None
     value = value.strip()
-    for kind, pattern in BARE_ID_RES:
-        match = pattern.match(value)
-        if match:
-            return kind, match.group(1)
+    match = _BARE_TASK_RE.match(value)
+    if match:
+        return "task", f"T-{match.group(1)}"
+    match = _BARE_AUDIT_RE.match(value)
+    if match:
+        return "audit", f"{match.group(1).upper()}-audit"
+    match = _BARE_AUDITION_RE.match(value)
+    if match:
+        return "audition", f"A-{match.group(1)}"
     return None, None
 
 

@@ -361,7 +361,8 @@ def generate_codex_agents(out_dir, core_dir=CORE_DIR):
             "- Worker and checker dispatches carry `Task-ID: T-NNN`; "
             "auditor dispatches carry `Audit-ID: CON-audit` or "
             "`Audit-ID: DEC-audit`. Put the id in the prompt on a Claude "
-            "host, in `task_name` on a Codex host.\n"
+            "host, in `task_name` on a Codex host, where it must be "
+            "lowercased and underscored (`t_001`, `con_audit`).\n"
         )
         f.write(
             "- Read-only agents return the intended state-file path and "

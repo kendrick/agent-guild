@@ -20,7 +20,7 @@ Before running an Agent Guild job, read `.agent-guild/CLAUDE.md`; its lifecycle 
 ### Codex Dispatch Boundary
 
 - The main session is the orchestrator. Delegate Guild work to the exact project agent named by the routing table.
-- Worker and checker dispatches carry `Task-ID: T-NNN`; auditor dispatches carry `Audit-ID: CON-audit` or `Audit-ID: DEC-audit`. Put the id in the prompt on a Claude host, in `task_name` on a Codex host.
+- Worker and checker dispatches carry `Task-ID: T-NNN`; auditor dispatches carry `Audit-ID: CON-audit` or `Audit-ID: DEC-audit`. Put the id in the prompt on a Claude host, in `task_name` on a Codex host, where it must be lowercased and underscored (`t_001`, `con_audit`).
 - Read-only agents return the intended state-file path and complete content to the orchestrator. Never grant them write access to bypass that boundary.
 - A read-only `checker-courier` returns an `AGENT_GUILD_COURIER_OUTCOME` from the fixed Claude runner. For a verdict outcome, persist the supplied verdict unchanged at the `-claude` suffixed path, validate and render it, then record the supplied metrics through `ledger-append.py`. For a quota outcome, append that ledger line first with `--quota-event`, then create `.agent-guild/state/exhausted/claude`; write no verdict. A courier outcome never replaces the unsuffixed in-family verdict.
 - Agent Guild owns only this marked section of `AGENTS.md` and its generated files under `.codex/agents/`.

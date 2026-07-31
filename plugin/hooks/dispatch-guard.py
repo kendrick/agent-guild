@@ -81,12 +81,16 @@ def main(data):
     if kind is None:
         want = "Audit-ID: CON-audit" if agent == "auditor" else "Task-ID: T-NNN"
         if str(data.get("hook_host", "")).strip().lower() == "codex":
-            bare = "CON-audit" if agent == "auditor" else "T-NNN"
+            # Underscores, not the canonical hyphen: this host rejects a
+            # task_name outside [a-z0-9_], so quoting `T-NNN` here would send
+            # the operator to fix one block by tripping a different one.
+            bare = "con_audit" if agent == "auditor" else "t_nnn"
             return _lib.block(
                 f"Dispatch to {agent} carries no readable id. This host "
                 f"encrypts the dispatch message, so set task_name to `{bare}` "
-                "instead. That field survives to the return gate, which is "
-                "what identifies this subagent's work when it finishes."
+                "instead (lowercase and underscored, which is all this host "
+                "accepts there). That field survives to the return gate, "
+                "which is what identifies this work when it finishes."
             )
         return _lib.block(
             f"Dispatch to {agent} has no id line. Put `{want}` in the prompt so "

@@ -14,6 +14,30 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-07-31: The Guild Never Takes Work On Its Own Gates In This Repo
+
+**Source:** #68 and #77 routing decisions
+
+**Context:** Both issues were candidates for a dogfooded guild run, and both change files under `.agent-guild/hooks/`. This repo registers its gates from the working tree (`.claude/settings.json` points `PreToolUse` at `.agent-guild/hooks/dispatch-guard.py`), so a worker editing them is rewriting the machinery while the job depends on it.
+**Decision:** Route any change to `.agent-guild/hooks/*.py` directly, never through a guild job. Everything outside `hooks/` stays eligible, which is why #78's docs sweep goes to the guild and #77's gate work does not. The failure this avoids is not hypothetical: `_lib` is imported by all four gates, so one bad edit takes down dispatching, the write guard, the return gate, and the stop gate at once, including the gate that would otherwise report the job stuck.
+**Alternatives considered:** Splitting an issue so only its non-gate files go to the guild (rejected—it fragments one coherent change across two executors for no gain); running the job with `PAUSED` set (rejected—it disables the verification the job exists to exercise); accepting the risk because the suite would catch it (rejected—the suite runs after the edit, and the job needs the gates during it). Note this constraint belongs to this repo alone: a project consuming the kit never has its own gates as the artifact under change.
+
+## 2026-07-31: The Codex Return Path Reads The Parent And Transcribes The Verdict
+
+**Source:** issues #68 and #71; PRs #75 and #76
+
+**Context:** The return gate recovered a task id from the child's transcript, where it has never existed, because the id rides in the parent's `spawn_agent` arguments and the child's dispatch message is encrypted. Against a live payload the gate resolved a worker's return as `CON-audit`, found no task file, and failed open. Separately, in-family checkers run `sandbox_mode: read-only` on Codex and could not write the verdict JSON the gate demanded, while `checker-courier` was the only agent given a Codex protocol at all.
+**Decision:** Prefer the parent's `transcript_path` and fall back to the child only when the parent path is unusable. Let read-only in-family checkers return the verdict inline under an `AGENT_GUILD_VERDICT` marker, gate-validated for schema plus `task_id` and `checker` identity, then persisted unchanged by the parent. The orchestrator's write is a transcription and it must not edit the object: editing a verdict it commissioned would make it the author of its own check.
+**Alternatives considered:** Correlating returns by `agent_id` instead of by transcript (rejected—the parent transcript records no mapping from a spawn call to the resulting agent id); leaving identity checks to `validate-verdict.py` (rejected—the validator knows a verdict's shape, not which task it belongs to, and a verdict persisted against the wrong stem is worse than one refused); documenting the read-only gap rather than closing it (rejected once #75 made the gate reachable, since checkers would have started deadlocking).
+
+## 2026-07-31: The Codex Dispatch Id Rides In `task_name`, Lowercased And Underscored
+
+**Source:** issue #71; PRs #72 and #74
+
+**Context:** Codex encrypts a dispatch's `message` before any hook sees it, so `Task-ID: T-NNN` in the prompt is unreadable there. Three defects stacked underneath: the registered matcher never matched the tool name Codex reports (`collaborationspawn_agent`), `_bare_tool_name` rejected that name, and the id was unreadable regardless. Fixing the matcher alone would have taken the host from unenforced to unusable.
+**Decision:** Carry the id in `task_name`, the one dispatcher-set field readable at both the dispatch payload and the transcript. Codex validates that field as an agent name and rejects anything outside `[a-z0-9_]`, so the wire form is `t_001` and `con_audit`; `_lib.bare_id` canonicalizes back to `T-001` so task filenames, verdict stems, and the dispatch log are unchanged. `dispatch-guard` reads the structured field first and falls back to the prompt line, leaving the Claude host untouched.
+**Alternatives considered:** `tool_use_id`/`call_id` (rejected—host-generated, so they can correlate an id but never carry one); keeping the prompt line and accepting an unenforced Codex host (rejected—that is what milestone 7 shipped); renaming the canonical id repo-wide to fit the charset (rejected—the wire form is a host detail and everything downstream already keys on `T-NNN`).
+
 ## 2026-07-27: One Install Guide And One Smoke Lifecycle Serve Both Hosts
 
 **Source:** issue #55

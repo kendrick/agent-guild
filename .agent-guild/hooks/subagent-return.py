@@ -52,6 +52,7 @@ import _lib  # noqa: E402
 
 
 CODEX_COURIER_OUTCOME_MARKER = "AGENT_GUILD_COURIER_OUTCOME\n"
+CODEX_VERDICT_MARKER = "AGENT_GUILD_VERDICT\n"
 CLAUDE_COURIER_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -286,6 +287,58 @@ def _codex_courier_outcome_ok(message, task_id):
     return True, None
 
 
+def _codex_inline_verdict_ok(message, task_id, agent):
+    """Validate a read-only in-family checker's returned verdict before the
+    parent persists it.
+
+    Same handoff as checker-courier's above, minus the ledger and quota
+    envelope, because an in-family checker produces only a verdict. A Codex
+    project agent is `sandbox_mode: read-only` and cannot write the file the
+    file-backed branch demands, so without this the gate would instruct the
+    agent to do the one thing its sandbox forbids (#68).
+    """
+    if not isinstance(message, str) or not message.startswith(
+        CODEX_VERDICT_MARKER
+    ):
+        return (
+            False,
+            "last message must be the AGENT_GUILD_VERDICT marker followed by "
+            "the verdict JSON object",
+        )
+    raw = message[len(CODEX_VERDICT_MARKER):].strip()
+    try:
+        verdict = json.loads(raw)
+    except json.JSONDecodeError as error:
+        return False, f"verdict JSON is malformed: {error}"
+    if not isinstance(verdict, dict):
+        return False, "verdict JSON is not an object"
+
+    # Identity is checked here rather than left to the schema: the validator
+    # knows the shape of a verdict, not which task or checker this return
+    # belongs to, and a verdict persisted against the wrong task is worse
+    # than one rejected.
+    for key, expected in (("task_id", task_id), ("checker", agent)):
+        if verdict.get(key) != expected:
+            return (
+                False,
+                f"verdict.{key} is {verdict.get(key)!r}, expected "
+                f"{expected!r}",
+            )
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".json"
+        ) as scratch:
+            json.dump(verdict, scratch)
+            scratch.flush()
+            ok, reason = _validate_verdict_json(scratch.name)
+    except OSError as error:
+        return False, f"could not stage verdict for validation: {error}"
+    if not ok:
+        return False, f"returned verdict does not validate ({reason})"
+    return True, None
+
+
 def _latest_audit_verdict(audit_id):
     vdir = _lib.state_path("verdicts")
     if not os.path.isdir(vdir):
@@ -428,14 +481,33 @@ def main(data):
     rel = f".agent-guild/state/verdicts/{ident}-{tier}-r{retries}.json"
     vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}.json")
     ok, reason = _validate_verdict_json(vpath)
-    if not ok:
-        return _lib.block(
-            f"Checker for {ident} isn't done: verdict JSON at {rel} is missing or "
-            f"invalid ({reason}). Write a conforming verdict per "
-            ".agent-guild/schemas/verdict.schema.json, self-check it with "
-            "python3 .agent-guild/scripts/validate-verdict.py, then finish."
+    if ok:
+        return 0
+
+    # The file is the verdict of record wherever the checker can write one.
+    # On Codex it can't, so the inline handoff is the only route it has, and
+    # demanding the file there is the deadlock #68 describes.
+    if data.get("hook_host") == "codex":
+        inline_ok, inline_reason = _codex_inline_verdict_ok(
+            data.get("last_assistant_message"), ident, agent
         )
-    return 0
+        if inline_ok:
+            return 0
+        return _lib.block(
+            f"Checker for {ident} isn't done: no valid verdict at {rel} "
+            f"({reason}), and the returned verdict is unusable "
+            f"({inline_reason}). This host runs you read-only, so return the "
+            f"verdict instead of writing it: the line "
+            f"{CODEX_VERDICT_MARKER.strip()} followed by the JSON object, and "
+            "nothing else. The parent validates and persists it."
+        )
+
+    return _lib.block(
+        f"Checker for {ident} isn't done: verdict JSON at {rel} is missing or "
+        f"invalid ({reason}). Write a conforming verdict per "
+        ".agent-guild/schemas/verdict.schema.json, self-check it with "
+        "python3 .agent-guild/scripts/validate-verdict.py, then finish."
+    )
 
 
 if __name__ == "__main__":

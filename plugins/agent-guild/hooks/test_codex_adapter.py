@@ -628,6 +628,90 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(fallback.returncode, 0, fallback.stderr)
         self.assertIn("could not identify", fallback.stderr)
 
+    def test_read_only_in_family_checker_returns_its_verdict_inline(self):
+        # Issue #68. A Codex in-family checker is sandbox read-only, so the
+        # file-backed branch demanded the one thing its sandbox forbids. It
+        # returns the verdict instead and the parent persists it, which is
+        # the handoff checker-courier has always had and these never got.
+        seed_verdict_toolchain(self.project)
+        write_task(
+            self.project,
+            "T-054",
+            status="checking",
+            checker="checker-deterministic",
+        )
+        transcript = codex_transcript(self.project, "Task-ID: T-054")
+
+        def payload(message):
+            return codex_input(
+                "SubagentStop",
+                self.project,
+                agent_transcript_path=transcript,
+                agent_id="019fb613-checker",
+                agent_type="checker-deterministic",
+                stop_hook_active=False,
+                last_assistant_message=message,
+            )
+
+        def verdict(**overrides):
+            body = {
+                "task_id": "T-054",
+                "checker": "checker-deterministic",
+                "vendor": "openai",
+                "model": "gpt-5.6-terra",
+                "verdict": "pass",
+                "findings": [],
+                "timestamp": "2026-07-31T02:49:44Z",
+                "duration_ms": 1200,
+                "cost_usd": None,
+            }
+            body.update(overrides)
+            return "AGENT_GUILD_VERDICT\n" + json.dumps(body)
+
+        allowed = self.run_adapter("subagent-return", payload(verdict()))
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+        # The gate validates but never writes. Persisting is the parent's
+        # job, the same split the courier lane already uses.
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(
+                    self.project,
+                    ".agent-guild",
+                    "state",
+                    "verdicts",
+                    "T-054-sonnet-r0.json",
+                )
+            )
+        )
+
+        # A verdict naming another task would be persisted against the wrong
+        # stem, which is worse than refusing it.
+        blocked = self.run_adapter(
+            "subagent-return", payload(verdict(task_id="T-999"))
+        )
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertIn("task_id", blocked.stderr)
+
+        blocked = self.run_adapter(
+            "subagent-return", payload(verdict(checker="checker-judgment"))
+        )
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertIn("checker", blocked.stderr)
+
+        blocked = self.run_adapter(
+            "subagent-return", payload(verdict(verdict="maybe"))
+        )
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertIn("does not validate", blocked.stderr)
+
+        # No marker at all is the common failure, so the block has to name
+        # the route rather than repeat "write the file you cannot write".
+        blocked = self.run_adapter("subagent-return", payload("Done."))
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertIn("AGENT_GUILD_VERDICT", blocked.stderr)
+        self.assertNotIn("Write a conforming verdict per", blocked.stderr)
+
     def test_read_only_codex_courier_returns_a_validated_claude_outcome(self):
         seed_verdict_toolchain(self.project)
         write_task(

@@ -1,6 +1,6 @@
 # Building The Plugins
 
-Agent Guild has one implementation and two generated host packages. Shared role behavior and workflow bodies live in `guild-core/`; host-specific metadata lives in `scripts/plugin-src/adapters/`. Never implement a feature by editing both generated packages.
+Agent Guild has one implementation and two generated host packages. Shared role behavior and workflow bodies live in `guild-core/`; host-specific metadata lives in `scripts/plugin-src/adapters/`. Never implement a feature by editing both generated packages. This is the maintainer build reference; user setup lives in [Install Agent Guild](installing.md).
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ Building either package requires only Python 3 and repository checkout—there i
 python3 scripts/build-plugin.py --target claude --out dist/claude-plugin
 ```
 
-The package is written to `dist/claude-plugin/`, with its manifest at `dist/claude-plugin/.claude-plugin/plugin.json`. A Claude-target build must reproduce the established published `plugin/` tree exactly. Load or publish it as a Claude Code plugin, run `/agent-guild:init` once in each project, then start existing work with `/agent-guild:job <issue|file|url>`.
+The package is written to `dist/claude-plugin/`, with its manifest at `dist/claude-plugin/.claude-plugin/plugin.json`. A Claude-target build must reproduce the established published `plugin/` tree exactly.
 
 ## Build The Codex Package
 
@@ -20,52 +20,13 @@ The package is written to `dist/claude-plugin/`, with its manifest at `dist/clau
 python3 scripts/build-plugin.py --target codex --out dist/codex-plugin
 ```
 
-The package is written to `dist/codex-plugin/`, with its manifest at `dist/codex-plugin/.codex-plugin/plugin.json` and its lifecycle configuration at `dist/codex-plugin/hooks/hooks.json`. When it is installed as a Codex plugin, run `$agent-guild:init` once in each project, then start existing work with `$agent-guild:job <issue|file|url>`.
+The package is written to `dist/codex-plugin/`, with its manifest at `dist/codex-plugin/.codex-plugin/plugin.json` and its lifecycle configuration at `dist/codex-plugin/hooks/hooks.json`.
 
-Codex hooks are not automatically trusted. After installing the plugin, open `/hooks`, review the exact Agent Guild definitions, and explicitly trust them before relying on the gates. Repeat that review whenever Codex reports that a hook definition changed. The package and installer never claim or grant trust on the user's behalf.
+Codex hooks are not automatically trusted. The installation guide requires users to open `/hooks`, review the exact Agent Guild definitions, and explicitly trust them before relying on the gates. The package and installer never claim or grant trust on the user's behalf.
 
 Its `project-template/` contains the generated nine-agent Guild roster, one bounded `AGENTS.md` section, the repo-local hook configuration, and the same dependency-free project installer engine as the Claude package. The roster TOML is rendered from the same `guild-core/roles/` bodies as Claude; model, reasoning, sandbox, and host-bound instruction metadata come from `scripts/plugin-src/adapters/codex.json`.
 
-## Install The Codex Plugin From Git
-
-Add the repository as a Codex marketplace, then install the qualified plugin:
-
-```sh
-codex plugin marketplace add kendrick/agent-guild
-codex plugin add agent-guild@kendrick
-```
-
-Start a new Codex session after installation so the bundled skills and hooks load. Run `$agent-guild:init` once in the target project, open `/hooks`, review and trust the exact Agent Guild definitions, then start existing work with `$agent-guild:job <issue|file|url>`.
-
-For desktop discovery, add the marketplace with the CLI command above, restart the ChatGPT desktop app, select Codex, open **Plugins**, choose the **Kendrick** marketplace, and install **Agent Guild**. Start a new thread before invoking its skills. The repo marketplace is generated at `.agents/plugins/marketplace.json`; its entry resolves the committed package at `plugins/agent-guild/` inside the same Git snapshot.
-
-## Bootstrap A Codex Project
-
-Build the Codex package, then point its initializer at the target project root:
-
-```sh
-python3 dist/codex-plugin/project-template/install.py codex /path/to/project --project-skills
-```
-
-`--project-skills` is the IDE-bootstrap switch: it installs the complete workflow set under the project's `.agents/skills/`, where Codex discovers repo-local skills, and installs the shared gate scripts plus repo-local hook registrations. Omit it when the Codex plugin itself is installed—the plugin already supplies the same skills and hooks, and copying them into the project would register duplicate names and gates. After IDE bootstrap, open `/hooks`, review and explicitly trust the Agent Guild definitions, then start existing work with `$job <issue|file|url>`. Project hooks are not automatically trusted merely because the installer wrote them.
-
-The installer creates or refreshes only the packaged roster under `.codex/agents/`, the packaged workflows under `.agents/skills/` when requested, the shared scripts under `.agent-guild/hooks/`, the Agent Guild handlers merged into `.codex/hooks.json`, and the section of the root `AGENTS.md` bounded by `<!-- agent-guild:codex:start -->` and `<!-- agent-guild:codex:end -->`. It preserves all text outside that section, `.codex/config.toml`, unrelated hook groups, project agents and skills, working-memory content, audition results, and every user/global Codex path. Re-running it is idempotent; malformed hook JSON, ownership markers, or a managed path redirected outside the project fail closed before any write.
-
-The Codex adapter translates lifecycle payloads at the host boundary; the enforcement policy remains in the same four Python gate scripts Claude uses. Codex hook coverage is a guardrail over the documented lifecycle events, not a complete security boundary over tool paths that do not emit those events.
-
-The generated read-only checker and auditor configurations keep their verification boundary by returning the intended state-file path and complete proposed content to the parent orchestrator. The parent persists that content; do not grant a checker write access to work around the handoff.
-
-## Workflow Surface
-
-Both host packages render the same twelve workflow bodies from `guild-core/workflows/`: `init`, `job`, `constitution`, `decompose`, `retrospective`, `audition`, `hydrate-discover`, `hydrate-extract`, `hydrate-draft`, `hydrate-reconcile`, `hydrate-propose`, and `update-working-memory`. Host adapters add only frontmatter and the thin `init` command suffix.
-
-| Context | Initialize | Start Existing Work |
-| --- | --- | --- |
-| Installed Claude plugin | `/agent-guild:init` | `/agent-guild:job <issue\|file\|url>` |
-| Installed Codex plugin | `$agent-guild:init` | `$agent-guild:job <issue\|file\|url>` |
-| Repo-local Codex bootstrap | Run the installer command above | `$job <issue\|file\|url>` |
-
-Codex skills use `$skill-name` or the `/skills` picker; they are not Claude-style slash commands. The two Codex forms differ only because plugin skills are namespaced while repo-local skills are not.
+Both targets render the same twelve workflow bodies from `guild-core/workflows/`: `init`, `job`, `constitution`, `decompose`, `retrospective`, `audition`, `hydrate-discover`, `hydrate-extract`, `hydrate-draft`, `hydrate-reconcile`, `hydrate-propose`, and `update-working-memory`. Host adapters add only frontmatter, agent representation, hook representation, and the thin `init` suffix. The exact plugin and repo-local invocation forms belong to the installation guide.
 
 ## Build Both
 

@@ -365,6 +365,22 @@ def generate_codex_agents(out_dir, core_dir=CORE_DIR):
             "lowercased and underscored (`t_001`, `con_audit`).\n"
         )
         f.write(
+            "- On a Codex host that name must be unique per **dispatch**, "
+            "not per task: this host refuses to reuse an agent name inside "
+            "a session, and a task runs at least a worker, a checker, and a "
+            "courier. Put a discriminator after the id and leave the id "
+            "itself intact (`t_001_r0_worker`, `t_001_r0_checker`, "
+            "`con_audit_r0`). Anything after the number is yours to choose; "
+            "the gate strips it back to `T-001`.\n"
+        )
+        f.write(
+            "- Never use `followup_task` to re-task a guild agent, "
+            "including to work around a name clash. `dispatch-guard` "
+            "refuses it: the call carries no id, no agent type, and no "
+            "readable prompt, so no check can run against it. Spawn a fresh "
+            "agent under a new name instead.\n"
+        )
+        f.write(
             "- Read-only agents return the intended state-file path and "
             "complete content to the orchestrator. Never grant them write "
             "access to bypass that boundary.\n"

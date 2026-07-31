@@ -422,6 +422,24 @@ rc, out, err = run_hook("dispatch-guard.py",
                                         "prompt": "no id line here, the host encrypted it"}}, proj_id)
 check("dispatch_id carries a Task-ID → exit 0", rc == 0, f"rc={rc} err={err}")
 
+# Codex validates task_name as an agent name and rejects anything outside
+# [a-z0-9_], so `t_001` is the only spelling that can reach the gate from that
+# host. It has to resolve to the same task as `T-001` or the id is unusable
+# exactly where #71 needed it to work.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "dispatch_id": "t_001",
+                                        "prompt": "no id line here, the host encrypted it"}}, proj_id)
+check("underscored wire form resolves to the same task → exit 0", rc == 0, f"rc={rc} err={err}")
+
+with open(os.path.join(proj_id, ".agent-guild", "state", "log", "dispatches.log")) as f:
+    logged = f.read()
+check("underscored id is logged canonically as T-001",
+      "T-001" in logged and "t_001" not in logged, logged)
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor", "dispatch_id": "con_audit"}}, proj_id)
+check("underscored Audit-ID resolves → exit 0", rc == 0, f"rc={rc} err={err}")
+
 # With no field to read, the prompt line still decides. That's every Claude
 # dispatch, so this is the check that #71 left that host alone.
 rc, out, err = run_hook("dispatch-guard.py",

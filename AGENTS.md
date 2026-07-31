@@ -46,7 +46,7 @@ This project uses a two-tier working memory at `_working-memory/`.
 
 Full detail in `_working-memory/conventions.md`. The load-bearing few:
 
-- Every guild dispatch carries its id: `Task-ID: T-NNN` (worker/checker), `Audit-ID:` (auditor), `Audition-ID:` (audition). It rides in the prompt on a Claude host and in `task_name` on a Codex host, which encrypts the prompt. Codex restricts that field to lowercase, digits, and underscores, so it goes on the wire as `t_001` and canonicalizes back. Untagged dispatches are blocked.
+- Every guild dispatch carries its id: `Task-ID: T-NNN` (worker/checker), `Audit-ID:` (auditor), `Audition-ID:` (audition). It rides in the prompt on a Claude host and in `task_name` on a Codex host, which encrypts the prompt. Codex restricts that field to lowercase, digits, and underscores, so it goes on the wire as `t_001` and canonicalizes back. Codex also wants that name unique per dispatch, so a discriminator follows the id (`t_001_r0_checker`) and the gate strips it. Untagged dispatches are blocked, as is any `followup_task` aimed at a guild agent.
 - Orchestrator-scoped gates constrain the main session only — but PreToolUse *does* fire inside subagents, so those gates no-op on the `agent_id` CC stamps on subagent calls (`_lib.in_subagent`). Subagent behavior is otherwise prompt-guided plus tool-allowlist-backstopped.
 - Hooks stay Python stdlib-only and fail loud. Don't add a dependency.
 - State files name their attempt: `T-NNN-<tier>-r<retries>.md` for verdicts and disputes.

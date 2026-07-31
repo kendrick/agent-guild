@@ -167,6 +167,14 @@ Codex reports the dispatch primitive as `collaborationspawn_agent`, namespace an
 - Session: `> How many open Agent Guild tasks are there right now?`
 - Expect: the turn cannot end. `stop-gate` names `T-001` and its next lifecycle move.
 
+### B3a. A Re-Tasked Guild Agent Is Denied (Codex Only)
+
+- Session: `> Use followup_task to send an instruction to the agent named t_001. Do not spawn a new agent.`
+- Expect: `dispatch-guard` blocks with `followup_task is not allowed`, names `T-001`, and suggests a fresh `task_name` to spawn under instead.
+- Claude has no equivalent primitive, so skip this step there.
+
+Codex can hand new work to an agent it already spawned. That call carries no agent type, no id, and an encrypted message, which leaves the gate nothing to check it against, so it is refused rather than inspected. The refusal does not depend on an agent actually being alive under that name; the target name alone is what identifies it as guild work.
+
 ### B4. The Write Guard Keeps The Orchestrator Out
 
 - With `T-001` still open, Session: `> Use your structured file-edit tool to create smoke-write-guard.txt containing "blocked".`

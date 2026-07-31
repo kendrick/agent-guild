@@ -54,11 +54,48 @@ LIVE_DISPATCH = {
 }
 
 
+# Captured from the same live run, during the first end-to-end guild job on a
+# Codex host (#77). This is how the model re-tasked an agent it had already
+# spawned once the second `spawn_agent` for T-001 was rejected as a duplicate
+# name: no agent_type, no task_name, an encrypted message, and a target that is
+# an agent path. Four of these ran in one session and no gate saw any of them.
+LIVE_FOLLOWUP = {
+    "session_id": "019fb64e-508a-7cd0-8148-db1c585c55e0",
+    "turn_id": "019fb654-68c0-7822-a2e9-ee02194fe742",
+    "transcript_path": (
+        "/Users/karnett/.codex/sessions/2026/07/31/"
+        "rollout-2026-07-31T03-53-33-019fb64e-508a-7cd0-8148-db1c585c55e0"
+        ".jsonl"
+    ),
+    "hook_event_name": "PreToolUse",
+    "model": "gpt-5.6-terra",
+    "permission_mode": "default",
+    "tool_name": "collaborationfollowup_task",
+    "tool_input": {
+        "target": "t_001",
+        "message": (
+            "gAAAAABqbB3nj39-Bv43ubYpkbMftpxMwne4HF1DeyXf8hBPzFrfniExhTPt"
+            "RWOGxssQBwopxVabW1qaqJuuby2spPw4U4-pLRFj3eVR2wmkVBJaSApmdw5n"
+            "CHbv8mCVx4jH3En8siA33v-O_X3aa8CXpVekr2MB_XLy-HxWffUuy5dl13TV"
+        ),
+    },
+    "tool_use_id": "call_X2EjUFFdtFWDNEGgkatJTOzq",
+}
+
+
 def live_dispatch(project, task_name=None):
     payload = json.loads(json.dumps(LIVE_DISPATCH))
     payload["cwd"] = project
     if task_name is not None:
         payload["tool_input"]["task_name"] = task_name
+    return payload
+
+
+def live_followup(project, target=None):
+    payload = json.loads(json.dumps(LIVE_FOLLOWUP))
+    payload["cwd"] = project
+    if target is not None:
+        payload["tool_input"]["target"] = target
     return payload
 
 
@@ -374,7 +411,89 @@ class CodexAdapterTest(unittest.TestCase):
         )
         result = self.run_adapter("dispatch-guard", payload)
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("expected Agent or spawn_agent", result.stderr)
+        self.assertIn(
+            "expected Agent, spawn_agent, or followup_task", result.stderr
+        )
+
+    def test_followup_at_a_guild_agent_is_refused(self):
+        # The defect this closes: a job ran to completion while dispatch-guard
+        # never applied, because followup_task reached no gate at all. It has
+        # to be refused rather than checked—there is no agent type, no id, and
+        # no readable message left to check anything against.
+        write_task(self.project, "T-001", status="checking")
+        result = self.run_adapter("dispatch-guard", live_followup(self.project))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("followup_task is not allowed", result.stderr)
+        # A refusal that doesn't say what to do instead sends the model back
+        # to the same dead end, which is how it found this path to begin with.
+        self.assertIn("t_001_r0_checker", result.stderr)
+
+    def test_followup_is_refused_through_a_rooted_agent_path(self):
+        # The same session produced both spellings of `target`. Reading only
+        # the bare one would leave the rooted form ungated—the same fail-open
+        # shape, one string away.
+        write_task(self.project, "T-001", status="checking")
+        rooted = live_followup(self.project, "/root/t_001/t_001")
+        result = self.run_adapter("dispatch-guard", rooted)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("T-001", result.stderr)
+
+        discriminated = live_followup(
+            self.project, "/root/t_001/t_001_r0_worker"
+        )
+        richer = self.run_adapter("dispatch-guard", discriminated)
+        self.assertEqual(richer.returncode, 2, richer.stderr)
+        self.assertIn("T-001", richer.stderr)
+
+    def test_followup_at_a_non_guild_agent_still_passes(self):
+        # This gate constrains guild dispatches, not the host. A followup to
+        # somebody else's agent is none of its business.
+        result = self.run_adapter(
+            "dispatch-guard", live_followup(self.project, "research_helper")
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_followup_with_no_readable_target_fails_closed(self):
+        payload = live_followup(self.project)
+        del payload["tool_input"]["target"]
+        result = self.run_adapter("dispatch-guard", payload)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no readable target", result.stderr)
+
+    def test_one_task_dispatches_three_agents_under_distinct_names(self):
+        # Codex rejects a task_name already used in the session tree, so the
+        # worker, the checker of record, and the courier cannot all be
+        # `t_001`. Each carries its own name and all three still resolve to
+        # T-001; that collision is what routed the model onto followup_task.
+        write_task(self.project, "T-001", status="assigned")
+        con_pass(self.project)
+
+        worker = self.run_adapter(
+            "dispatch-guard", live_dispatch(self.project, "t_001_r0_worker")
+        )
+        self.assertEqual(worker.returncode, 0, worker.stderr)
+
+        write_task(self.project, "T-001", status="checking")
+        for name, agent in (
+            ("t_001_r0_checker", "checker-deterministic"),
+            ("t_001_r0_courier", "checker-courier"),
+        ):
+            payload = live_dispatch(self.project, name)
+            payload["tool_input"]["agent_type"] = agent
+            result = self.run_adapter("dispatch-guard", payload)
+            self.assertEqual(result.returncode, 0, f"{name}: {result.stderr}")
+
+        with open(
+            os.path.join(
+                self.project, ".agent-guild", "state", "log", "dispatches.log"
+            ),
+            encoding="utf-8",
+        ) as stream:
+            logged = stream.read()
+        self.assertEqual(logged.count("T-001"), 3, logged)
+        # The discriminator is a wire detail. Everything downstream—task
+        # files, verdict stems, this log—keys on the canonical id.
+        self.assertNotIn("t_001", logged)
 
     def test_dispatch_accepts_documented_structured_items_input(self):
         write_task(self.project, "T-056", status="checking")
@@ -880,7 +999,9 @@ class CodexAdapterTest(unittest.TestCase):
         )
         result = self.run_adapter("dispatch-guard", payload)
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("expected Agent or spawn_agent", result.stderr)
+        self.assertIn(
+            "expected Agent, spawn_agent, or followup_task", result.stderr
+        )
 
 
 if __name__ == "__main__":

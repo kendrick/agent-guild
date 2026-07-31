@@ -531,10 +531,13 @@ def generate_hooks_json(out_dir, shipped_hooks):
 # matchers are anchored regexes: `Agent|spawn_agent` never fired against that
 # name while `.*` did, so the namespace has to be spelled out here or the
 # dispatch gate is silently absent (#71). Bounded to a lowercase prefix and
-# to `spawn_agent` on purpose: `collaborationwait_agent` rides the same
-# namespace and must not reach a gate that would then block it. The write
-# tools need no equivalent, `apply_patch` arrives unnamespaced.
-CODEX_DISPATCH_MATCHER = "[a-z]*spawn_agent|Agent"
+# to the two dispatch primitives on purpose: `collaborationwait_agent` rides
+# the same namespace and must not reach a gate that would then block it. The
+# write tools need no equivalent, `apply_patch` arrives unnamespaced.
+# `followup_task` re-tasks an agent that already exists. Leaving it out is what
+# let a whole job run while dispatch-guard never applied (#77), so it is gated
+# here even though the gate's only move against it is refusal.
+CODEX_DISPATCH_MATCHER = "[a-z]*spawn_agent|[a-z]*followup_task|Agent"
 CODEX_WRITE_MATCHER = "Edit|Write|apply_patch"
 
 

@@ -14,7 +14,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "[a-z]*spawn_agent|Agent",
+        "matcher": "[a-z]*spawn_agent|[a-z]*followup_task|Agent",
         "hooks": [
           {
             "type": "command",

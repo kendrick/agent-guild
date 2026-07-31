@@ -467,6 +467,65 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-bulk", "dispatch_id": "A-001"}}, fresh_proj())
 check("dispatch_id carries an Audition-ID → exit 0", rc == 0, f"rc={rc} err={err}")
 
+# ------------------------------------- dispatch-guard: per-dispatch names (#77)
+# One name per task collides on the second dispatch, because Codex won't reuse
+# an agent name in a session. The wire form carries a discriminator after the
+# id and the gate strips it back off, so three agents on one task still log,
+# check, and escalate as T-001.
+print("dispatch-guard.py: per-dispatch task_name (issue #77)")
+proj_uniq = fresh_proj()
+con_pass(proj_uniq)
+write_task(proj_uniq, "T-001", status="assigned")
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "dispatch_id": "t_001_r0_worker",
+                                        "prompt": "no id line here, the host encrypted it"}}, proj_uniq)
+check("discriminated wire name resolves to the task → exit 0", rc == 0, f"rc={rc} err={err}")
+
+with open(os.path.join(proj_uniq, ".agent-guild", "state", "log", "dispatches.log")) as f:
+    logged = f.read()
+check("discriminator never reaches the dispatch log",
+      "T-001" in logged and "t_001" not in logged, logged)
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor", "dispatch_id": "con_audit_r0"}}, proj_uniq)
+check("discriminated Audit-ID resolves → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# The retry ladder re-dispatches the same role, so the retry counter is what
+# keeps the second attempt's name distinct from the first's.
+write_task(proj_uniq, "T-001", status="assigned", retries=1)
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "dispatch_id": "t_001_r1_worker",
+                                        "prompt": "rework"}}, proj_uniq)
+check("a retry's distinct name still resolves → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------- dispatch-guard: followup refusal (#77)
+# A followup re-tasks an agent that already exists. It carries no agent type,
+# no id, and no readable prompt, so there is nothing to check it against—and
+# leaving it ungated let a whole job run while this gate never applied. Pinned
+# against the gate itself, not only against the adapter that translates it.
+print("dispatch-guard.py: followup_task refusal (issue #77)")
+proj_fu = fresh_proj()
+con_pass(proj_fu)
+write_task(proj_fu, "T-001", status="checking")
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"followup_target": "t_001"}}, proj_fu)
+check("followup at a guild agent → exit 2", rc == 2 and "not allowed" in err, f"rc={rc} err={err}")
+check("followup refusal names a fresh name to use instead", "t_001_r0_checker" in err, err)
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"followup_target": "/root/t_001/t_001_r0_worker"}}, proj_fu)
+check("followup through a rooted agent path → exit 2", rc == 2 and "T-001" in err, f"rc={rc} err={err}")
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"followup_target": "research_helper"}}, proj_fu)
+check("followup at a non-guild agent → exit 0", rc == 0, f"rc={rc} err={err}")
+
+check("a refused followup is never logged as a dispatch",
+      not os.path.exists(os.path.join(proj_fu, ".agent-guild", "state", "log", "dispatches.log")),
+      "dispatches.log exists")
+
 # ---------------------------------------- dispatch-guard: namespaced subagent_type
 # Issue #27: a plugin-installed guild ships subagent_type as `<plugin>:<name>`
 # (e.g. `agent-guild:worker-standard`), and a bare-name GUILD_AGENTS membership

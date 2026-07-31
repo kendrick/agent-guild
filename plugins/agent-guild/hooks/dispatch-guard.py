@@ -17,6 +17,10 @@ dispatch, this blocks unless:
   - for workers, the constitution has a PASS audit—verification reaches the
     orchestrator's own work before any worker builds against it.
 
+A Codex followup, which re-tasks a running agent rather than spawning one, is
+refused outright when it targets a guild agent: it carries nothing left to
+check (#77).
+
 Every passing dispatch appends one line to .agent-guild/state/log/dispatches.log.
 """
 import os
@@ -46,6 +50,34 @@ def main(data):
     # has to carry the same Task-ID/Audit-ID and pass the same legality checks
     # as a top-level one, so this gate deliberately fires inside subagents too.
     ti = data.get("tool_input", {}) or {}
+
+    # A followup re-tasks an agent that already exists, so it names no agent
+    # type and carries no readable prompt: its message is encrypted like every
+    # other Codex dispatch message. All it names is the target's agent path,
+    # built from the `task_name` of the spawn that created it. If any segment
+    # of that path parses as a guild id, work is being handed to a guild agent
+    # behind this gate's back, skipping every check below. SubagentStop still
+    # fires afterward, so the return gate ends up judging work no dispatch
+    # gate ever authorized. Refusal is the only move left, since there's
+    # nothing here to check the call against.
+    target = ti.get("followup_target")
+    if target is not None:
+        for segment in str(target).split("/"):
+            kind, ident = _lib.bare_id(segment)
+            if kind is None:
+                continue
+            wire = ident.replace("-", "_").lower()
+            return _lib.block(
+                f"Re-tasking {ident}'s agent through followup_task is not "
+                "allowed. This call names no agent type and its message is "
+                "encrypted, so none of the dispatch checks can run against "
+                "it—yet the return gate will still judge whatever comes back. "
+                "Spawn a fresh agent instead, with task_name set to a name no "
+                f"dispatch in this session has used yet ({wire}_r0_checker, "
+                "say). One name per dispatch, not one per task."
+            )
+        return 0
+
     raw = ti.get("subagent_type", "")
     agent = _lib.bare_agent(raw)
     if agent not in _lib.GUILD_AGENTS:

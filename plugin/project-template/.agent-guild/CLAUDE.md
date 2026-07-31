@@ -63,6 +63,8 @@ Statuses and who moves them:
 The loop:
 
 1. Move a `pending` task to `assigned` and dispatch its executor. **Every worker/checker dispatch must carry a `Task-ID: T-NNN`** (auditor: `Audit-ID:`)—as a line in the prompt on a Claude host, and in the dispatch's `task_name` field on a Codex host, which encrypts the prompt before any gate can read it. Codex only accepts lowercase, digits, and underscores there, so `T-001` goes on the wire as `t_001` and `CON-audit` as `con_audit`; the gate canonicalizes it back. `dispatch-guard` blocks any dispatch it can't identify.
+
+   On that host the name has to be unique per **dispatch**, not per task. Codex refuses to reuse an agent name inside a session, and a task runs at least a worker, a checker, and a courier. Add a discriminator after the id and keep the id itself intact: `t_001_r0_worker`, `t_001_r0_checker`, `t_001_r0_courier`, `con_audit_r0`. Anything after the number is yours to choose; the gate strips it back to `T-001`. Never re-task a running agent to get around a name clash—`dispatch-guard` refuses that, because a followup carries no id, no agent type, and no readable prompt for any check to run against.
 2. The worker returns with the task at `needs-check`. Set it to `checking` and dispatch its checker.
 3. A checker's verdict of record is JSON at `.agent-guild/state/verdicts/T-NNN-<tier>-r<retries>.json` (schema: `.agent-guild/schemas/verdict.schema.json`), with a rendered `.md` sibling at the same stem for you to read:
    - **pass** → set `complete`.

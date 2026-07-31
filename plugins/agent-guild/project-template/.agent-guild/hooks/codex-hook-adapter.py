@@ -33,8 +33,12 @@ PATCH_TARGET_RE = re.compile(
 )
 TIER_NAMES = {"haiku", "sonnet", "opus", "fable"}
 DISPATCH_TOOLS = ("Agent", "spawn_agent")
+# Codex can also hand new work to an agent that already exists. That reaches
+# the same gate as a spawn, but carries none of what a spawn carries: no agent
+# type, no readable message, only the target's agent path (#77).
+FOLLOWUP_TOOLS = ("followup_task",)
 WRITE_TOOLS = ("Edit", "Write", "apply_patch")
-KNOWN_TOOLS = DISPATCH_TOOLS + WRITE_TOOLS
+KNOWN_TOOLS = DISPATCH_TOOLS + FOLLOWUP_TOOLS + WRITE_TOOLS
 
 
 class AdapterError(Exception):
@@ -106,6 +110,19 @@ def _dispatch_input(data):
     tool_input = data.get("tool_input")
     if not isinstance(tool_input, dict):
         raise AdapterError("PreToolUse dispatch has no object tool_input")
+    if _bare_tool_name(data.get("tool_name")) in FOLLOWUP_TOOLS:
+        # `target` is an agent path, bare (`t_001`) or rooted
+        # (`/root/t_001/t_001`); both shapes came off a live host. It's the
+        # only field here in the clear, so it's all the gate gets. Handed over
+        # raw—recovering a guild id from it is gate policy, not host
+        # representation.
+        target = tool_input.get("target")
+        if not isinstance(target, str) or not target.strip():
+            raise AdapterError(
+                "followup_task names no readable target, so nothing can be "
+                "checked about who it re-tasks"
+            )
+        return {**data, "tool_input": {"followup_target": target.strip()}}
     # `task_name` carries the guild id (#71), so it can't also back-stop the
     # agent name here. A dispatch naming no agent is better off failing the
     # guild-membership test than being handed an id to match against
@@ -277,10 +294,12 @@ def main(argv):
                 f"{actual_event or 'no hook_event_name'}"
             )
         tool_name = _bare_tool_name(data.get("tool_name"))
-        if gate == "dispatch-guard" and tool_name not in DISPATCH_TOOLS:
+        if gate == "dispatch-guard" and tool_name not in (
+            DISPATCH_TOOLS + FOLLOWUP_TOOLS
+        ):
             raise AdapterError(
-                f"dispatch-guard expected Agent or spawn_agent, got "
-                f"{data.get('tool_name') or 'no tool_name'}"
+                f"dispatch-guard expected Agent, spawn_agent, or "
+                f"followup_task, got {data.get('tool_name') or 'no tool_name'}"
             )
         if gate == "orchestrator-write-guard" and tool_name not in WRITE_TOOLS:
             raise AdapterError(

@@ -73,9 +73,22 @@ AUDITION_ID_RE = re.compile(r"\bAudition-ID:\s*(A-\d+)", re.IGNORECASE)
 # verbatim, and the underscore spelling `t_001` is the wire form. Accept either
 # separator in either case and hand back the canonical id, because everything
 # downstream—task filenames, verdict stems, the dispatch log—is `T-001`.
-_BARE_TASK_RE = re.compile(r"^T[-_](\d+)$", re.IGNORECASE)
-_BARE_AUDIT_RE = re.compile(r"^(CON|DEC)[-_]audit$", re.IGNORECASE)
-_BARE_AUDITION_RE = re.compile(r"^A[-_](\d+)$", re.IGNORECASE)
+# Codex also treats task_name as a UNIQUE agent name within a session tree and
+# rejects one already in use. A task needs at least two agents and usually three
+# under the dual-check regime, so one name per task collides on the second
+# dispatch—and when it did, the model routed around the collision through
+# `followup_task`, which no gate covered (#77). The wire form therefore carries
+# a discriminator after the id (`t_001_r0_worker`), and everything past the
+# number is stripped back off here. Free-form rather than a fixed role
+# vocabulary on purpose: `t_001_checker` getting blocked is what pushed the
+# model off `spawn_agent` in the first place, and a re-dispatch that repeats
+# both the role and the retry count still needs room to name itself.
+_DISCRIMINATOR = r"(?:_[a-z0-9_]+)?"
+_BARE_TASK_RE = re.compile(rf"^T[-_](\d+){_DISCRIMINATOR}$", re.IGNORECASE)
+_BARE_AUDIT_RE = re.compile(
+    rf"^(CON|DEC)[-_]audit{_DISCRIMINATOR}$", re.IGNORECASE
+)
+_BARE_AUDITION_RE = re.compile(rf"^A[-_](\d+){_DISCRIMINATOR}$", re.IGNORECASE)
 
 
 def bare_id(value):
@@ -366,10 +379,10 @@ def id_from_transcript(transcript_path):
                     # The prompt scan above finds nothing on a Codex host,
                     # where `message` is encrypted here exactly as it is in
                     # the dispatch payload. `task_name` is clear at both ends,
-                    # which is why the id rides there (#71). PROVISIONAL: no
-                    # SubagentStop has ever fired on Codex, so this branch is
-                    # inferred from transcript structure rather than observed
-                    # against a real return—see #68.
+                    # which is why the id rides there (#71). Observed against a
+                    # live return once the full lifecycle ran on Codex; the
+                    # earlier note here that SubagentStop never fires was wrong
+                    # (#68).
                     got = bare_id(arguments.get("task_name"))[1]
                 if got:
                     tool_ids.append(got)

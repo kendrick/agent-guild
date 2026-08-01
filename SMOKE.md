@@ -15,7 +15,7 @@ Pick the row for the route under test and substitute its tokens throughout the s
 | Codex desktop plugin | Open the target project with **Codex** selected | `$agent-guild:init` | `$agent-guild:job` | `$agent-guild:retrospective` | `claude` |
 | Repo-local Codex IDE | Open the bootstrapped target project in the Codex IDE extension | Installer already ran | `$job` | `$retrospective` | `claude` |
 
-`<init>`, `<job>`, `<retrospective>`, and `<lane>` below mean the values in that row. Claude uses slash skills; Codex uses `$skill-name` or the `/skills` picker. That syntax is the only workflow difference.
+`<init>`, `<job>`, `<retrospective>`, and `<lane>` below mean the values in that row. Claude uses slash skills; Codex uses `$skill-name` or the `/skills` picker. That syntax is not the only difference: Codex encrypts the dispatch message, so the id rides in `task_name` rather than a prompt line, and its checkers run read-only and hand their verdicts back for the orchestrator to write (#67, #76).
 
 Run the shared lifecycle at least once in Claude Code and once on any Codex route. Run every fresh-install drill when release changes touch packaging or setup.
 
@@ -26,13 +26,15 @@ Follow [Install Agent Guild](docs/installing.md) for the complete setup story. T
 For each route, create a throwaway project:
 
 ```sh
-mkdir agent-guild-smoke
-cd agent-guild-smoke
+mkdir -p "$HOME/agent-guild-smoke"
+cd "$HOME/agent-guild-smoke"
 git init
 printf '# smoke target\n' > README.md
 git add README.md
 git commit -m 'chore: seed smoke project'
 ```
+
+The parent directory is explicit on purpose. Codex's sandbox denies writes under `/tmp` even where a plain shell can write there, so a project created below that directory produces denials that read exactly like broken gates (#67).
 
 ### A1. Claude Code Plugin
 
@@ -40,7 +42,7 @@ git commit -m 'chore: seed smoke project'
 2. Run `/plugin marketplace add kendrick/agent-guild`.
 3. Run `/plugin install agent-guild@kendrick`.
 4. Run `/agent-guild:init`, exit, and start a fresh Claude Code session.
-5. Run `/hooks`. Expect exactly one registration for each Agent Guild gate.
+5. Run `/hooks`. Expect five Agent Guild registrations, one copy of each handler Part B names (#67).
 6. Confirm `/agent-guild:job` is available.
 
 If the machine previously used the old `agent-guild@agent-guild` identity, complete the migration in the installation guide first. Two qualified installations are two independently enabled plugins.
@@ -95,6 +97,8 @@ test -d .agent-guild/state/tasks && echo "state dirs present"
 git check-ignore -q .agent-guild/state && echo "state dir gitignored"
 ```
 
+The plugin routes below assert that a project hook file does not exist. That is the pass condition, not a gap. The plugin registers all five handlers itself, so a plugin-only install is fully gated with `.claude/settings.json` or `.codex/hooks.json` missing (#67). Only the repo-local route writes one, because it has no plugin to register them.
+
 Claude plugin:
 
 ```sh
@@ -125,12 +129,15 @@ test -f .agent-guild/hooks/codex-hook-adapter.py && echo "repo-local hook adapte
 
 Start a fresh host session after init. Claude asks you to trust the workspace before project hooks run; accept it. Codex requires a separate `/hooks` review and explicit trust of every new or changed Agent Guild definition.
 
-In `/hooks`, expect one logical set of four gates:
+In `/hooks`, expect five Agent Guild registrations, one copy of each (#67):
 
-- `dispatch-guard`
-- `orchestrator-write-guard`
-- `subagent-return`
-- `stop-gate`
+- `session-nudge` on `SessionStart`
+- `dispatch-guard` on `PreToolUse`
+- `orchestrator-write-guard` on `PreToolUse`
+- `subagent-return` on `SubagentStop`
+- `stop-gate` on `Stop`
+
+Four of those are enforcement gates that can refuse the event they run on. `session-nudge` is not—it prints at session start, either a reminder to finish init or a double-registration warning, and has no deny path. A five-name list is correct; the same name listed twice is the failure at the end of this file.
 
 From an Agent Guild source checkout, maintainers also run the offline suites:
 
@@ -165,7 +172,7 @@ Codex reports the dispatch primitive as `collaborationspawn_agent`, namespace an
 - Shell: `.agent-guild/scripts/new-task.py "smoke gate probe"`.
 - Expect: `.agent-guild/state/tasks/T-001.md` exists at `status: pending`.
 - Session: `> How many open Agent Guild tasks are there right now?`
-- Expect: the turn cannot end. `stop-gate` names `T-001` and its next lifecycle move.
+- Expect: the turn cannot end. `stop-gate` blocks with `the turn can't end yet`, names `T-001`, and gives its next lifecycle move.
 
 ### B3a. A Re-Tasked Guild Agent Is Denied (Codex Only)
 
@@ -196,6 +203,12 @@ rm -f smoke-write-guard.txt .agent-guild/state/PAUSED .agent-guild/state/tasks/T
 ## Part C: Shared Lifecycle
 
 This drives one deterministic toy job through the worker/checker boundary, a FAIL and rework, a dispute, and escalation. The protocol and state are the same on both hosts. Codex checkers are project-read-only and return proposed verdict content to the parent for persistence; Claude checkers write their verdicts directly. The resulting files are identical.
+
+On Codex the id rides in `task_name`, and Codex validates that field as an agent name: `agent_name must use only lowercase letters, digits, and underscores`. `T-001` therefore goes on the wire as `t_001` and `CON-audit` as `con_audit`, and the gate canonicalizes it back (#72, #74).
+
+That name must also be unique per dispatch rather than per task. Codex rejects an agent name already in use, and this one task spawns a worker, a checker, and a courier before Part D ends, more once C2 forces a rework. Append a discriminator and leave the id itself intact: `t_001_r0_worker`, `t_001_r0_checker`, `t_001_r0_courier` (#77, closed by #80). Everything after the number is free-form and the gate strips it back to `T-001`, so a re-check repeating both the role and the retry count still has room to name itself.
+
+Give every dispatch from here on a name no earlier dispatch in this session has used. A collision comes back from the host rather than from a gate, so no denial text names `T-001`. Reaching for `followup_task` instead draws its own refusal, which is what B3a drills.
 
 ### C0. Seed A Toy Job
 
@@ -259,6 +272,7 @@ In `## Spec excerpt`, write: `Write guild-motto.txt containing exactly one line:
 ### C1. Happy Path
 
 - Session: `> Run assigned Agent Guild task T-001 through its worker and checker. Task-ID: T-001.`
+- On Codex: the prompt is encrypted, so the ids ride in `task_name`—`t_001_r0_worker` for the worker dispatch, `t_001_r0_checker` for the checker.
 - Expect: `worker-standard` writes `guild-motto.txt`, updates the task to `needs-check` with a non-empty `artifacts` list, and writes `.agent-guild/state/notes/T-001.md`. The checker independently runs the named grep. The orchestrator marks the task complete only after the verdict.
 - Shell:
 
@@ -267,6 +281,8 @@ python3 .agent-guild/scripts/validate-verdict.py .agent-guild/state/verdicts/T-0
 test -f .agent-guild/state/verdicts/T-001-sonnet-r0.md && echo "rendered verdict present"
 grep -q '^verdict: PASS$' .agent-guild/state/verdicts/T-001-sonnet-r0.md && echo "PASS present"
 ```
+
+Read the result from those files, not from `.agent-guild/state/log/dispatches.log`. Hooks run before Codex validates its own tool arguments, so the log records gate passes rather than agents that ran, and a line there is not proof the dispatch started. Confirm a dispatch by its `SubagentStart` instead (#67).
 
 ### C2. Forced FAIL And Rework
 
@@ -279,6 +295,7 @@ rm -f .agent-guild/state/verdicts/T-001-sonnet-r0.json .agent-guild/state/verdic
 
 - Set the task back to `status: checking`, `retries: 0`.
 - Session: `> Dispatch checker-deterministic for T-001. Task-ID: T-001.`
+- On Codex: C1 spent `t_001_r0_checker`, so this pass needs a fresh name such as `t_001_r0_checker_2`, then `t_001_r1_worker` and `t_001_r1_checker` once the rework increments the retry.
 - Expect: the exact grep exits 1. A conforming FAIL verdict names C-1 and the command evidence. The orchestrator copies the rendered diagnosis into `## Rework diagnosis`, increments the retry, assigns the same worker, and re-checks the corrected `GUILD ENDURES` artifact.
 
 ### C3. Forced Dispute
@@ -361,6 +378,7 @@ Expect exit 0. Preserve its output and exit code as the evidence supplied to the
 ### D1. Second Opinion
 
 - Session: `> Dispatch checker-courier for T-001. Task-ID: T-001. Local evidence for C-1: .agent-guild/scripts/check-build.sh "grep -q GUILD guild-motto.txt" exited 0; include that evidence in the courier brief.`
+- On Codex: the courier's `task_name` is `t_001_r0_courier`.
 - Expect: the courier sends only the composed brief, artifact content, and supplied local evidence to the other vendor. It writes or returns a conforming suffixed second opinion; it never replaces the unsuffixed checker verdict.
 - Replace `<lane>` in these shell checks:
 
@@ -377,7 +395,7 @@ A missing CLI, authentication failure, timeout, or two malformed replies produce
 
 - Shell: `mkdir -p .agent-guild/state/exhausted && touch .agent-guild/state/exhausted/<lane>`.
 - Session: `> Dispatch checker-courier for T-001. Task-ID: T-001.`
-- Expect: `dispatch-guard` blocks the courier before it starts, names T-001's in-family checker, and says the sentinel is user-cleared.
+- Expect: `dispatch-guard` blocks the courier before it starts with `lane is exhausted`, names T-001's in-family checker, and closes `The sentinel is user-cleared, like PAUSED.`
 - Session: `> Dispatch T-001's checker of record. Task-ID: T-001.`
 - Expect: the unsuffixed in-family verdict runs normally. The quota sentinel affects only comparison data.
 

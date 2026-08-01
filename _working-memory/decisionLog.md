@@ -14,6 +14,16 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-01: One Codex Agent Name Per Dispatch, And No Re-Tasking Through `followup_task`
+
+**Source:** issue #77; PR #80, verified live in a Codex session the same day
+
+**Context:** Codex treats `task_name` as a unique agent name inside a session tree and rejects one already in use. Carrying one id per task (#71) therefore made the second dispatch for a task collide, and the obvious workaround `t_001_checker` was blocked because `bare_id` only parsed `t_001`. With both routes closed the model reached the running agent through `collaborationfollowup_task`, which no matcher covered. Four such calls ran in one session, one of them from inside a subagent. That call names no agent type, carries an encrypted message, and identifies its target only by agent path, so none of the dispatch checks can run against it, while `SubagentStop` still fires and the return gate judges whatever comes back. A whole job completed with `dispatch-guard` never applying.
+
+**Decision:** Make the wire name unique per dispatch rather than per task (`t_001_r0_worker`, `t_001_r0_checker`, `con_audit_r0`), with `bare_id` stripping any trailing discriminator back to the canonical `T-001` so task files, verdict stems, and the dispatch log are untouched. The discriminator is free-form on purpose. Gate `followup_task` in the Codex matcher and refuse it outright whenever any segment of its target parses as a guild id, since refusal is the only move available when there is nothing left to check. The block names a spare `task_name` so it teaches rather than merely stops. Both halves ship together: closing the ungated path without fixing the collision would only move the pressure elsewhere.
+
+**Alternatives considered:** Constraining the discriminator to a fixed role vocabulary (rejected—a too-tight shape is exactly what pushed the model off `spawn_agent`, and a re-dispatch repeating both role and retry count still needs room to name itself); recovering a Task-ID from the followup itself and checking it like a spawn (rejected—the target is an agent path and the message is encrypted, so there is no id to recover); allowing a followup at a guild agent whose task is in a legal state (rejected—state is the only thing that could be checked, and tier, executor identity, and the CON-audit precondition would all go unverified).
+
 ## 2026-07-31: The Guild Never Takes Work On Its Own Gates In This Repo
 
 **Source:** #68 and #77 routing decisions

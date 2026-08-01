@@ -14,6 +14,12 @@ The whole multi-provider arc rests on the claim that a checker from a different 
 
 The `codex exec` flags, sandbox modes, output mechanisms, and usage reporting were all verified live on 2026-07-24 (issue #2's closing comment is the reference; default model pinned to `gpt-5.6-terra` in `~/.codex/config.toml`). The one remaining unknown: the quota/rate-limit failure shape — exit code and stderr wording — that the courier's exhaustion detection must match. Nothing triggered it cheaply; tune on the first real quota event.
 
+## Does `sandbox_mode: read-only` deny a write inside the workspace?
+
+Half answered on 2026-07-31. Outside the workspace it denies nothing: two read-only agents, `checker-deterministic` and `checker-courier`, wrote to `/private/tmp` on their own initiative in a normal run and both writes landed. So the mode constrains the project directory at most, and #76's "read-only checkers return their verdict instead of writing it" is a protocol the agents follow because the role prompt tells them to, not a boundary the host enforces.
+
+The half that matters to the org chart is still open, because three probes failed to test it. The generated read-only protocol says *do not write or edit any project, artifact, task, state, ledger, or verdict file*, so a compliant checker never attempts the in-workspace write, and `/private/tmp` satisfies the letter of the instruction. Testing the sandbox rather than the instruction needs a prompt that explicitly overrides the role protocol, the way the `followup_task` probe eventually did.
+
 ## Why four probes recorded no `SubagentStop` while the event fires
 
 Verified 2026-07-31: `SubagentStop` fires on codex-cli 0.145.0 at agent completion, about a second after `SubagentStart`, with a complete payload. Four earlier probes across two projects captured nothing, under both a no-matcher catch-all and the guild's own agent-name matcher, while `SessionStart`, `PreToolUse`, and `Stop` all landed in the same directories through the same recorder. The one asymmetry noticed but not tested: those capture directories sat under `/private/tmp`, and Codex's sandbox denies writes there, though the parent's `PreToolUse` captures reached them anyway. Until this is understood, treat an absent capture as weak evidence and register a control event known to fire in the same session before concluding anything from silence.

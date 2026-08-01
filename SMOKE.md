@@ -34,7 +34,7 @@ git add README.md
 git commit -m 'chore: seed smoke project'
 ```
 
-The parent directory is explicit on purpose. Codex's sandbox denies writes under `/tmp` even where a plain shell can write there, so a project created below that directory produces denials that read exactly like broken gates (#67).
+The parent directory is explicit on purpose, so the drill lands in the same place no matter where you were standing when you ran it. Every later step assumes that path.
 
 ### A1. Claude Code Plugin
 

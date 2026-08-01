@@ -34,7 +34,7 @@ Start Claude Code in the target project, then add the marketplace and install th
 /agent-guild:init
 ```
 
-Start a fresh Claude Code session after init so the new project contract is present from the beginning. Run `/hooks` and confirm there is one Agent Guild registration for each gate, then start existing work with:
+Start a fresh Claude Code session after init so the new project contract is present from the beginning. Run `/hooks` and confirm five Agent Guild registrations appear, one copy of each: the four enforcement gates plus `session-nudge`, which only prints at session start (#67). Then start existing work with:
 
 ```text
 /agent-guild:job <issue|file|url>
@@ -135,9 +135,11 @@ Then check the selected route:
 
 | Route | Fresh-Project Evidence |
 | --- | --- |
-| Claude plugin | `CLAUDE.md` imports `@.agent-guild/CLAUDE.md`; `/hooks` shows one copy of each Guild gate; `/agent-guild:job` is available |
+| Claude plugin | `CLAUDE.md` imports `@.agent-guild/CLAUDE.md`; `/hooks` shows the five Guild registrations, one copy each; `/agent-guild:job` is available |
 | Codex CLI or desktop plugin | `AGENTS.md` has one bounded Agent Guild section; `.codex/agents/` has the nine-agent roster; `/hooks` shows one trusted copy of the Guild definitions; `$agent-guild:job` is available |
 | Repo-local Codex IDE | The same `AGENTS.md` section and roster exist; `.agents/skills/job/SKILL.md`, `.codex/hooks.json`, and `.agent-guild/hooks/codex-hook-adapter.py` exist; `/hooks` shows one trusted copy; `$job` is available |
+
+Every route in that table registers the same five handlers—`session-nudge`, `dispatch-guard`, `orchestrator-write-guard`, `subagent-return`, and `stop-gate`—so `/hooks` shows five entries (#67). The last four are the enforcement gates; the first only prints.
 
 Finish with [SMOKE.md](../SMOKE.md). It runs one host-neutral lifecycle after these thin host setup checks.
 

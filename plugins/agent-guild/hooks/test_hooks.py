@@ -262,6 +262,49 @@ check("livelock strikes 1,2 block", rc1 == 2 and rc2 == 2, f"{rc1},{rc2}")
 check("livelock strike 3 → exit 0", rc3 == 0, f"rc={rc3}")
 check("livelock strike 3 → STALLED.md written", stalled)
 
+# a landed verdict is progress even when the task tuple doesn't move. A task
+# sits at `checking` across its checker of record AND its courier second
+# opinion, so two real checks can complete without status or retries changing.
+# Counting that as a stall wrote a spurious STALLED.md during the #78 run and is
+# the same blindness behind #81.
+proj = fresh_proj()
+write_task(proj, "T-001", status="checking", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+os.makedirs(verdicts_dir, exist_ok=True)
+rc1, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+rc2, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+# checker of record returns; task stays at checking/0 because the orchestrator
+# hasn't ruled on the verdict yet.
+with open(os.path.join(verdicts_dir, "T-001-opus-r0.json"), "w") as f:
+    f.write("{}\n")
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+stalled_after_verdict = os.path.exists(
+    os.path.join(proj, ".agent-guild", "state", "STALLED.md"))
+with open(os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")) as f:
+    count_after_verdict = json.load(f)["count"]
+check("verdict landing resets the stall counter",
+      count_after_verdict == 1, f"count={count_after_verdict}")
+check("verdict landing → no spurious STALLED.md on strike 3",
+      not stalled_after_verdict)
+check("the turn is still blocked (progress is not completion)",
+      rc1 == 2 and rc2 == 2 and rc3 == 2, f"{rc1},{rc2},{rc3}")
+
+# the backstop still fires when nothing lands: same task tuple, same verdict
+# set, three strikes.
+proj = fresh_proj()
+write_task(proj, "T-001", status="checking", retries=0)
+os.makedirs(os.path.join(proj, ".agent-guild", "state", "verdicts"), exist_ok=True)
+with open(os.path.join(proj, ".agent-guild", "state", "verdicts",
+                       "T-001-opus-r0.json"), "w") as f:
+    f.write("{}\n")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_last, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a checker owing a verdict still stalls after three strikes",
+      rc_last == 0 and os.path.exists(
+          os.path.join(proj, ".agent-guild", "state", "STALLED.md")),
+      f"rc={rc_last}")
+
 # double-registration proof (issue #41): with both the plugin's hooks.json and
 # a copy-in settings.json active, the SAME real main-session Stop event fires
 # stop-gate.py twice before the orchestrator resolves anything—so one real

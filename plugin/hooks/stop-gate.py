@@ -11,7 +11,8 @@ acted on.
 Livelock guard: if the same open-task state blocks three times in a row while
 stop_hook_active is set, the gate gives up loudly—it writes .agent-guild/state/STALLED.md
 naming the stuck tasks and lets the turn end, rather than spinning forever. Any
-real progress (a status or retry change) resets the counter.
+real progress resets the counter: a status change, a retry change, or a verdict
+landing.
 """
 import json
 import os
@@ -42,6 +43,26 @@ def _next_move(tid, status, retries):
 
 def _state_file():
     return _lib.state_path("log", "stop-gate.state")
+
+
+def _verdicts_landed():
+    """Verdict filenames, which move whenever a check finishes.
+
+    (id, status, retries) can hold still across real work: a task sits at
+    `checking` through its checker of record AND its courier second opinion, so
+    two verdicts can land without the task tuple changing at all. Counting that
+    as "no progress" is what wrote a spurious STALLED.md during the #78 run, and
+    it's the same blindness behind #81—on Codex checkers hand their verdicts to
+    the parent to write, which stretches the window between status changes and
+    trips the backstop sooner. A stem carries task, tier, retry, and lane, so
+    the set is a faithful progress signal without reading any file.
+    """
+    try:
+        return sorted(os.listdir(_lib.state_path("verdicts")))
+    except OSError:
+        # No verdicts dir yet is a legitimate state, not an error—fall back to
+        # the task tuple alone rather than letting the gate crash open.
+        return []
 
 
 def _load_state():
@@ -79,7 +100,7 @@ def main(data):
         _save_state(None, 0)
         return 0
 
-    digest = json.dumps(sorted(tasks))
+    digest = json.dumps([sorted(tasks), _verdicts_landed()])
     prev = _load_state()
     stop_active = bool(data.get("stop_hook_active"))
 
@@ -94,7 +115,8 @@ def main(data):
         lines = [
             "# STALLED",
             "",
-            f"The stop gate blocked {count} times with no change to these tasks:",
+            f"The stop gate blocked {count} times with no change to these tasks "
+            f"and no verdict landing:",
             "",
         ] + [f"- {t[0]} [{t[1]}] retries={t[2]}" for t in tasks] + [
             "",

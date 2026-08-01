@@ -134,6 +134,14 @@ def con_pass(project):
         stream.write(body)
 
 
+# Session-scoped events carry no turn_id on a live host—there is no turn yet, or
+# no longer one. Verified against captured SessionStart and SessionEnd payloads
+# from codex-cli 0.146.0; every captured PreToolUse, SubagentStart, and
+# SubagentStop does carry it. Synthesizing one here would have let a hook come to
+# depend on a field the host never sends.
+_SESSION_SCOPED = ("SessionStart", "SessionEnd")
+
+
 def codex_input(event, project, **fields):
     payload = {
         "session_id": "019fa0c0-23f4-7951-b9ae-f97f8f3a6f39",
@@ -144,6 +152,8 @@ def codex_input(event, project, **fields):
         "model": "gpt-5.6-sol",
         "permission_mode": "default",
     }
+    if event in _SESSION_SCOPED:
+        del payload["turn_id"]
     payload.update(fields)
     return payload
 
@@ -969,7 +979,6 @@ class CodexAdapterTest(unittest.TestCase):
         payload = codex_input(
             "SessionStart",
             nested,
-            turn_id=None,
             source="startup",
         )
         result = self.run_adapter(

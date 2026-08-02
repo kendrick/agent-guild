@@ -48,12 +48,14 @@ Approve the escalation when the session asks for it, or start the session with `
 
 1. Start `claude` in the target project and accept its workspace trust prompt.
 2. Run `/plugin marketplace add kendrick/agent-guild`.
-3. Run `/plugin install agent-guild@kendrick`.
+3. Run `/plugin install agent-guild@kendrick`, then confirm it reports **enabled**, not merely installed. A migrated install can inherit the old identity's disabled state; `claude plugin enable agent-guild@kendrick` clears it.
 4. Run `/agent-guild:init`, exit, and start a fresh Claude Code session.
 5. Run `/hooks`. Expect five Agent Guild registrations, one copy of each handler Part B names (#67).
 6. Confirm `/agent-guild:job` is available.
 
 If the machine previously used the old `agent-guild@agent-guild` identity, complete the migration in the installation guide first. Two qualified installations are two independently enabled plugins.
+
+A disabled plugin registers no hooks at all, so every Part B drill would pass by refusing nothing. That is the same false negative B2 warns about, arriving from the packaging side instead of the prompt side.
 
 ### A2. Codex CLI Plugin
 
@@ -360,9 +362,20 @@ Set the task to `status: disputed`, `retries: 2`.
 
 ### C4. Forced Escalation (Claude Only)
 
-- Set the task to `status: rework`, `executor_model: sonnet`, `retries: 3`, `max_retries: 2`.
+- Shell, to put the job back in a state that actually warrants an escalation:
+
+```sh
+printf 'the guild endures\n' > guild-motto.txt
+rm -f .agent-guild/state/verdicts/T-001-sonnet-r1.* \
+      .agent-guild/state/verdicts/T-001-sonnet-r2.* \
+      .agent-guild/state/disputes/T-001-sonnet-r2.md
+```
+
+- Set the task to `status: rework`, `executor_model: sonnet`, `retries: 3`, `max_retries: 2`, leaving C2's r0 FAIL as the newest verdict on file.
 - Session: `> T-001 has exhausted its current tier. Proceed through the Agent Guild retry ladder.`
-- Expect: the orchestrator changes `executor_model` to `opus`, resets `retries` to `0`, appends the task's `escalations`, and writes `.agent-guild/state/log/escalations.log`. Its next dispatch uses the new tier label; `dispatch-guard` would reject the stale label.
+- Expect: the orchestrator changes `executor_model` to `opus`, resets `retries` to `0`, appends the task's `escalations`, and writes `.agent-guild/state/log/escalations.log`. Read the escalation out of that log and out of `dispatches.log`, not just the task frontmatter. Its next dispatch uses the new tier label; `dispatch-guard` would reject the stale label.
+
+The failing artifact is the whole point of that shell block. Leave C3's corrected `guild-motto.txt` in place and an orchestrator that checks the file before acting will find C-1 satisfied, mark the task complete, and never touch the ladder, which is the right call on the evidence in front of it. The drill exercises escalation only when the state on disk agrees the work is still broken.
 
 Skip this drill on Codex. An escalated task there records the bump and then cannot dispatch at all: the gate refuses the stale tier, the host refuses `opus`, and the turn ends with `STALLED.md` (#88). When a Codex task spends its budget at its executor's own tier, go straight to the ending the ladder prescribes above fable: enrich the spec and re-decompose, or hand the task to the user.
 

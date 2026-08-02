@@ -73,8 +73,14 @@ GUILD_AGENTS = [
     "working-memory-synchronizer",
 ]
 
+# The Claude package ships every guild role the lifecycle dispatches, courier
+# included: the contract makes the second opinion mandatory until #34 closes,
+# so an unshipped checker-courier silently disables the whole dual-check regime
+# for plugin users (#94). What stays out is the optional working-memory pair,
+# which no lifecycle step dispatches.
 CLAUDE_PLUGIN_AGENTS = [
     "auditor",
+    "checker-courier",
     "checker-deterministic",
     "checker-judgment",
     "worker-bulk",

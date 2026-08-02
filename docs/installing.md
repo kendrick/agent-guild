@@ -49,6 +49,8 @@ If this machine used Agent Guild 0.5.0 or earlier, remove the old marketplace id
 
 Claude Code treats `agent-guild@agent-guild` and `agent-guild@kendrick` as separate plugins. Leaving both installed enables both copies and double-registers the gates.
 
+Check that the new install came up enabled before you trust it. If the old identity was disabled, the replacement can inherit that state and land as `Status: ✘ disabled`, which registers no hooks and no agents while still looking installed. `claude plugin enable agent-guild@kendrick` fixes it.
+
 ### Codex Plugin From The CLI
 
 Add the Git repository as a Codex marketplace and install the qualified plugin from a shell:

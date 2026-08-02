@@ -74,6 +74,30 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         f"qualified_plugin_id={qualified_plugin_id!r}",
     )
 
+    # Pin the shipped roster by name. checker-courier went missing from this
+    # list for a whole release and nothing caught it, because every test and
+    # every dogfood run dispatched this repo's own .claude/agents/ copy
+    # instead of the package (#94). A dropped role has to fail here.
+    shipped_claude_agents = sorted(
+        name[: -len(".md")]
+        for name in os.listdir(os.path.join(ROOT, "plugin", "agents"))
+        if name.endswith(".md")
+    )
+    expected_claude_agents = [
+        "auditor",
+        "checker-courier",
+        "checker-deterministic",
+        "checker-judgment",
+        "worker-bulk",
+        "worker-craft",
+        "worker-standard",
+    ]
+    check(
+        "the committed Claude package ships every dispatchable guild role",
+        shipped_claude_agents == expected_claude_agents,
+        f"shipped={shipped_claude_agents!r}",
+    )
+
     core_dir = getattr(build_plugin, "CORE_DIR", None)
     core_role = (
         os.path.join(core_dir, "roles", "auditor.md") if core_dir else ""

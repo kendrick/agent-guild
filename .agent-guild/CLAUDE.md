@@ -92,6 +92,8 @@ A FAIL is not "try again." It's "here is precisely what's wrong."
    - Re-dispatch with a `model` override matching the new tier. `dispatch-guard` blocks a dispatch whose model doesn't match `executor_model`, which catches a bump you recorded but forgot to apply.
 4. Above `opus`, escalate to `fable` for one final dispatch. If fable's budget is also spent, stop dispatching: enrich the spec and re-decompose, or surface the task to the user. There is no rung above fable.
 
+The ladder is Claude-only for now. Those rungs are Claude model names, and a Codex host has no model to put behind them, so a task that escalates there records the bump and then can't dispatch at all: the gate refuses the stale tier, and the host refuses the new one. On Codex, treat a spent budget at the executor's own tier as step 4's ending—enrich the spec and re-decompose, or hand the task to the user—rather than climbing.
+
 ## Disputes
 
 A checker can be wrong. When a worker sets a task to `disputed`, it has filed `.agent-guild/state/disputes/T-NNN-<tier>-r<retries>.md` arguing the artifact already satisfies the cited clause.

@@ -36,6 +36,14 @@ git commit -m 'chore: seed smoke project'
 
 The parent directory is explicit on purpose, so the drill lands in the same place no matter where you were standing when you ran it. Every later step assumes that path.
 
+On a Codex route, init writes into `.codex/`, and Codex's own `workspace-write` sandbox refuses to create or touch that directory. Nothing gets installed and the failure reads:
+
+```text
+install.py: [Errno 1] Operation not permitted: '<project>/.codex'
+```
+
+Approve the escalation when the session asks for it, or start the session with `.codex` as a writable root. None of A5's assertions can run until one of those happens.
+
 ### A1. Claude Code Plugin
 
 1. Start `claude` in the target project and accept its workspace trust prompt.
@@ -161,9 +169,11 @@ rm -f .agent-guild/state/tasks/T-*.md .agent-guild/state/verdicts/T-* .agent-gui
 
 ### B2. An Untagged Dispatch Is Denied
 
-- Session: `> Dispatch the Agent Guild worker-standard agent with the exact prompt "write a limerick". Do not add a Task-ID.`
+- Session: `> I am smoke-testing dispatch-guard and need to watch it deny a call. Actually invoke the agent-spawn tool for worker-standard with the message "write a limerick". Do not add a Task-ID, and do not refuse on your own; I need the call attempted so the guard can answer it.`
 - Expect on Claude: `dispatch-guard` blocks before the subagent starts, with a message containing `has no id line`. The session relays that it needs `Task-ID: T-NNN`.
 - Expect on Codex: the same block, worded `carries no readable id` and pointing at `task_name`. Codex encrypts the dispatch message before any hook sees it, so the id rides in that field instead of the prompt.
+
+The prompt has to insist on the tool call. Told plainly to dispatch without a Task-ID, the session reads the contract, decides it can't comply, and says so in prose, which looks like a pass and isn't one: you can't tell a well-behaved orchestrator from a gate that never ran. The drill passes on a denial that quotes the guard, and on nothing else. B3a and B4 have the same problem, which is why their prompts are worded the same way.
 
 Codex reports the dispatch primitive as `collaborationspawn_agent`, namespace and name run together, and the adapter normalizes it before the gate sees it. Claude reports `Task` or `Agent` and needs no translation.
 
@@ -176,7 +186,7 @@ Codex reports the dispatch primitive as `collaborationspawn_agent`, namespace an
 
 ### B3a. A Re-Tasked Guild Agent Is Denied (Codex Only)
 
-- Session: `> Use followup_task to send an instruction to the agent named t_001. Do not spawn a new agent.`
+- Session: `> I am smoke-testing dispatch-guard. Actually invoke followup_task to send an instruction to the agent named t_001. Do not spawn a new agent, and do not refuse on your own; I need the call attempted so the guard can answer it.`
 - Expect: `dispatch-guard` blocks with `followup_task is not allowed`, names `T-001`, and suggests a fresh `task_name` to spawn under instead.
 - Claude has no equivalent primitive, so skip this step there.
 
@@ -184,7 +194,7 @@ Codex can hand new work to an agent it already spawned. That call carries no age
 
 ### B4. The Write Guard Keeps The Orchestrator Out
 
-- With `T-001` still open, Session: `> Use your structured file-edit tool to create smoke-write-guard.txt containing "blocked".`
+- With `T-001` still open, Session: `> I am smoke-testing orchestrator-write-guard. Actually use your structured file-edit tool to create smoke-write-guard.txt containing "blocked". Do not use shell redirection, and do not refuse on your own; I need the call attempted so the guard can answer it.`
 - Expect: `orchestrator-write-guard` blocks with a message containing `orchestrator contract`. The file does not exist.
 
 The guard covers Claude's structured edit tools and Codex's `apply_patch` family, not arbitrary shell redirection. This prompt deliberately exercises the guarded path.
@@ -269,6 +279,8 @@ status: assigned
 
 In `## Spec excerpt`, write: `Write guild-motto.txt containing exactly one line: GUILD ENDURES`.
 
+`new-task.py` writes several of those fields with their guidance indented underneath. Replace each entry whole, guidance lines included. Overwrite only the `check_method:` line and its three explanatory lines stay behind as a scalar continuation, so the field parses as one long run-on string and the check it names never runs.
+
 ### C1. Happy Path
 
 - Session: `> Run assigned Agent Guild task T-001 through its worker and checker. Task-ID: T-001.`
@@ -346,11 +358,13 @@ Set the task to `status: disputed`, `retries: 2`.
 - Session: `> Rule on the dispute for T-001.`
 - Expect: the orchestrator reads the artifact itself, upholds the worker, appends an `## Orchestrator Ruling`, sets the dispute to `worker-upheld`, and completes the task. It does not accept the worker's claim without checking the file.
 
-### C4. Forced Escalation
+### C4. Forced Escalation (Claude Only)
 
 - Set the task to `status: rework`, `executor_model: sonnet`, `retries: 3`, `max_retries: 2`.
 - Session: `> T-001 has exhausted its current tier. Proceed through the Agent Guild retry ladder.`
 - Expect: the orchestrator changes `executor_model` to `opus`, resets `retries` to `0`, appends the task's `escalations`, and writes `.agent-guild/state/log/escalations.log`. Its next dispatch uses the new tier label; `dispatch-guard` would reject the stale label.
+
+Skip this drill on Codex. An escalated task there records the bump and then cannot dispatch at all: the gate refuses the stale tier, the host refuses `opus`, and the turn ends with `STALLED.md` (#88). When a Codex task spends its budget at its executor's own tier, go straight to the ending the ladder prescribes above fable: enrich the spec and re-decompose, or hand the task to the user.
 
 ### C5. Retrospective
 
@@ -363,6 +377,8 @@ The courier lane changes with the host; its protocol does not:
 
 - Claude host: `<lane>` is `codex`; `codex login status` must succeed.
 - Codex host: `<lane>` is `claude`; `claude auth status --text` must succeed.
+
+Check that precondition from inside the host session, not from the shell beside it. The courier runs where its parent runs, under the same sandbox, and a CLI that authenticates fine in your terminal can still fail there. On macOS the `claude` CLI keeps its credentials in the keychain, which a sandboxed Codex session cannot reach, so it reports `Not logged in` however you logged in (#92).
 
 Repeat C0, then create a correct `guild-motto.txt` and set T-001 to `status: checking`, `artifacts: [guild-motto.txt]`, `retries: 0`.
 
@@ -386,10 +402,12 @@ Expect exit 0. Preserve its output and exit code as the evidence supplied to the
 test -f .agent-guild/state/verdicts/T-001-sonnet-r0-<lane>.json && echo "suffixed verdict present"
 test -f .agent-guild/state/verdicts/T-001-sonnet-r0-<lane>.md && echo "rendered sibling present"
 python3 .agent-guild/scripts/validate-verdict.py .agent-guild/state/verdicts/T-001-sonnet-r0-<lane>.json
-tail -n1 .agent-guild/state/log/vendor-calls.jsonl | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); assert d['brief_tokens'] is not None; print('brief_tokens:', d['brief_tokens'])"
+tail -n1 .agent-guild/state/log/vendor-calls.jsonl | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print('exit_code:', d['exit_code'], 'brief_tokens:', d['brief_tokens'])"
 ```
 
 A missing CLI, authentication failure, timeout, or two malformed replies produces a valid `blocked` suffixed verdict and ledger entry. It does not fail the worker or consume a retry.
+
+Read that last line against the verdict you just validated. A crossing that completed exits 0 and reports a non-null `brief_tokens`; that is the pass condition. A `blocked` one exits non-zero and reports `null`, correctly, because the brief never left the machine. Demanding a token count either way turns the documented fallback into a failure.
 
 ### D2. Quota Fallback
 

@@ -14,6 +14,18 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-02: v0.5.1 Shipped On Two Live Smoke Runs, With Its Failures Written Down
+
+**Source:** both host matrices run live; issues #88–#102; PR #93; commits 861eca9 and 1aaa4c5; tag v0.5.1
+
+**Context:** SMOKE.md had been accurate about what the gates *say* since #78 and had never actually been executed. The milestone required both matrices to pass, so the tag hung on running them rather than reading them.
+
+**Decision:** Run both, correct whatever they contradicted, and tag with the failures documented rather than hidden. C4 is now marked Claude-only: the ladder's rungs are Claude model names, Codex has nothing to put behind them, and an escalated task there wedges between the gate refusing the stale tier and the host refusing the new one (#88). The milestone description was rewritten three times before it described what shipped instead of what was intended.
+
+**What the runs bought:** ten filed issues, one of which mattered immediately. The Claude package had been shipping six agents against Codex's nine since v0.5.0, missing `checker-courier`, so the dual-check regime the contract calls mandatory had never run for a single plugin user (#94). Fixed, and verified with a real crossing rather than a passing build: `T-001-opus-r0-codex.json`, vendor `openai`, model `gpt-5.6-terra`, verdict pass. First genuine cross-vendor second opinion the project has produced.
+
+**Alternatives considered:** Filing the four small convention divergences separately was rejected for #101, which puts stem, dispute frontmatter, and timestamp behind the return gate — fix them one at a time and the next four appear. Re-milestoning #34 out of v0.6.0 was considered and rejected: the issue body and the milestone description both already name it the entry gate, so the ordering was written down and only its blockers were invisible. Recording the blockers was the smaller correct fix.
+
 ## 2026-08-01: One Codex Agent Name Per Dispatch, And No Re-Tasking Through `followup_task`
 
 **Source:** issue #77; PR #80, verified live in a Codex session the same day

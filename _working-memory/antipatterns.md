@@ -14,6 +14,27 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-02: Don't count a deterministic clause as cross-family evidence
+
+**Tried:** Dual-checking the smoke job's C-1 (`grep -q GUILD guild-motto.txt`) and reading the resulting agreement as a #34 data point.
+**What broke:** Nothing visibly — which is the problem. The courier relays judgment and never executes, so a deterministic clause crosses as pre-run output for the far side to judge. Two vendors handed the same exit code agree every time, so the crossing is guaranteed agreement carrying no information.
+**Why we backed out:** #34 rules the multi-provider bet won't-do if the unique-finding rate is near zero. Feed it deterministic clauses and it reaches that verdict by construction, closing v0.6.0 through v0.8.0 on an artifact of method rather than evidence.
+**Don't suggest:** counting a deterministic-clause crossing toward #34's ten, or picking a smoke-shaped toy task to "get a data point." The ten tasks need judgment-rubric clauses on real work where two families could plausibly see different things.
+
+## 2026-08-02: Don't judge a gate drill by the session's prose refusal
+
+**Tried:** SMOKE.md's B2 as originally written — "dispatch worker-standard, do not add a Task-ID" — expecting `dispatch-guard` to deny it.
+**What broke:** The orchestrator read `.agent-guild/CLAUDE.md`, concluded it couldn't comply, and answered in prose. No tool call, no hook, no denial, and the drill read as a pass. The real `carries no readable id` block only appeared once the prompt insisted the call be attempted.
+**Why we backed out:** A compliant orchestrator and a dead gate are indistinguishable from outside, the same trap #67's three failed probes fell into. Fixed in B2, B3a, and B4 (#90, #95).
+**Don't suggest:** phrasing a gate drill as a plain instruction, or accepting "the session declined" as evidence a gate fired. Force the tool call and require a denial that quotes the guard.
+
+## 2026-08-02: Don't expect a package fix to reach installed users without a version bump
+
+**Tried:** Delivering the #94 `checker-courier` fix by rebuilding, pushing, and running `claude plugin marketplace update kendrick`.
+**What broke:** The marketplace snapshot refreshed and the installed plugin didn't. The install cache is keyed by version at `~/.claude/plugins/cache/kendrick/agent-guild/0.5.0/`, which kept serving the six-agent roster. Three D1 attempts failed at agent registration against a tree that already had the fix.
+**Why we backed out:** Only the 0.5.1 bump plus `claude plugin update` created a new cache directory and registered the seventh agent. Verified by the crossing that followed.
+**Don't suggest:** "refresh the marketplace" as a delivery path for a shipped-package fix, or verifying a package change against this repo's own `.claude/agents/` — that local copy is why #94 hid for a full release.
+
 ## 2026-07-24: Don't ask a read-only vendor to execute anything
 
 **Tried:** The courier's brief left a script-run check method for the far side to satisfy, so the vendor attempted to run a test suite itself.

@@ -12,11 +12,13 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - Never pass a `model` override that disagrees with the task's `executor_model`. `dispatch-guard` blocks the mismatch—it's the backstop for a tier bump you recorded but forgot to apply.
 - A FAIL comes back to the same worker on the same model with the checker's verbatim diagnosis copied into the task's `## Rework diagnosis`. A tier gets `max_retries` (default 2) tries before escalation.
 - Dual-check regime: until #34 closes, every task reaching `checking` also gets a `checker-courier` second opinion after its checker of record returns. Claude hosts use the `codex` suffix/lane; Codex hosts use `claude`. The suffixed verdict is comparison data—it never outvotes the standard stem—and a disagreement is dispute-grade input the orchestrator reads directly.
+- Nothing enforces that regime yet (#100). On the 2026-08-02 matrices Codex auto-dispatched a courier after every checker while Claude ran a task to `complete` without dispatching one, and no gate objected to either. Dispatch it by hand on every task until #100 lands, or #34's sample doesn't grow.
 
 ## State File Naming
 
 - Tasks: `.agent-guild/state/tasks/T-NNN.md`. Notes: `.agent-guild/state/notes/T-NNN.md`.
 - Verdicts and disputes embed tier and retry: `T-NNN-<tier>-r<retries>.md` (e.g. `T-007-opus-r1.md`), so a per-tier retry reset never overwrites an earlier tier's file. Audit verdicts use `CON-audit-rN.md` / `DEC-audit-rN.md`. (`.agent-guild/templates/verdict.md`)
+- That naming is prompt-deep and nothing checks it (#101). A Codex run wrote `T-001-checker-deterministic-r0`—checker name where the tier belongs—then reused the stem across a rework and overwrote the FAIL with the PASS, leaving no file record that the failure happened. Read a stem as a claim, not a guarantee, until the return gate validates it.
 
 ## Hooks and Checks
 
@@ -35,6 +37,7 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - Two-commit pattern: work commits never touch the version; one mechanical release commit carries the bump (in `scripts/plugin-src/plugin.json`), the generated changelog section, the rebuilt published tree, and the refreshed Codex artifact lock. Kit-payload jobs leave the version untouched — the release is the maintainer ritual at wrap, per `docs/publishing.md`.
 - Every release commit gets tagged with a GitHub release, patch bumps included; notes come from `make-changelog.py --notes`, never retyped. A milestone close is just the bump that closes it.
 - The changelog is generated, never hand-edited: `--check` fails a bumped-but-sectionless version, `--notes` refuses a noteless release.
+- A fix to a shipped package reaches installed users only through a version bump. Host plugin caches are keyed by version (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`), so refreshing the marketplace updates the snapshot and leaves the installed copy serving the old tree. Verified on 2026-08-02 while delivering #94.
 
 ## Commit Messages
 

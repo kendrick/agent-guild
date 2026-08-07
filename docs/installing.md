@@ -18,7 +18,7 @@ codex login status
 claude auth status --text
 ```
 
-The courier is comparison data, not the verdict of record. A missing CLI, authentication failure, timeout, or twice-malformed response produces a `blocked` suffixed second opinion; the in-family checker still decides the task and its retry budget is unchanged. A quota response records a ledger event and creates `.agent-guild/state/exhausted/<lane>` before the Guild falls back to the in-family checker. The sentinel is user-cleared after quota recovers.
+The courier is comparison data, not the verdict of record. A missing CLI, authentication failure, timeout, or twice-malformed response produces a `blocked` suffixed second opinion; the in-family checker still decides the task and its retry budget is unchanged. A quota response records a ledger event and creates `.agent-guild/state/exhausted/<lane>`. While that file exists, courier dispatches on that lane are denied and nothing is dispatched in its place. The sentinel is user-cleared after quota recovers.
 
 ## Choose One Installation Route Per Host
 

@@ -30,6 +30,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
 
+# Quoted from the orchestrator contract's state-map bullet, where the rule
+# lives. A paraphrase here would be a second rule: #97 is what happens when
+# three files each state it in their own words and a smoke run follows the
+# wrong one.
+EXHAUSTED_RULE = "The checker of record is unaffected—it has already returned by the time a courier goes out, so a denied second opinion costs nothing and nothing is dispatched in its place."
+
 
 def _log(agent, task, model):
     try:
@@ -185,14 +191,11 @@ def main(data):
             lane = _lib.courier_lane(data)
             effective_model = lane
             if _lib.lane_exhausted(lane):
-                in_family = str(task.get("checker", "")).strip() or "its checker of record"
                 return _lib.block(
                     f"checker-courier's '{lane}' lane is exhausted "
-                    f"(.agent-guild/state/exhausted/{lane} exists). Re-dispatch "
-                    f"{tid}'s in-family checker ('{in_family}') instead—a "
-                    "second-opinion denial costs nothing, the verdict of "
-                    "record is unaffected. The sentinel is user-cleared, "
-                    "like PAUSED."
+                    f"(.agent-guild/state/exhausted/{lane} exists), so this "
+                    f"dispatch is refused. {EXHAUSTED_RULE} The sentinel is "
+                    "user-cleared, like PAUSED."
                 )
         _log(raw, tid, effective_model)
         return 0

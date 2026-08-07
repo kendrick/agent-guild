@@ -422,13 +422,13 @@ A missing CLI, authentication failure, timeout, or two malformed replies produce
 
 Read that last line against the verdict you just validated. A crossing that completed exits 0 and reports a non-null `brief_tokens`; that is the pass condition. A `blocked` one exits non-zero and reports `null`, correctly, because the brief never left the machine. Demanding a token count either way turns the documented fallback into a failure.
 
-### D2. Quota Fallback
+### D2. Quota Sentinel
 
 - Shell: `mkdir -p .agent-guild/state/exhausted && touch .agent-guild/state/exhausted/<lane>`.
 - Session: `> Dispatch checker-courier for T-001. Task-ID: T-001.`
-- Expect: `dispatch-guard` blocks the courier before it starts with `lane is exhausted`, names T-001's in-family checker, and closes `The sentinel is user-cleared, like PAUSED.`
-- Session: `> Dispatch T-001's checker of record. Task-ID: T-001.`
-- Expect: the unsuffixed in-family verdict runs normally. The quota sentinel affects only comparison data.
+- Expect: `dispatch-guard` blocks the courier before it starts with `lane is exhausted`, quotes the contract's exhausted-lane rule verbatim, and closes `The sentinel is user-cleared, like PAUSED.`
+- Session: `> Dispatch T-001's checker of record. Task-ID: T-001.` Part D hasn't run it yet, so this is its first dispatch.
+- Expect: the unsuffixed in-family verdict runs normally. The sentinel gates the courier lane and nothing else.
 
 On a real quota event, verify the final `vendor-calls.jsonl` record has `quota_event: true` and predates the sentinel. Remove the sentinel only after quota recovers.
 

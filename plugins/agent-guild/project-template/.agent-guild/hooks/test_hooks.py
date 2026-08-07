@@ -21,6 +21,11 @@ import tempfile
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
 
+# The sentence dispatch-guard.py quotes. The exhausted-lane check asserts the
+# whole thing rather than a fragment, because a fragment stays green while the
+# guard drifts back into a paraphrase of its own.
+EXHAUSTED_RULE = "The checker of record is unaffected—it has already returned by the time a courier goes out, so a denied second opinion costs nothing and nothing is dispatched in its place."
+
 passed = failed = 0
 
 
@@ -649,8 +654,8 @@ os.makedirs(os.path.join(proj_courier, ".agent-guild", "state", "exhausted"), ex
 open(os.path.join(proj_courier, ".agent-guild", "state", "exhausted", "codex"), "w").close()
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020"}}, proj_courier)
-check("checker-courier dispatch under exhausted/codex → exit 2, names in-family fallback",
-      rc == 2 and "checker-judgment" in err and "PAUSED" in err, err)
+check("checker-courier dispatch under exhausted/codex → exit 2, quotes the rule verbatim",
+      rc == 2 and EXHAUSTED_RULE in err and "PAUSED" in err, err)
 os.remove(os.path.join(proj_courier, ".agent-guild", "state", "exhausted", "codex"))
 
 rc, out, err = run_hook("dispatch-guard.py",

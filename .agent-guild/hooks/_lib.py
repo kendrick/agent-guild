@@ -153,9 +153,10 @@ def paused():
 def lane_exhausted(lane):
     """True if a courier lane's quota sentinel is set (state/exhausted/<lane>,
     the per-lane directory form, adopted now so a future second lane needs no
-    migration). Must never raise, same contract as paused(): a broken check
-    here can't be allowed to block the in-family fallback dispatch-guard
-    steers callers toward when a lane is exhausted."""
+    migration). Must never raise, same contract as paused(): the sentinel is
+    user-managed state on disk, and a permissions or filesystem oddity while
+    reading it should count as an absent sentinel rather than crash the
+    gate."""
     try:
         return os.path.exists(state_path("exhausted", lane))
     except Exception:

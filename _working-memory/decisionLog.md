@@ -40,7 +40,7 @@ Each entry follows this shape:
 
 **Alternatives considered:** Adding pyyaml (rejected—the hooks are stdlib-only by design, and the issue ruled it out). Refusing a block scalar loudly instead of parsing it (rejected—the task template's own `check_method` example uses `>-`, so refusal would break every task written the documented way). Supporting only the three forms the issue names (rejected—`|-` and `>+` would keep the identical silent-empty bug under a different spelling). Fixing `compose-brief.py` and `check-provenance.py`'s own parsers alongside (deferred—neither reads `check_method`, so nothing is broken today).
 
-**Still open:** the double-quoted-scalar escaping hazard the issue names as a separate defect has no issue filed.
+**Still open:** the double-quoted-scalar escaping hazard the issue names as a separate defect, filed as #127 with its severity argument in the body.
 
 ## 2026-08-10: The Codex To Claude Lane Needs Two Things, And Auth Was The Smaller One
 

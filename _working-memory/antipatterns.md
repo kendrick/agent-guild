@@ -14,6 +14,13 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-10: Don't validate the far side on a value you never sent it
+
+**Tried:** Pinning courier identity on receipt only. Both host adapters require a returned verdict to carry `checker: checker-courier` and the lane's model, and `claude-courier.py` rejects a mismatch by name. Nothing on either lane told the vendor what those values were.
+**What broke:** The vendor inferred them, got both wrong, and was rejected twice. Two substantive judgments on the clause under check were discarded over fields nobody had given it, at 101,688 input tokens and 56 seconds for nothing. The ledger recorded `exit_code: 1`, which reads like a vendor failure and wasn't one.
+**Why we backed out:** A check on receipt is only half a contract. The half that makes it satisfiable is telling the other side what to send, and when that half lives in prose someone types into a dispatch, it works exactly as long as that person is the one running crossings (#113).
+**Don't suggest:** adding a receipt-side validation without naming what tells the far side to satisfy it. Ask where the requirement is stated in what the vendor actually receives. If the answer is a dispatch prompt, it isn't stated.
+
 ## 2026-08-10: Don't let a shared parser skip what it doesn't understand
 
 **Tried:** A branch in `_lib.parse_frontmatter` that set a block-scalar key to `""` and skipped its indented body, on the reasoning that the body wasn't needed and its lines must not be read as `- item` entries.

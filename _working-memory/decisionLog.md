@@ -14,6 +14,28 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-10: The Codex To Claude Lane Needs Two Things, And Auth Was The Smaller One
+
+**Source:** #92; commits 0353930 and aeb8b09; the first live crossing, 2026-08-10
+
+**Context:** Every courier crossing from a Codex host on macOS came back `blocked` with `Not logged in · Please run /login`, and the CLI was logged in. That read as a credential problem for months, and it was half of one.
+
+**Decision:** Document both requirements, because each one hides behind the other. A headless token from `claude setup-token`, supplied as `CLAUDE_CODE_OAUTH_TOKEN`, clears the login keychain a sandboxed Codex session cannot open. `sandbox_workspace_write.network_access = true` in the Codex TOML gives the request somewhere to go. Supply only the token and the failure changes shape rather than clearing: the credential resolves, and the call then dies silent at the 120-second bound. `curl https://api.anthropic.com/v1/messages` fails to resolve in 1.3ms inside the sandbox, and Claude Code retries transport failures rather than erroring out, so a blackholed connection looks exactly like a hang. Both together produced the project's first non-blocked crossing: verdict pass, schema-valid, exit 0, 13 seconds, two cents.
+
+**What it cost to find:** three separate auth-shaped error messages that each meant something else. A stale refresh token 401 on the Claude host while `codex login status` reported a healthy login; the keychain in the sandbox; and finally DNS. The courier's own timeout branch now recognizes the third: silence on both streams for the whole wall clock is the signature of a sandbox with no egress, so it names the curl check and the config key instead of reporting elapsed time.
+
+**Alternatives considered:** Shipping the token as *the* fix, which the first commit did. Rejected once the live run showed it trades an error that names its cause for one that says nothing at all, which is nearly as costly as being wrong. Also rejected: treating the whole thing as a Codex sandbox limitation and declaring the reciprocal lane unviable, which the working config disproves.
+
+## 2026-08-10: An Exhausted Courier Lane Substitutes Nothing
+
+**Source:** #97; commit 1687dc4, merged as 20e93f0
+
+**Context:** Four places disagreed about what happens when the lane goes down. The routing table named the in-family checker as the fallback, the state map said no substitution was needed, `docs/installing.md` said the Guild falls back, and `dispatch-guard`'s message advised a re-dispatch in the same breath as saying the denial costs nothing.
+
+**Decision:** Nothing is substituted, and the reason is timing. A courier only goes out after the checker of record has returned, so by the time the lane is denied there is nothing left to re-run. Worse, a re-run landing at the lane-suffixed stem would let #34 count a same-host check as cross-vendor agreement, which is the one way to corrupt that sample without anyone noticing. The state map entry for `exhausted/<lane>` owns the rule; the guard message quotes it rather than paraphrasing.
+
+**Alternatives considered:** Keeping the substitution and rewriting the state map to match. Rejected on the #34 contamination alone. The Claude smoke run's D2 had already followed the state map and written down why it was ignoring the guard's advice, so the working behavior was already the correct one.
+
 ## 2026-08-02: v0.5.1 Shipped On Two Live Smoke Runs, With Its Failures Written Down
 
 **Source:** both host matrices run live; issues #88–#102; PR #93; commits 861eca9 and 1aaa4c5; tag v0.5.1

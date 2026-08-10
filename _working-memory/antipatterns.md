@@ -14,6 +14,27 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-10: Don't run a courier crossing from the project root
+
+**Tried:** Probing the `codex` lane with the shipped adapter command, `codex exec --skip-git-repo-check -s read-only ...`, from the repository the artifacts live in.
+**What broke:** The vendor shelled out mid-probe and read `_working-memory/activeContext.md` and the whole of `.agent-guild/CLAUDE.md`, including the dual-check section describing the evaluation it was participating in. `-s read-only` constrains writes; it does nothing about reads.
+**Why we backed out:** The courier's own spec says the far side "cannot read this repository ... the brief, artifact contents, and locally collected evidence you inline are the only evidence it receives." That premise is false wherever the vendor starts in a tree it can read, and a second opinion that formed its own view from the repo is not judging the brief. Running from an empty directory fixed it: zero `command_execution` events on the next probe. `claude-courier.py` already does this internally with a temp cwd; the Claude to codex lane has no script and inherits the dispatch cwd.
+**Don't suggest:** relying on the sandbox flag for evidence isolation, or dispatching a crossing from the project root. Set cwd to an empty directory. The brief is self-contained by contract, so nothing is lost.
+
+## 2026-08-10: Don't accept a CLI status command as lane readiness
+
+**Tried:** SMOKE's Part D preconditions, `codex login status` and `claude auth status --text`, as the check that a courier lane is usable.
+**What broke:** Both passed while their lanes were dead. `codex login status` reported "Logged in using ChatGPT" while every call returned 401 on a refresh token that had already been used. `claude auth status --text` succeeds in a terminal whose keychain a sandboxed Codex session cannot reach. Neither command makes a call, so neither can observe what the courier will hit.
+**Why we backed out:** A status query reports that a credential is stored somewhere. Lane readiness is a different claim, and the gap between them cost two separate investigations that stopped at an auth-shaped message meaning something else.
+**Don't suggest:** a status subcommand as a precondition anywhere. Probe with a real crossing, run from where the courier runs, and read the outcome.
+
+## 2026-08-10: Don't re-run a setup block that calls new-task.py
+
+**Tried:** Re-running Part D's seed block after a partial setup, to be sure the state was complete.
+**What broke:** `new-task.py` allocates the next free id every time it runs, so the second pass created T-002, a duplicate of T-001 with the same title and no work behind it. The stop gate then demanded a lifecycle move on a task that existed only by accident.
+**Why we backed out:** The script is correct; it is an allocator, not a reconciler, and #14's `open(..., 'x')` design exists so parallel decomposition never collides. Idempotence was never its job.
+**Don't suggest:** re-running a seed or setup block to "make sure." Check `.agent-guild/state/tasks/` first and resume from what is there.
+
 ## 2026-08-02: Don't count a deterministic clause as cross-family evidence
 
 **Tried:** Dual-checking the smoke job's C-1 (`grep -q GUILD guild-motto.txt`) and reading the resulting agreement as a #34 data point.

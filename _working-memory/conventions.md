@@ -55,6 +55,7 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - User installation belongs in `docs/installing.md`; READMEs link there and `docs/building.md` stays maintainer-facing. `SMOKE.md` describes the lifecycle once, using only a thin host map and independent fresh-project launch checks for real platform differences.
 - Bump the version in the authored manifest `scripts/plugin-src/plugin.json`, never a generated manifest—rebuilds revert output-only changes, and the one source writes the same version to both targets. (`docs/publishing.md`)
 - `/agent-guild:init` never touches `.claude/settings.json`; plugin installs get their gates from the plugin's own `hooks/hooks.json`. Registering them again would double-fire every gate. (`.claude/skills/init/SKILL.md`)
+- A project's `.agent-guild/` payload freezes at install. `install.py` copies payload files only when they're missing and aborts the whole install when an existing one differs ("local Agent Guild payload differs; preserved without writes"), so re-running init never upgrades a stale project. Agents, skills, and hooks come live from the plugin cache and are always current; `.agent-guild/CLAUDE.md`, `templates/`, `scripts/`, and `schemas/` are copies and are not. Diff a stale file against `<plugin cache>/project-template/.agent-guild/` before overwriting, since the preflight exists precisely because a payload file may have been edited on purpose.
 
 ## Prose Voice (docs and comments)
 

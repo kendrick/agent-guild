@@ -570,5 +570,28 @@ for letter, expect_quota, pin in C10_ROWS:
     finally:
         temp.cleanup()
 
+# Row (a) carries the live #92 payload ("Not logged in · Please run /login").
+# The table above pins that it isn't exhaustion; this pins the other half—that
+# the blocked verdict says why, rather than the generic "exited 1" that once
+# sent a session hunting a login problem that didn't exist.
+temp, process, outcome, calls, _prompt = run_courier("row_a")
+try:
+    description = ""
+    if outcome and outcome.get("verdict"):
+        description = outcome["verdict"]["findings"][0]["description"]
+    check(
+        "auth denial: blocked verdict names the keychain cause and the token remedy",
+        process.returncode == 0
+        and outcome is not None
+        and outcome["status"] == "verdict"
+        and outcome["verdict"]["verdict"] == "blocked"
+        and "keychain" in description
+        and "CLAUDE_CODE_OAUTH_TOKEN" in description
+        and "exited 1" not in description,
+        f"rc={process.returncode} description={description!r}",
+    )
+finally:
+    temp.cleanup()
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

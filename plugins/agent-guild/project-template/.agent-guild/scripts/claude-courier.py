@@ -48,6 +48,13 @@ QUOTA_RE = re.compile(
     r"|(?<![\w.])429(?![\w.]))",
     re.IGNORECASE,
 )
+# Same 401 boundary guard as QUOTA_RE's 429, for the same reason.
+AUTH_RE = re.compile(
+    r"(?:not logged in|please run /login|invalid api key"
+    r"|authentication (?:failed|required)|unauthorized"
+    r"|(?<![\w.])401(?![\w.]))",
+    re.IGNORECASE,
+)
 
 
 class CourierError(Exception):
@@ -194,6 +201,23 @@ def _parse_envelope(call):
     return envelope, None
 
 
+def _prose_surfaces(call, envelope):
+    # stdout carries the serialized JSON envelope, so scanning it as text
+    # reads numeric fields like duration_ms as if they were prose—the
+    # bug #69 exists to fix. Only stderr (always) and result (only on an
+    # API-error envelope) are prose surfaces worth pattern-matching.
+    # They're joined with a separator, not concatenated raw, so a digit
+    # trailing one surface can never complete "429" with a digit leading
+    # the other.
+    surfaces = [call["stderr"]]
+    if (
+        isinstance(envelope, dict)
+        and envelope.get("terminal_reason") == "api_error"
+    ):
+        surfaces.append(str(envelope.get("result", "")))
+    return "\n".join(surfaces)
+
+
 def _is_quota(call, envelope):
     # Structural signal outranks wording: a real 429 status classifies as
     # quota even outside the errorish gate (e.g. a "completed" envelope
@@ -206,21 +230,13 @@ def _is_quota(call, envelope):
     )
     if not errorish:
         return False
-    # stdout carries the serialized JSON envelope, so scanning it as text
-    # reads numeric fields like duration_ms as if they were prose — the
-    # bug this task exists to fix. Only stderr (always) and result (only
-    # on an API-error envelope) are prose surfaces worth pattern-matching.
-    # They're joined with a separator, not concatenated raw, so a digit
-    # trailing one surface can never complete "429" with a digit leading
-    # the other.
-    surfaces = [call["stderr"]]
-    if (
-        isinstance(envelope, dict)
-        and envelope.get("terminal_reason") == "api_error"
-    ):
-        surfaces.append(str(envelope.get("result", "")))
-    text = "\n".join(surfaces)
-    return bool(QUOTA_RE.search(text))
+    return bool(QUOTA_RE.search(_prose_surfaces(call, envelope)))
+
+
+def _is_auth_denial(call, envelope):
+    """Only called from inside the errorish gate, and only after quota has
+    already been ruled out, so the caller owns both of those conditions."""
+    return bool(AUTH_RE.search(_prose_surfaces(call, envelope)))
 
 
 def _validate_structured_output(envelope, task_id):
@@ -416,10 +432,25 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
         if call["returncode"] != 0 or (
             isinstance(envelope, dict) and envelope.get("is_error") is True
         ):
-            description = (
-                f"Claude CLI exited {call['returncode']} before producing "
-                "a verdict"
-            )
+            if _is_auth_denial(call, envelope):
+                # "exited 1" once sent a session hunting a login problem that
+                # didn't exist. The CLI was logged in; the sandbox was what it
+                # couldn't get past (#92). Name the cause here so the blocked
+                # verdict reads without that detour.
+                description = (
+                    "Claude CLI could not authenticate; the lane never "
+                    "reached the far side. On macOS the CLI reads its "
+                    "credentials from the login keychain, which a sandboxed "
+                    "Codex session cannot open, so a terminal that is logged "
+                    "in still fails here. Run `claude setup-token` outside "
+                    "the sandbox and pass the token it prints to the courier's "
+                    "session as CLAUDE_CODE_OAUTH_TOKEN."
+                )
+            else:
+                description = (
+                    f"Claude CLI exited {call['returncode']} before producing "
+                    "a verdict"
+                )
             break
         if envelope_error is not None:
             malformed_reason = envelope_error

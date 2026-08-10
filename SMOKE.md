@@ -388,10 +388,33 @@ Skip this drill on Codex. An escalated task there records the bump and then cann
 
 The courier lane changes with the host; its protocol does not:
 
-- Claude host: `<lane>` is `codex`; `codex login status` must succeed.
-- Codex host: `<lane>` is `claude`; `claude auth status --text` must succeed.
+- Claude host: `<lane>` is `codex`.
+- Codex host: `<lane>` is `claude`.
 
-Check that precondition from inside the host session, not from the shell beside it. The courier runs where its parent runs, under the same sandbox, and a CLI that authenticates fine in your terminal can still fail there. On macOS the `claude` CLI keeps its credentials in the keychain, which a sandboxed Codex session cannot reach, so it reports `Not logged in` however you logged in (#92).
+Prove the lane with a crossing, not a status query. `codex login status` will report a healthy ChatGPT login while every call returns 401 on a stale refresh token, and `claude auth status --text` succeeds in a terminal whose keychain a sandboxed Codex session cannot open (#92). Both commands tell you a credential exists somewhere. Neither tells you the lane works.
+
+Run the probe from inside the host session rather than a shell beside it, and from an empty directory. `-s read-only` blocks writes, not reads, so a vendor started in the project root will shell out and read the repo it is supposed to be judging blind.
+
+On a Codex host the boundary script is the probe, because it is the same code the courier runs:
+
+```sh
+mkdir -p /tmp/ag-lane-probe && cd /tmp/ag-lane-probe
+printf 'Emit one verdict object: task_id "T-000", checker "checker-courier", vendor "anthropic", model "claude-haiku-4-5-20251001", verdict "pass", findings [], timestamp any ISO8601, duration_ms null, cost_usd null.\n' \
+  | python3 <ABSOLUTE project path>/.agent-guild/scripts/claude-courier.py --task-id T-000
+```
+
+Expect a JSON outcome with `"status": "verdict"`. A `blocked` outcome naming the login keychain means the sandbox cannot reach your credentials: run `claude setup-token` outside the sandbox and give the courier's session that token as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+A Claude host has no equivalent script yet (#84), so probe the raw lane, substituting vendor `openai` and model `gpt-5.6-terra` into the same one-line prompt:
+
+```sh
+mkdir -p /tmp/ag-lane-probe && cd /tmp/ag-lane-probe
+codex exec --skip-git-repo-check -s read-only --ephemeral --json \
+  --output-schema <ABSOLUTE project path>/.agent-guild/schemas/verdict.schema.json \
+  -o /tmp/ag-lane-probe/verdict.json "<the prompt above>" < /dev/null
+```
+
+Expect exit 0, exactly one `agent_message` event, no `command_execution` events at all, and identity fields matching the pinned lane. A `command_execution` event means the empty directory did not hold and the vendor went looking for context you did not give it.
 
 Repeat C0, then create a correct `guild-motto.txt` and set T-001 to `status: checking`, `artifacts: [guild-motto.txt]`, `retries: 0`.
 

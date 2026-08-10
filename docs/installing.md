@@ -18,6 +18,8 @@ codex login status
 claude auth status --text
 ```
 
+Treat a pass here as necessary, not sufficient. Both commands report on a stored credential without making a call, so both will say you are logged in while the lane fails. A stale refresh token still 401s, and on macOS the `claude` CLI reads the login keychain, which a sandboxed Codex session cannot open. Run `claude setup-token` and supply the result as `CLAUDE_CODE_OAUTH_TOKEN` if you want the Codex-hosted courier to reach Claude at all. [The smoke suite's Part D](../SMOKE.md) probes each lane with a real crossing, which is the check that settles it.
+
 The courier is comparison data, not the verdict of record. A missing CLI, authentication failure, timeout, or twice-malformed response produces a `blocked` suffixed second opinion; the in-family checker still decides the task and its retry budget is unchanged. A quota response records a ledger event and creates `.agent-guild/state/exhausted/<lane>` before the Guild falls back to the in-family checker. The sentinel is user-cleared after quota recovers.
 
 ## Choose One Installation Route Per Host

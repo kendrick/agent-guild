@@ -649,8 +649,12 @@ os.makedirs(os.path.join(proj_courier, ".agent-guild", "state", "exhausted"), ex
 open(os.path.join(proj_courier, ".agent-guild", "state", "exhausted", "codex"), "w").close()
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020"}}, proj_courier)
-check("checker-courier dispatch under exhausted/codex → exit 2, names in-family fallback",
-      rc == 2 and "checker-judgment" in err and "PAUSED" in err, err)
+# The negative half is the point: a message that names the in-family checker
+# reads as "go re-run it," and a substituted verdict at the lane-suffixed stem
+# would let #34 count a same-host check as cross-vendor agreement. (#97)
+check("checker-courier dispatch under exhausted/codex → exit 2, substitutes nothing",
+      rc == 2 and "Nothing is substituted" in err and "PAUSED" in err
+      and "checker-judgment" not in err, err)
 os.remove(os.path.join(proj_courier, ".agent-guild", "state", "exhausted", "codex"))
 
 rc, out, err = run_hook("dispatch-guard.py",

@@ -229,6 +229,82 @@ finally:
     if _orig_env is not None:
         os.environ["CLAUDE_PROJECT_DIR"] = _orig_env
 
+# -------------------------------------------- _lib.parse_frontmatter: block scalars
+# Issue #109: a check_method written as `>-`—the natural spelling, since real
+# ones run past a thousand characters—used to parse to ''. The task cited its
+# clauses, looked right in review, and handed its checker nothing. Every
+# expected value below was confirmed against Ruby's psych, a real YAML parser.
+print("_lib.py parse_frontmatter block scalars (#109)")
+
+REPRO = """---
+id: T-999
+check_method: {header}
+  C-1: .agent-guild/scripts/check-build.sh "make test"
+  C-2: checker-judgment: read the diff
+clauses: [C-1, C-2]
+---
+"""
+FOLDED = ('C-1: .agent-guild/scripts/check-build.sh "make test" '
+          'C-2: checker-judgment: read the diff')
+LITERAL = ('C-1: .agent-guild/scripts/check-build.sh "make test"\n'
+           'C-2: checker-judgment: read the diff\n')
+
+for header, want in ((">-", FOLDED), (">", FOLDED + "\n"), ("|", LITERAL)):
+    fm = lib_mod.parse_frontmatter(REPRO.format(header=header))
+    check(f"block scalar '{header}': body reaches the checker",
+          fm["check_method"] == want, f"got={fm['check_method']!r}")
+    check(f"block scalar '{header}': clauses beside it still parse as a list",
+          fm["clauses"] == ["C-1", "C-2"], f"got={fm['clauses']!r}")
+
+fm = lib_mod.parse_frontmatter("---\na: |-\n  x\n\n  y\nb: 1\n---\n")
+check("literal '|-' strips the trailing newline, keeps interior blanks",
+      fm["a"] == "x\n\ny", f"got={fm['a']!r}")
+check("a key after a block scalar body still parses", fm["b"] == "1", f"got={fm!r}")
+
+fm = lib_mod.parse_frontmatter("---\na: |+\n  x\n\n\nb: 1\n---\n")
+check("literal '|+' keeps the trailing blank lines", fm["a"] == "x\n\n\n",
+      f"got={fm['a']!r}")
+
+fm = lib_mod.parse_frontmatter("---\na: >+\n  z\n\n\nb: 1\n---\n")
+check("folded '>+' keeps the trailing blank lines", fm["a"] == "z\n\n\n",
+      f"got={fm['a']!r}")
+
+fm = lib_mod.parse_frontmatter(
+    "---\nf: >-\n  a\n  b\n\n  c\n     more indented\n  d\ntail: 1\n---\n")
+check("folded: blank line breaks the fold, a more-indented line stays verbatim",
+      fm["f"] == "a b\nc\n   more indented\nd", f"got={fm['f']!r}")
+
+# The guard the old code bought by dropping the body: a '- item' line inside a
+# block scalar is body text, never a list entry. Reading the body keeps it,
+# because those lines are consumed before the list branch can see them.
+for header in ("|", ">-"):
+    fm = lib_mod.parse_frontmatter(
+        f"---\nm: {header}\n  - not a list item\n  - still not\n"
+        "artifacts:\n  - a.py\n  - b.py\n---\n")
+    check(f"block scalar '{header}': its '- ' lines are body, not list items",
+          isinstance(fm["m"], str) and "not a list item" in fm["m"],
+          f"got={fm['m']!r}")
+    check(f"block scalar '{header}': a real block list after it still parses",
+          fm["artifacts"] == ["a.py", "b.py"], f"got={fm['artifacts']!r}")
+
+fm = lib_mod.parse_frontmatter("---\nm: >-\nnext: ok\n---\n")
+check("block scalar with no body → empty string, next key intact",
+      fm["m"] == "" and fm["next"] == "ok", f"got={fm!r}")
+
+# ------------------------------------------------ _lib.unverifiable (#109)
+print("_lib.py unverifiable()")
+check("cites clauses, empty check_method → a reason naming the task file",
+      ".agent-guild/state/tasks/T-001.md" in
+      (lib_mod.unverifiable("T-001", {"clauses": ["C-1"], "check_method": ""}) or ""))
+check("cites clauses with a check_method → None",
+      lib_mod.unverifiable("T-001", {"clauses": ["C-1"], "check_method": "run x"})
+      is None)
+check("cites no clauses → None even with an empty check_method",
+      lib_mod.unverifiable("T-001", {"clauses": [], "check_method": ""}) is None)
+check("a single clause written as a bare scalar still counts",
+      lib_mod.unverifiable("T-001", {"clauses": "C-1", "check_method": " "})
+      is not None)
+
 # ---------------------------------------------------------------- stop-gate
 print("stop-gate.py")
 proj = fresh_proj()
@@ -448,6 +524,34 @@ check("audition dispatch → logged", audlog)
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-bulk", "prompt": "just sort the lines"}}, proj_aud)
 check("no Task-ID and no Audition-ID → exit 2", rc == 2 and "no id line" in err, err)
+
+# ------------------------------- dispatch-guard: a task with no checks (#109)
+# Both halves of #109 in one place. A block-scalar check_method now reads, so
+# the first task dispatches; one that genuinely names no check for the clauses
+# it cites is refused, worker or checker alike.
+write_task(proj, "T-003", status="assigned", executor_model="sonnet",
+           clauses="[C-1, C-2]",
+           check_method=">-\n  C-1: .agent-guild/scripts/check-build.sh\n"
+                        "  C-2: checker-judgment: read the diff")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-003"}}, proj)
+check("block-scalar check_method → dispatch allowed", rc == 0, f"rc={rc} err={err}")
+
+write_task(proj, "T-003", status="assigned", executor_model="sonnet",
+           clauses="[C-1, C-2]", check_method="")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-003"}}, proj)
+check("cites clauses, no check_method → worker blocked",
+      rc == 2 and "check_method is empty" in err, f"rc={rc} err={err}")
+check("that block names the task file",
+      ".agent-guild/state/tasks/T-003.md" in err, err)
+
+write_task(proj, "T-003", status="checking", executor_model="sonnet",
+           clauses="[C-1]", check_method="")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-deterministic", "prompt": "Task-ID: T-003"}}, proj)
+check("cites clauses, no check_method → checker blocked too",
+      rc == 2 and "check_method is empty" in err, f"rc={rc} err={err}")
 
 # ------------------------------------------- dispatch-guard: structured id field
 # Issue #71: Codex encrypts the dispatch message before any hook runs, so the id

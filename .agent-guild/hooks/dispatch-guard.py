@@ -7,7 +7,9 @@ dispatch, this blocks unless:
   - the dispatch carries a `Task-ID: T-NNN` (or `Audit-ID:`), so
     subagent-return can later identify what finished—as a prompt line, or in
     `task_name` on a host that encrypts the prompt;
-  - that task file exists;
+  - that task file exists, and names a check for the clauses it cites—a task
+    with none is unverifiable, and its checker would report a pass on an empty
+    check list (#109);
   - the dispatch is state-legal for the role (worker ⇒ assigned,
     checker ⇒ checking);
   - a worker's tier budget isn't already spent (retries within max), catching
@@ -153,6 +155,14 @@ def main(data):
             f"Dispatch to {agent} references {tid}, but .agent-guild/state/tasks/{tid}.md "
             "does not exist. Create the task before dispatching."
         )
+
+    # Ahead of the role split on purpose: a task that cites clauses and names
+    # no check is undispatchable to anyone. Sending the worker means building
+    # against a standard nothing will measure; sending the checker means a
+    # verdict derived from an empty check list.
+    defect = _lib.unverifiable(tid, task)
+    if defect:
+        return _lib.block(defect)
 
     status = str(task.get("status", "")).strip()
     effective_model = override or _lib.DEFAULT_MODEL[agent]

@@ -202,10 +202,83 @@ def _coerce(v):
     return v.strip("'\"")
 
 
+_KEY_RE = re.compile(r"^([A-Za-z0-9_]+):\s*(.*)$")
+# Block scalar header: style (| literal, > folded) plus an optional chomping
+# indicator. Explicit indentation indicators (`|2`) are deliberately not
+# matched—see parse_frontmatter's docstring.
+_BLOCK_SCALAR_RE = re.compile(r"^([|>])([+-]?)$")
+
+
+def _read_block_scalar(lines, start, style, chomp):
+    """Read a block scalar's body starting at `lines[start]`. Returns
+    (value, index of the first line past the body).
+
+    Frontmatter here is flat—every key sits at column 0—so "indented at all"
+    is the parent-indent test YAML would otherwise compute from the key's own
+    column."""
+    end = start
+    while end < len(lines):
+        line = lines[end]
+        if line.strip() == "" or line[:1] in (" ", "\t"):
+            end += 1
+            continue
+        break  # column-0 content: the next key, the closing ---, anything else
+
+    body = lines[start:end]
+    while body and body[-1].strip() == "":
+        body.pop()  # trailing blanks belong to the document, not the scalar
+        end -= 1
+
+    first = next((ln for ln in body if ln.strip()), "")
+    indent = len(first) - len(first.lstrip())
+    body = [ln[indent:] if ln.strip() else "" for ln in body]
+
+    if style == "|":
+        text = "\n".join(body)
+    else:
+        # Folding: a line break between two plain lines becomes a space, a run
+        # of n blank lines becomes n newlines, and a line that is STILL
+        # indented after the dedent is "more indented"—kept verbatim, with the
+        # breaks around it intact. That last rule is what keeps an indented
+        # continuation inside a check_method from being flattened into its
+        # neighbor.
+        out = []
+        blanks = 0
+        prev_indented = False
+        for line in body:
+            if not line.strip():
+                blanks += 1
+                continue
+            indented = line[:1].isspace()
+            if out or blanks:
+                if blanks:
+                    out.append("\n" * blanks)
+                elif indented or prev_indented:
+                    out.append("\n")
+                else:
+                    out.append(" ")
+            out.append(line)
+            blanks, prev_indented = 0, indented
+        text = "".join(out)
+
+    if text:
+        text += "\n"  # the final line break, which chomping now rules on
+    if chomp == "-":
+        text = text.rstrip("\n")
+    elif chomp == "+":
+        blanks = 0
+        while end + blanks < len(lines) and lines[end + blanks].strip() == "":
+            blanks += 1
+        text += "\n" * blanks
+    return text, end
+
+
 def parse_frontmatter(text):
     """Parse the leading --- ... --- block. Handles scalars, inline [a,b]
-    lists, and block '- item' lists. Good enough for our task/verdict files;
-    deliberately not a full YAML engine."""
+    lists, block '- item' lists, and block scalars (`|`, `>`, with any
+    chomping indicator). Good enough for our task/verdict files; deliberately
+    not a full YAML engine—no anchors, no nesting, no explicit indentation
+    indicators (`|2`), no multi-line flow collections."""
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
@@ -224,16 +297,25 @@ def parse_frontmatter(text):
             fm[key].append(_coerce(m.group(1)))
             i += 1
             continue
-        m = re.match(r"^([A-Za-z0-9_]+):\s*(.*)$", line)
+        m = _KEY_RE.match(line)
         if m:
             key = m.group(1)
             val = m.group(2).strip()
-            if val in (">-", ">", "|"):
-                # Folded/literal block scalar. We don't need its body, and its
-                # indented lines must not be mistaken for list items.
-                fm[key] = ""
+            block = _BLOCK_SCALAR_RE.match(val)
+            if block:
+                # A task's check_method is written this way because it runs
+                # long, and the body used to be dropped on the floor: the task
+                # cited its clauses, named its checks, and handed the checker
+                # an empty string (#109). Reading the body also keeps the guard
+                # that dropping it used to buy—the body's indented `- item`
+                # lines are consumed here, so they never reach the list branch
+                # above.
+                fm[key], i = _read_block_scalar(
+                    lines, i + 1, block.group(1), block.group(2)
+                )
                 key = None
-            elif val == "":
+                continue
+            if val == "":
                 fm[key] = ""  # tentative; a following '- item' upgrades to list
             else:
                 fm[key] = _coerce(val)
@@ -253,6 +335,31 @@ def read_task(tid):
         return None
     with open(path, encoding="utf-8") as f:
         return parse_frontmatter(f.read())
+
+
+def unverifiable(tid, task):
+    """The reason `task` can't be verified as written, or None if it can.
+
+    One reason today: it cites clauses and names no check for them. That
+    combination looks fine in an editor and passes every other gate, and it
+    used to be what a block-scalar check_method silently degraded into
+    (#109)—a checker with nothing to run, reporting a pass."""
+    clauses = task.get("clauses")
+    if isinstance(clauses, str):
+        clauses = [clauses] if clauses.strip() else []
+    if not clauses:
+        return None
+    if str(task.get("check_method", "")).strip():
+        return None
+    return (
+        f"{tid} cites clauses {', '.join(str(c) for c in clauses)} but its "
+        f"check_method is empty: .agent-guild/state/tasks/{tid}.md. A task "
+        "that names no check for the clauses it cites can't be verified—the "
+        "checker would have nothing to run and would report a pass anyway. "
+        "Write each cited clause's check into check_method (a "
+        ".agent-guild/scripts/ invocation, or 'checker-judgment: <rubric>') "
+        "before dispatching."
+    )
 
 
 def open_tasks():

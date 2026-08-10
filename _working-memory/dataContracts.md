@@ -26,6 +26,8 @@ Codex agents whose generated `sandbox_mode` is `read-only` never persist verdict
 
 Source: `.agent-guild/templates/task.md`. Fields: `id`, `title`, `spec` (anchor into `spec.md`), `clauses[]`, `executor`, `executor_model`, `checker`, `check_method`, `status`, `retries`, `max_retries`, `deps[]`, `escalations[]`, `artifacts[]`. Every clause in `clauses` must appear in `check_method`, named to a script invocation or a `checker-judgment` rubric.
 
+`check_method` is normally a YAML block scalar (`>-`), which `_lib.parse_frontmatter` reads since #109; before that it parsed to `''` and the checker ran nothing. Any block scalar works now (`|`, `>`, with any chomping indicator), matching YAML semantics closely enough that Ruby's psych agrees on the kit's fixtures. Explicit indentation indicators (`|2`), anchors, and nesting are still unsupported and always were. A task that cites clauses while `check_method` resolves empty is refused by `dispatch-guard` for workers and checkers alike.
+
 ## Status Enum
 
 `pending` → `assigned` → `needs-check` → `checking` → then `rework` (loops back to `assigned`) or `disputed` or `complete`; `abandoned` is the cancelled terminal. Who moves each status is the table in `.agent-guild/CLAUDE.md`—workers set only `needs-check` and `disputed`; the orchestrator owns the rest.

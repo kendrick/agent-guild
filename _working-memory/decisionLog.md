@@ -14,6 +14,20 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-10: Teach The Frontmatter Parser Block Scalars Rather Than Take A YAML Dependency
+
+**Source:** #109; commit d05d6ca
+
+**Context:** `_lib.parse_frontmatter` set a block-scalar key to `""` and skipped its indented body, commented "we don't need its body." For `check_method` that body is the entire contract between a task and its checker, and `>-` is the natural spelling for a value running past a thousand characters. The #97 run's first T-001 cited eleven clauses and parsed to `''`. The file read correctly in an editor, `clauses:` parsed normally, and only a hand inspection before dispatch caught it.
+
+**Decision:** Parse the body rather than refuse the file, which the issue offered as the equally acceptable alternative. `|` and `>` with any chomping indicator now parse; unsupported edges (explicit indentation indicators like `|2`, anchors, nesting) are named in the docstring instead of silently mishandled. The second half is a refusal: `dispatch-guard` blocks a task citing clauses with an empty `check_method`, ahead of the worker/checker split, because a checker with nothing to run reports a pass.
+
+**How it was verified without a dependency:** Ruby's psych. pyyaml isn't installed and the stdlib-only rule covers the tests as much as the hooks, so thirteen fixtures were diffed against `ruby -ryaml`, which ships with macOS. All thirteen agree, including `|+`/`>+` chomping, blank-line runs, and more-indented folded lines. The harness stayed in the scratchpad; the committed tests assert the values it confirmed.
+
+**Alternatives considered:** Adding pyyaml (rejected—the hooks are stdlib-only by design, and the issue ruled it out). Refusing a block scalar loudly instead of parsing it (rejected—the task template's own `check_method` example uses `>-`, so refusal would break every task written the documented way). Supporting only the three forms the issue names (rejected—`|-` and `>+` would keep the identical silent-empty bug under a different spelling). Fixing `compose-brief.py` and `check-provenance.py`'s own parsers alongside (deferred—neither reads `check_method`, so nothing is broken today).
+
+**Still open:** the double-quoted-scalar escaping hazard the issue names as a separate defect has no issue filed.
+
 ## 2026-08-10: The Codex To Claude Lane Needs Two Things, And Auth Was The Smaller One
 
 **Source:** #92; commits 0353930 and aeb8b09; the first live crossing, 2026-08-10

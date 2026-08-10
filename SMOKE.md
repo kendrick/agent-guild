@@ -426,9 +426,9 @@ Read that last line against the verdict you just validated. A crossing that comp
 
 - Shell: `mkdir -p .agent-guild/state/exhausted && touch .agent-guild/state/exhausted/<lane>`.
 - Session: `> Dispatch checker-courier for T-001. Task-ID: T-001.`
-- Expect: `dispatch-guard` blocks the courier before it starts with `lane is exhausted`, names T-001's in-family checker, and closes `The sentinel is user-cleared, like PAUSED.`
+- Expect: `dispatch-guard` blocks the courier before it starts with `lane is exhausted`, says nothing is substituted, and closes `The sentinel is user-cleared, like PAUSED.` It must not tell you to re-dispatch anything.
 - Session: `> Dispatch T-001's checker of record. Task-ID: T-001.`
-- Expect: the unsuffixed in-family verdict runs normally. The quota sentinel affects only comparison data.
+- Expect: the unsuffixed in-family verdict runs normally. The sentinel is lane-scoped, so it reaches comparison data and nothing else. This step checks that scoping. It is not a substitution for the denied courier, which does not need one.
 
 On a real quota event, verify the final `vendor-calls.jsonl` record has `quota_event: true` and predates the sentinel. Remove the sentinel only after quota recovers.
 

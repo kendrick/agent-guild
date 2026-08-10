@@ -185,14 +185,13 @@ def main(data):
             lane = _lib.courier_lane(data)
             effective_model = lane
             if _lib.lane_exhausted(lane):
-                in_family = str(task.get("checker", "")).strip() or "its checker of record"
                 return _lib.block(
                     f"checker-courier's '{lane}' lane is exhausted "
-                    f"(.agent-guild/state/exhausted/{lane} exists). Re-dispatch "
-                    f"{tid}'s in-family checker ('{in_family}') instead—a "
-                    "second-opinion denial costs nothing, the verdict of "
-                    "record is unaffected. The sentinel is user-cleared, "
-                    "like PAUSED."
+                    f"(.agent-guild/state/exhausted/{lane} exists). Nothing is "
+                    f"substituted: {tid}'s checker of record ran before the "
+                    "courier went out, so its verdict already stands and no "
+                    "retry budget moves. The sentinel is user-cleared, like "
+                    "PAUSED."
                 )
         _log(raw, tid, effective_model)
         return 0

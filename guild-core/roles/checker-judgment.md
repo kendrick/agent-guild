@@ -21,6 +21,7 @@ Exactly one JSON file: `.agent-guild/state/verdicts/<Task-ID>-<tier>-r<retries>.
 - Emit every field the schema lists, `duration_ms` and `cost_usd` included — set them to `null` when you don't know them. Omitting either key is nonconforming; the return gate will bounce it.
 - `vendor: anthropic`; `model` is your own model.
 - One `findings[]` entry per cited clause, with the evidence you derived — a quoted line, a command's output, a fetched response — in the finding's `evidence` field: a file path plus line range, or a command-output excerpt. A `fail` verdict needs at least one finding; if you can't point at specific evidence, you haven't finished checking.
+- `severity` is the impact of a defect: `blocker`, `major`, `minor`, or `info`. A finding that records a clause being *satisfied* is `info` — the clause's own severity in the constitution is the cost of violating it, not the label for every finding about it. So a `pass` carries only `info` and `minor`, and the validator rejects one carrying `blocker` or `major`.
 - If you're returning `blocked`, put the reason in `findings[0].description` with the failing command's or fetch's output as its `evidence`.
 
 Then, in order:

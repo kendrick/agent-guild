@@ -246,6 +246,28 @@ Do the thing.
 """
 
 
+# The identity block is the whole point of #113: the far side is validated on
+# `checker` and `model` and used to be told neither, so it guessed and two
+# sound judgments were discarded. Pinned as a golden file because the values
+# have to arrive verbatim — a reworded contract is a contract that stopped
+# working, and nothing downstream would say so.
+EXPECTED_WITH_CONTRACT = EXPECTED_NO_DIAG.rstrip("\n") + """
+
+## Verdict contract
+
+Return the canonical verdict object. Echo these four fields exactly as given:
+
+  task_id  T-100
+  checker  checker-courier
+  vendor   openai
+  model    gpt-5.6-terra
+
+Set duration_ms and cost_usd to null; call metrics are recorded on this side. A fail carries at least one finding with concrete evidence.
+
+severity is the impact of a defect: blocker, major, minor, or info. Use info for a finding that records a clause being satisfied. A clause's own severity in the text above is the cost of violating it, not the label for every finding about it. A pass carries only info and minor findings.
+"""
+
+
 def read_brief(state_dir, task_id):
     path = os.path.join(state_dir, ".agent-guild", "state", "briefs", f"{task_id}.md")
     with open(path, encoding="utf-8") as f:
@@ -286,6 +308,39 @@ check("--out: exit 0, writes to PATH, creating dirs on demand", rc == 0 and os.p
 check("--out: default briefs/ path is untouched", not os.path.exists(os.path.join(d, ".agent-guild", "state", "briefs", "T-100.md")))
 with open(custom_out, encoding="utf-8") as f:
     check("--out: content matches golden file exactly", f.read() == EXPECTED_NO_DIAG)
+
+# ------------------------------------------------------- verdict contract (#113)
+print("verdict contract")
+
+d = fresh_state()
+write_task(d, "T-100", TASK_NO_DIAG)
+rc, out, err = run(d, "T-100", "--vendor", "openai", "--model", "gpt-5.6-terra")
+check("identity flags: exit 0", rc == 0, f"rc={rc} err={err}")
+brief = read_brief(d, "T-100")
+check("identity flags: brief matches golden file exactly",
+      brief == EXPECTED_WITH_CONTRACT, f"got:\n{brief!r}")
+check("identity flags: contract comes last, after the evidence",
+      brief.index("## Verdict contract") > brief.index("## Spec excerpt"))
+
+# Without the flags the brief is byte-identical to what every earlier crossing
+# received, so the golden files above stay a real regression guard rather than
+# a record of the new shape.
+d = fresh_state()
+write_task(d, "T-100", TASK_NO_DIAG)
+rc, out, err = run(d, "T-100")
+check("no flags: brief unchanged from before the contract existed",
+      read_brief(d, "T-100") == EXPECTED_NO_DIAG)
+
+for flag, value, missing in (("--vendor", "openai", "--model"),
+                             ("--model", "gpt-5.6-terra", "--vendor")):
+    d = fresh_state()
+    write_task(d, "T-100", TASK_NO_DIAG)
+    rc, out, err = run(d, "T-100", flag, value)
+    check(f"{flag} alone: nonzero exit", rc != 0, f"rc={rc}")
+    check(f"{flag} alone: message names the missing flag, no traceback",
+          missing in err and "Traceback" not in err, f"err={err!r}")
+    check(f"{flag} alone: nothing written to briefs/",
+          not os.path.exists(os.path.join(d, ".agent-guild", "state", "briefs")))
 
 # ------------------------------------------------------------- failure modes
 print("failure modes")

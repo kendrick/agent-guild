@@ -42,6 +42,8 @@ JSON is the verdict of record (since #29): `verdicts/T-NNN-<tier>-r<retries>.jso
 
 All nine properties are required, with `duration_ms` and `cost_usd` typed nullable (#43): OpenAI strict structured output rejects optionality outright, so required-but-nullable is how an optional field is expressed to a vendor. Null means unreported, never zero, matching the ledger's convention.
 
+A finding's `severity` is an enum of `blocker`, `major`, `minor`, `info`, measured by defect impact (#115). `info` is a finding that records a clause being *satisfied* — a clause's own severity in the constitution is the cost of violating it, not the label for every finding about it. A `pass` therefore carries only `info` and `minor`; `validate-verdict.py` rejects one carrying `blocker` or `major`, its third semantic rule alongside fail-needs-a-finding and evidence-must-be-non-empty. The schema can't express any of the three (structured-output-safe, no if/then), but its `description` strings do reach the vendor: both lanes pass the schema itself as the output schema.
+
 ## Second-Opinion Verdicts
 
 The courier writes to a host-mapped lane suffix: `verdicts/T-NNN-<tier>-r<retries>-<lane>.json` plus its rendered sibling, where Claude uses `codex` and Codex uses `claude`. It uses the canonical verdict schema and is comparison data only; the standard-stem verdict decides the task and is never outvoted.
@@ -62,4 +64,6 @@ A Codex in-family checker (`checker-deterministic`, `checker-judgment`) runs `sa
 
 ## Briefs
 
-`state/briefs/T-NNN.md` from `compose-brief.py T-NNN [--out PATH]`: task id/title, the full text of every cited constitution clause (never ids alone), the `## Spec excerpt` verbatim, and `## Prior attempt diagnosis` only when a rework diagnosis exists. Self-contained by contract — no state paths presented as readable, no CLAUDE.md references. The golden tests in `test_compose_brief.py` pin this format; it's what external vendors receive.
+`state/briefs/T-NNN.md` from `compose-brief.py T-NNN [--out PATH] [--vendor V --model M]`: task id/title, the full text of every cited constitution clause (never ids alone), the `## Spec excerpt` verbatim, and `## Prior attempt diagnosis` only when a rework diagnosis exists. Self-contained by contract — no state paths presented as readable, no CLAUDE.md references. The golden tests in `test_compose_brief.py` pin this format; it's what external vendors receive.
+
+`--vendor` and `--model` carry the lane's pinned identity and append a final `## Verdict contract` section: the four identity fields to echo verbatim (`task_id`, `checker: checker-courier`, vendor, model), null call metrics, the fail-needs-a-finding rule, and what each severity means. Pass both or neither; one alone exits 1. Each host adapter's courier suffix names the flags for its own lane, which is where the pin lives until #35 single-sources vendor config. Before #113 none of this was in the brief and the far side guessed its own identity.

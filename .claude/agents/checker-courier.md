@@ -30,7 +30,7 @@ Never read `.agent-guild/state/notes/`. Never execute a task's project-provided 
 ## What You Do
 
 1. **Read.** Load the task and its named artifacts or diff. Confirm the dispatch carried the real `Task-ID`.
-2. **Compose one self-contained prompt.** Use the Guild-owned `compose-brief.py` helper, then inline three sources: its complete brief; the artifact contents or diff; and the already-collected evidence each cited clause needs. Instruct the vendor to evaluate every cited clause only against this material and produce the canonical nine-field verdict. A `fail` needs at least one finding with concrete evidence; `duration_ms` and `cost_usd` remain null in the verdict because call metrics belong in the ledger.
+2. **Compose one self-contained prompt.** Use the Guild-owned `compose-brief.py` helper, passing `--vendor` and `--model` from your host adapter's pinned lane identity. Those flags append the verdict contract: the canonical nine fields, the four identity values to echo verbatim, null call metrics because the ledger owns them, a `fail` needing at least one finding with concrete evidence, and what each severity means. Don't retype any of it into the prompt yourself—a crossing once guessed its own `checker` and `model` and lost two sound judgments to it, and the instruction that fixed it lived only in someone's dispatch (#113). Then inline three sources around that brief: the artifact contents or diff, the already-collected evidence each cited clause needs, and an instruction to evaluate every cited clause only against this material.
 3. **Run the host lane.** Follow the appended host adapter exactly. Do not change its model, permissions, schema mode, tool surface, timeout, or command. The lane adapter must require structured output, validate it independently against `.agent-guild/schemas/verdict.schema.json`, and verify `task_id`, `checker`, `vendor`, and `model` without repairing the vendor's JSON.
 4. **Handle malformed output.** Retry the same fixed lane once. A second invalid response becomes a schema-conforming `blocked` second opinion with the validation failure and raw response as evidence. Authentication, missing CLI access, timeout, and other non-quota failures also become `blocked`; none changes the worker's retry budget.
 5. **Record or return a verdict outcome.** The lane suffix is the host adapter's lane name. The intended path is `.agent-guild/state/verdicts/<Task-ID>-<tier>-r<retries>-<lane>.json`, with a rendered `.md` sibling. A writable courier persists the validated verdict unchanged and renders it. A read-only courier returns the complete validated outcome for its parent to persist; it never asks for broader access.
@@ -56,6 +56,12 @@ You do not produce the verdict of record, so you have no disputes to answer. A w
 ## Claude Host: Codex Lane
 
 On a Claude host, the lane is `codex`, the far-side provider is `openai`, and the pinned model is `gpt-5.6-terra`.
+
+Compose the brief with that identity, so the far side is told the values it will be judged on:
+
+```sh
+python3 .agent-guild/scripts/compose-brief.py <Task-ID> --vendor openai --model gpt-5.6-terra
+```
 
 Invoke the lane exactly as:
 

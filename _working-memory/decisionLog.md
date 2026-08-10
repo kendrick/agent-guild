@@ -14,6 +14,20 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-10: What The Vendor Must Know Lives In The Brief, And What A Field Means Lives In The Schema
+
+**Source:** #113 and #115, fixed together
+
+**Context:** Two live failures with one cause. A crossing was rejected twice for returning `checker: checker-judgment` and a guessed model, because the lane validates identity on receipt and nothing ever told the far side what to send; the workaround that then worked five times for five was prose someone typed into a dispatch. Separately, a `pass` came back carrying twelve `blocker` findings, every one affirming that something was correct, because `severity` had no enum, no stated relation to `verdict`, and no definition the vendor could read.
+
+**Decision:** Split the two by delivery channel. Severity semantics go in `verdict.schema.json`, which both lanes already hand the vendor as the output schema (`codex exec --output-schema`, `claude --json-schema`) and which in-family checkers validate against, so one edit reaches every writer of a verdict. Identity can't go there, since `vendor` and `model` are lane-specific and the schema is generic, so `compose-brief.py` takes `--vendor`/`--model` and appends a `## Verdict contract` section carrying the whole instruction the courier used to retype: nine fields, four identity values to echo, null metrics, fail-needs-a-finding, and what severity means. Both flags or neither, so the existing golden briefs stay a real regression guard.
+
+**The severity ruling:** `blocker`, `major`, `minor`, `info`, by defect impact. A finding recording a satisfied clause is `info`. The mechanism behind #115 was almost certainly the brief itself: it quotes clause text verbatim, a clause reads `**severity**: blocker`, and the roles ask for one finding per cited clause including on a pass, so the clause's severity became the label for every finding about it. A `pass` now carries only `info` and `minor`, enforced in `validate-verdict.py` as its third semantic rule, since a `blocker` or `major` asserts a defect and contradicts a verdict saying every clause is satisfied.
+
+**Verified live** rather than by fixture alone. One codex-lane crossing with a deliberately blocker-severity clause that the artifact satisfies: `checker: checker-courier` and `model: gpt-5.6-terra` correct on the first attempt, the satisfied clause returned `info`, validator clean, 17,761 input tokens and 9 seconds.
+
+**Alternatives considered:** Stamping identity onto the response after it returns, which #113 called the stronger option. Rejected because it makes the courier the author of a verdict it is supposed to transcribe, which is the separation the org chart exists to keep, and because it fixes the symptom while leaving the vendor uninformed. A lane table inside `compose-brief.py` (rejected—duplicates the pin the adapters already own, and single-sourcing vendor config is #35). Enforcing only `pass` + `blocker`, which is all #115's acceptance criteria demanded (rejected—`major` asserts a real defect too, and a rule with an unexplained hole is a rule nobody trusts).
+
 ## 2026-08-10: Teach The Frontmatter Parser Block Scalars Rather Than Take A YAML Dependency
 
 **Source:** #109; commit d05d6ca

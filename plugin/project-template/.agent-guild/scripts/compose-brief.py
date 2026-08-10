@@ -9,6 +9,12 @@ cites (never clause ids alone — the far side has no constitution to look
 them up in), the task's spec excerpt, and any prior rework diagnosis.
 
     .agent-guild/scripts/compose-brief.py T-NNN [--out PATH]
+                                          [--vendor V --model M]
+
+`--vendor` and `--model` are the lane's pinned identity, and passing them
+appends the verdict contract: what to return, which identity fields to echo,
+and what severity means. Pass both or neither. They exist because the far
+side is validated on values nothing was telling it (#113, #115).
 
 Inputs are read relative to the working directory's `.agent-guild/state/`:
 `tasks/T-NNN.md` and `constitution.md`. Output defaults to
@@ -108,10 +114,52 @@ def extract_clause(constitution_text, clause_id):
     return constitution_text[m.start():end].rstrip("\n")
 
 
-def compose(task_id, state_dir):
+def verdict_contract(task_id, vendor, model):
+    """The section that tells the far side what to return.
+
+    Every fact here used to be retyped into a dispatch prompt by whoever ran
+    the crossing. On a live run the vendor guessed its own `checker` and
+    `model`, twice, and two sound judgments were thrown away over a field
+    nobody had given it (#113). Composing it means the working instruction
+    lives in the artifact instead of in someone's memory.
+
+    Severity is spelled out here as well as in the schema. The schema reaches
+    the vendor through --output-schema / --json-schema, but the brief is where
+    the constitution's clause text sits, and that text is what misleads: a
+    clause reading `**severity**: blocker` invited a `blocker` finding for
+    every judgment about it, including the ones confirming it was met (#115).
+    The correction belongs next to what caused it."""
+    return "\n".join([
+        "## Verdict contract",
+        "",
+        "Return the canonical verdict object. Echo these four fields exactly "
+        "as given:",
+        "",
+        f"  task_id  {task_id}",
+        "  checker  checker-courier",
+        f"  vendor   {vendor}",
+        f"  model    {model}",
+        "",
+        "Set duration_ms and cost_usd to null; call metrics are recorded on "
+        "this side. A fail carries at least one finding with concrete "
+        "evidence.",
+        "",
+        "severity is the impact of a defect: blocker, major, minor, or info. "
+        "Use info for a finding that records a clause being satisfied. A "
+        "clause's own severity in the text above is the cost of violating it, "
+        "not the label for every finding about it. A pass carries only info "
+        "and minor findings.",
+    ])
+
+
+def compose(task_id, state_dir, vendor=None, model=None):
     """Build the brief text for `task_id`, reading from `state_dir`. Returns
     (brief_text, None) on success or (None, error_message) on failure — the
-    caller decides exit code and stderr, this stays pure for testability."""
+    caller decides exit code and stderr, this stays pure for testability.
+
+    `vendor` and `model` are the lane's pinned identity. Supply both to get
+    the verdict contract, or neither for the bare brief; the caller rejects
+    one without the other."""
     task_path = os.path.join(state_dir, "tasks", f"{task_id}.md")
     try:
         with open(task_path, encoding="utf-8") as f:
@@ -169,6 +217,10 @@ def compose(task_id, state_dir):
     ]
     if diagnosis_content is not None:
         parts += ["", "## Prior attempt diagnosis", "", diagnosis_content]
+    # Last, deliberately: everything above is evidence to judge, and this is
+    # what to do about it. It sits closest to the response the vendor writes.
+    if vendor and model:
+        parts += ["", verdict_contract(task_id, vendor, model)]
 
     return "\n".join(parts).rstrip("\n") + "\n", None
 
@@ -179,10 +231,24 @@ def main():
     )
     ap.add_argument("task_id", help="task id, e.g. T-001")
     ap.add_argument("--out", default=None, help="output path (default: .agent-guild/state/briefs/T-NNN.md)")
+    ap.add_argument("--vendor", default=None, help="the lane's pinned vendor, e.g. openai; requires --model")
+    ap.add_argument("--model", default=None, help="the lane's pinned model, e.g. gpt-5.6-terra; requires --vendor")
     args = ap.parse_args()
 
+    # Half an identity is worse than none: the vendor would be told to echo a
+    # value the lane never pinned, and the adapter would reject what it sent
+    # back. Refuse rather than compose a contract that can't be satisfied.
+    if bool(args.vendor) != bool(args.model):
+        missing = "--model" if args.vendor else "--vendor"
+        sys.stderr.write(
+            f"compose-brief: {missing} is required alongside the one you "
+            "passed; the verdict contract needs both halves of the lane's "
+            "identity\n"
+        )
+        return 1
+
     state_dir = os.path.join(os.getcwd(), ".agent-guild", "state")
-    brief_text, err = compose(args.task_id, state_dir)
+    brief_text, err = compose(args.task_id, state_dir, args.vendor, args.model)
     if err is not None:
         sys.stderr.write(err + "\n")
         return 1

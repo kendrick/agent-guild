@@ -428,6 +428,20 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
             description = (
                 f"Claude CLI timed out after {timeout_seconds:g} seconds"
             )
+            # Silence on both streams for the whole wall clock is the
+            # signature of a sandbox with no egress: the CLI retries a
+            # transport failure rather than erroring out, so it dies at the
+            # bound with nothing to report. Verified 2026-08-10 in a Codex
+            # session where DNS did not resolve at all (#92).
+            if not call["stdout"].strip() and not call["stderr"].strip():
+                description += (
+                    ", producing no output on either stream. Check network "
+                    "egress first: a sandboxed session with no DNS looks "
+                    "exactly like this. `curl -sS -m 10 "
+                    "https://api.anthropic.com/v1/messages` fails in "
+                    "milliseconds when egress is blocked. On Codex, set "
+                    "sandbox_workspace_write.network_access = true."
+                )
             break
         if call["returncode"] != 0 or (
             isinstance(envelope, dict) and envelope.get("is_error") is True
@@ -444,7 +458,10 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
                     "Codex session cannot open, so a terminal that is logged "
                     "in still fails here. Run `claude setup-token` outside "
                     "the sandbox and pass the token it prints to the courier's "
-                    "session as CLAUDE_CODE_OAUTH_TOKEN."
+                    "session as CLAUDE_CODE_OAUTH_TOKEN. That is the first of "
+                    "two requirements; the sandbox also needs network egress, "
+                    "or the credential resolves and the call then hangs until "
+                    "the wall clock."
                 )
             else:
                 description = (

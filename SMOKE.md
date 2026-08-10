@@ -405,9 +405,19 @@ printf 'Task-ID: T-000\nEmit one verdict object: task_id "T-000", checker "check
 
 The `Task-ID:` line is not decoration. The runner refuses a prompt that does not carry it, exiting 2 before making any call, which looks nothing like a lane failure and is easy to misread as one.
 
-Expect a JSON outcome with `"status": "verdict"`. A `blocked` outcome naming the login keychain means the sandbox cannot reach your credentials: run `claude setup-token` outside the sandbox and give the courier's session that token as `CLAUDE_CODE_OAUTH_TOKEN`.
+A Codex-hosted courier needs two things, and each one hides behind the other. Run `claude setup-token` outside the sandbox and give the courier's session that token as `CLAUDE_CODE_OAUTH_TOKEN`, because the sandbox cannot read the login keychain. Then give the sandbox network egress, `sandbox_workspace_write.network_access = true`, because without it the credential resolves and the call goes nowhere. Supply only the token and a fast `Not logged in` becomes a silent 120-second timeout; supply only the network and you are back at the keychain.
 
-Verify that token where the courier runs and nowhere else. A keychain the CLI can reach takes precedence over the variable, so exporting it on your own machine gets you a crossing that succeeds on keychain credentials and tells you nothing about whether the token works. The sandbox is the only place the answer differs.
+Check egress directly rather than inferring it from a courier timeout:
+
+```sh
+curl -sS -m 10 -o /dev/null -w 'http %{http_code} in %{time_total}s\n' https://api.anthropic.com/v1/messages
+```
+
+Any HTTP code means egress works; `Could not resolve host` in about a millisecond means there is no network at all.
+
+Expect a JSON outcome with `"status": "verdict"`.
+
+Verify the token where the courier runs and nowhere else. A keychain the CLI can reach takes precedence over the variable, so exporting it on your own machine gets you a crossing that succeeds on keychain credentials and tells you nothing about whether the token works. The sandbox is the only place the answer differs.
 
 A Claude host has no equivalent script yet (#84), so probe the raw lane, substituting vendor `openai` and model `gpt-5.6-terra` into the same prompt:
 

@@ -399,13 +399,17 @@ On a Codex host the boundary script is the probe, because it is the same code th
 
 ```sh
 mkdir -p /tmp/ag-lane-probe && cd /tmp/ag-lane-probe
-printf 'Emit one verdict object: task_id "T-000", checker "checker-courier", vendor "anthropic", model "claude-haiku-4-5-20251001", verdict "pass", findings [], timestamp any ISO8601, duration_ms null, cost_usd null.\n' \
+printf 'Task-ID: T-000\nEmit one verdict object: task_id "T-000", checker "checker-courier", vendor "anthropic", model "claude-haiku-4-5-20251001", verdict "pass", findings [], timestamp any ISO8601, duration_ms null, cost_usd null.\n' \
   | python3 <ABSOLUTE project path>/.agent-guild/scripts/claude-courier.py --task-id T-000
 ```
 
+The `Task-ID:` line is not decoration. The runner refuses a prompt that does not carry it, exiting 2 before making any call, which looks nothing like a lane failure and is easy to misread as one.
+
 Expect a JSON outcome with `"status": "verdict"`. A `blocked` outcome naming the login keychain means the sandbox cannot reach your credentials: run `claude setup-token` outside the sandbox and give the courier's session that token as `CLAUDE_CODE_OAUTH_TOKEN`.
 
-A Claude host has no equivalent script yet (#84), so probe the raw lane, substituting vendor `openai` and model `gpt-5.6-terra` into the same one-line prompt:
+Verify that token where the courier runs and nowhere else. A keychain the CLI can reach takes precedence over the variable, so exporting it on your own machine gets you a crossing that succeeds on keychain credentials and tells you nothing about whether the token works. The sandbox is the only place the answer differs.
+
+A Claude host has no equivalent script yet (#84), so probe the raw lane, substituting vendor `openai` and model `gpt-5.6-terra` into the same prompt:
 
 ```sh
 mkdir -p /tmp/ag-lane-probe && cd /tmp/ag-lane-probe

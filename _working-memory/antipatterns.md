@@ -14,6 +14,13 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-10: Don't let a shared parser skip what it doesn't understand
+
+**Tried:** A branch in `_lib.parse_frontmatter` that set a block-scalar key to `""` and skipped its indented body, on the reasoning that the body wasn't needed and its lines must not be read as `- item` entries.
+**What broke:** `check_method: >-` is what the task template's own example uses, and its body is the entire contract between a task and its checker. A task cited eleven clauses, named a check for each, and handed its checker an empty string. Nothing reported it (#109); a hand inspection of the frontmatter before dispatch is what caught it.
+**Why we backed out:** The skip encoded an assumption about which keys would use the form, inside a parser that doesn't know its keys. It was true when written and false the moment a task file used the documented spelling. Reading the body turns out to keep the guard the skip was buying anyway, since those lines are consumed before the list branch can see them.
+**Don't suggest:** a "we don't need this one" branch in a shared parser. Either parse the construct or fail loud on it; the module's own fail-loud rule governs parsing, not just hook exits. And when a parser degrades a value quietly, go looking for the consumer that would report the degradation. If there isn't one, that absence is the second half of the bug.
+
 ## 2026-08-10: Don't run a courier crossing from the project root
 
 **Tried:** Probing the `codex` lane with the shipped adapter command, `codex exec --skip-git-repo-check -s read-only ...`, from the repository the artifacts live in.

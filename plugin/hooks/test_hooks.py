@@ -1353,6 +1353,65 @@ rc, out, err = run_hook("subagent-return.py",
 check("checker-courier quota return (ledger quota_event + sentinel, no verdict) → exit 0",
       rc == 0, f"rc={rc} err={err}")
 
+# The identity negatives (#142). Each of these verdicts is schema-valid and
+# semantically fine; the only thing wrong is a claim about who produced it.
+# Before this gate existed, all four were filed without comment, and one of
+# them—model "gpt-5.6" where the lane pins "gpt-5.6-terra"—is sitting in the
+# #34 corpus because of it.
+for field, bad, expected in (
+    ("model", "gpt-5.6", "gpt-5.6-terra"),
+    ("vendor", "anthropic", "openai"),
+    ("checker", "checker-judgment", "checker-courier"),
+    ("task_id", "T-999", "T-024"),
+):
+    proj_ident = fresh_proj()
+    seed_verdict_toolchain(proj_ident)
+    write_task(proj_ident, "T-024", status="checking", checker="checker-judgment",
+               executor_model="sonnet", retries=0)
+    fixture = {"task_id": "T-024", "checker": "checker-courier",
+               "vendor": "openai", "model": "gpt-5.6-terra", "verdict": "pass"}
+    fixture[field] = bad
+    write_verdict_json(proj_ident, "T-024-sonnet-r0-codex.json", **fixture)
+    tx = transcript(proj_ident, "Task-ID: T-024")
+    rc, out, err = run_hook("subagent-return.py",
+                            {"agent_type": "checker-courier", "transcript_path": tx}, proj_ident)
+    check(f"checker-courier lane verdict with a wrong {field} → exit 2",
+          rc == 2 and field in err and repr(expected) in err,
+          f"rc={rc} err={err}")
+
+# A fail is a judgment, not an identity problem: the gate must not confuse the
+# two, or it becomes a second way for the lane to reject sound work.
+proj_fail = fresh_proj()
+seed_verdict_toolchain(proj_fail)
+write_task(proj_fail, "T-025", status="checking", checker="checker-judgment",
+           executor_model="sonnet", retries=0)
+write_verdict_json(proj_fail, "T-025-sonnet-r0-codex.json",
+                   task_id="T-025", checker="checker-courier", vendor="openai",
+                   model="gpt-5.6-terra", verdict="fail",
+                   findings=[{"clause_id": "C-7", "severity": "major",
+                              "description": "the artifact misses the clause",
+                              "evidence": "line 12"}])
+tx = transcript(proj_fail, "Task-ID: T-025")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-courier", "transcript_path": tx}, proj_fail)
+check("checker-courier lane verdict with correct identity and a fail → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+# And the check stays inside its lane: an in-family verdict of record names
+# whichever model ran it, and has no pinned identity to be measured against.
+proj_infam = fresh_proj()
+seed_verdict_toolchain(proj_infam)
+write_task(proj_infam, "T-026", status="checking", checker="checker-judgment",
+           executor_model="sonnet", retries=0)
+write_verdict_json(proj_infam, "T-026-sonnet-r0.json",
+                   task_id="T-026", checker="checker-judgment",
+                   model="some-other-model", verdict="pass")
+tx = transcript(proj_infam, "Task-ID: T-026")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-judgment", "transcript_path": tx}, proj_infam)
+check("in-family verdict of record keeps its own free-choice model → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
 # Negative: neither a valid suffixed verdict nor quota evidence present → denied.
 proj_noquota = fresh_proj()
 seed_verdict_toolchain(proj_noquota)

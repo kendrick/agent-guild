@@ -53,7 +53,7 @@ import _lib  # noqa: E402
 
 CODEX_COURIER_OUTCOME_MARKER = "AGENT_GUILD_COURIER_OUTCOME\n"
 CODEX_VERDICT_MARKER = "AGENT_GUILD_VERDICT\n"
-CLAUDE_COURIER_MODEL = "claude-haiku-4-5-20251001"
+CLAUDE_COURIER_MODEL = _lib.LANE_IDENTITY["claude"]["model"]
 
 
 def _has_diagnosis(verdict_text):
@@ -104,6 +104,18 @@ def _validate_verdict_json(path):
         return True, None
     detail = proc.stderr.strip() or f"validate-verdict.py exited {proc.returncode}"
     return False, detail
+
+
+def _courier_identity_violation_at(path, task_id, lane):
+    """The identity check applied to a verdict already on disk. Unreadable or
+    unparseable is not this check's problem: _validate_verdict_json has
+    already run and would have said so."""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            verdict = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _lib.courier_identity_violation(verdict, task_id, lane)
 
 
 def _quota_return_ok(task_id, lane):
@@ -259,19 +271,13 @@ def _codex_courier_outcome_ok(message, task_id):
         return False, "verdict outcome must carry ledger.quota_event: false"
     if not isinstance(verdict, dict):
         return False, "verdict outcome does not carry an object verdict"
-    expected_verdict = {
-        "task_id": task_id,
-        "checker": "checker-courier",
-        "vendor": "anthropic",
-        "model": CLAUDE_COURIER_MODEL,
-    }
-    for key, expected in expected_verdict.items():
-        if verdict.get(key) != expected:
-            return (
-                False,
-                f"verdict.{key} is {verdict.get(key)!r}, expected "
-                f"{expected!r}",
-            )
+    violation = _lib.courier_identity_violation(verdict, task_id, "claude")
+    if violation is not None:
+        field, actual, expected = violation
+        return (
+            False,
+            f"verdict.{field} is {actual!r}, expected {expected!r}",
+        )
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -459,15 +465,30 @@ def main(data):
         vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}-{lane}.json")
         if os.path.exists(vpath):
             ok, reason = _validate_verdict_json(vpath)
-            if ok:
-                return 0
-            return _lib.block(
-                f"checker-courier for {ident} wrote a verdict at {rel} but it "
-                f"doesn't validate ({reason}). Fix it per "
-                ".agent-guild/schemas/verdict.schema.json, or—if this was meant "
-                "to be a quota bailout (C-3)—remove the file and finish per "
-                "that protocol instead (ledger line, then sentinel, no verdict)."
-            )
+            if not ok:
+                return _lib.block(
+                    f"checker-courier for {ident} wrote a verdict at {rel} but it "
+                    f"doesn't validate ({reason}). Fix it per "
+                    ".agent-guild/schemas/verdict.schema.json, or—if this was meant "
+                    "to be a quota bailout (C-3)—remove the file and finish per "
+                    "that protocol instead (ledger line, then sentinel, no verdict)."
+                )
+            # The reciprocal lane has checked this since #92; this host did
+            # not, which is how a verdict claiming `model: "gpt-5.6"` reached
+            # the #34 corpus with nothing having verified it (#142).
+            violation = _courier_identity_violation_at(vpath, ident, lane)
+            if violation is not None:
+                field, actual, expected = violation
+                return _lib.block(
+                    f"checker-courier for {ident} wrote a verdict at {rel} whose "
+                    f"{field} is {actual!r}, but the {lane} lane's is "
+                    f"{expected!r}. Re-run "
+                    ".agent-guild/scripts/codex-courier.py, which stamps the "
+                    "identity from the lane it actually ran. Don't hand-edit the "
+                    "field: a verdict you corrected is one you co-authored, and "
+                    "you commissioned this check."
+                )
+            return 0
         if _quota_return_ok(ident, lane):
             return 0
         return _lib.block(

@@ -28,6 +28,41 @@ TERMINAL = {"complete", "abandoned"}
 # inline (out of scope for this change), but nothing new should.
 COURIER_LANES = ("codex", "claude")
 
+# What a courier verdict on each lane must claim about who produced it. The
+# runners stamp these; this is the gate's copy, so a verdict that reaches the
+# return path claiming something else is refused rather than filed.
+#
+# `vendor` here is the PROVIDER, matching the verdict's own field. The ledger's
+# vendor is the lane name instead, which is the pair the #100 archive has rows
+# disagreeing about.
+LANE_IDENTITY = {
+    "codex": {"vendor": "openai", "model": "gpt-5.6-terra"},
+    "claude": {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+}
+
+
+def courier_identity_violation(verdict, task_id, lane):
+    """The first identity field of a courier verdict that doesn't match the
+    lane, as (field, actual, expected), or None.
+
+    Applies only to the lane-suffixed stem. An in-family verdict of record
+    names whichever model actually ran it and has no pinned identity to check
+    against.
+    """
+    identity = LANE_IDENTITY.get(lane)
+    if not isinstance(verdict, dict) or identity is None:
+        return None
+    expected = {
+        "task_id": task_id,
+        "checker": "checker-courier",
+        "vendor": identity["vendor"],
+        "model": identity["model"],
+    }
+    for field, want in expected.items():
+        if verdict.get(field) != want:
+            return field, verdict.get(field), want
+    return None
+
 # Each guild agent's default model, so dispatch-guard can compute the effective
 # model of a dispatch (override if present, else this) and match it to the
 # task's current tier. Escalation bumps the model via override, not the agent.

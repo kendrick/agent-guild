@@ -26,11 +26,11 @@ STALL_LIMIT = 3
 
 def _next_move(tid, status, retries, debts):
     # A task can sit at `checking` with its checker of record already landed
-    # and only the courier crossing still missing—today's generic "act on
-    # the verdict" line lets a well-behaved orchestrator walk straight past
-    # that and call the task complete before the debt registers anywhere.
-    # Naming the courier here, ahead of that mistake, is what the debt list
-    # below only ever catches after the fact. Matched to THIS retry round
+    # and only the courier crossing still missing. The generic "act on the
+    # verdict" line in `moves` lets a well-behaved orchestrator walk straight
+    # past that and call the task complete before the debt registers
+    # anywhere, and the debt list in the block message only catches it after
+    # the fact—so name the courier here instead. Matched to THIS retry round
     # (not just this task) because an older round's still-open debt from a
     # prior FAIL survives a rework cycle and shouldn't be mistaken for the
     # current round's own crossing.

@@ -205,14 +205,12 @@ def second_opinion_debts(data=None):
     Discharge is generous—a courier response either way, the quota sentinel,
     an orchestrator waiver, or a blocked verdict of record all clear a debt,
     since a `blocked` in-family check has nothing yet for a crossing to
-    compare against. An unreadable verdict of record only forecloses the
-    last of those (blocked can't be established if the file can't be
-    parsed); it does not override the first three. Treating an unreadable
-    record as owing no matter what would create a debt nothing could ever
-    discharge—a courier response IS one of those routes, so if it already
-    landed, refusing to look for it before declaring the record corrupt
-    would leave a debt on disk that no future dispatch could clear, since
-    the file it would write already exists.
+    compare against. An unreadable verdict of record forecloses only that
+    last route, since `blocked` can't be established from a file that won't
+    parse; the first three still stand. A courier response IS one of them,
+    so declaring a record corrupt without first looking for one would strand
+    a debt no future dispatch could clear: the file the next courier would
+    write is already on disk.
 
     Never raises, the same contract paused() and lane_exhausted() hold to:
     stop-gate.py calls this every turn, so a crash here is a hook crash on
@@ -248,12 +246,11 @@ def second_opinion_debts(data=None):
         if os.path.exists(os.path.join(vdir, f"{stem}-{lane}.denied")):
             continue  # route 4: the orchestrator's record that a host refused the dispatch outright (e.g. #94)
 
-        # Routes 1-4 are settled without ever opening the file, on purpose:
-        # routes 1/2 ARE the file a courier writes, so if the record itself
-        # turned out unreadable below, treating that as owing regardless
-        # would create a debt no dispatch could ever clear—another courier
-        # writes the same path that already exists, and the debt never
-        # discharges. Unreadable only forecloses route 5 (below), not these.
+        # Routes 1-4 settle before the file is ever opened, on purpose:
+        # routes 1/2 ARE the file a courier writes, so an unreadable record
+        # treated as owing regardless would strand a debt no dispatch could
+        # clear—the next courier writes a path that is already there.
+        # Unreadable forecloses route 5 (below) and nothing above it.
         record = None
         try:
             with open(os.path.join(vdir, name), encoding="utf-8") as f:

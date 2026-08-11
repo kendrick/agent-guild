@@ -14,6 +14,15 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-11: Don't treat a field a model writes about itself as identity evidence
+
+**Tried:** Verifying a courier verdict's `model` by comparing it against the lane's pinned string. The far side was told the exact value to echo (#113 added that instruction), so echoing something else was read as a signal worth acting on.
+**What broke:** Over the #100 run the codex lane returned `gpt-5.6` where the adapter pins `gpt-5.6-terra`, intermittently, on the same lane and the same composition path. Both possible responses did damage and the run produced one of each. T-001 r0 persisted the unverified value into the corpus #34 rules on. T-004 refused it and blocked, discarding a `fail` with two major findings that had nothing to do with the model field.
+**Why we backed out:** The comparison was never testing what it looked like. Asking a model to write down its own name gets you a string it was handed and is now repeating, and instruction-following on that string degrades with prompt length. Nothing about the answer is evidence of which model answered. The lane knows what it ran, so the lane stamps it: `-m` on the command, the value stamped onto the verdict, the vendor's echo recorded as an `info` finding when it diverges. Note the reciprocal lane's `modelUsage` check survived this, because that is the CLI's own billing record rather than the model's opinion of itself.
+**Don't suggest:** validating any field a model wrote about its own identity, configuration, or capabilities against an expected value, and never blocking a judgment on one. Verify what the far side genuinely knows (which task, which role, whose API), take the rest from the caller, and record a divergence rather than acting on it.
+
+One fact in the 2026-07-28 courier-vendors entry below stopped being true with this work, and it is the half that entry was least happy about: the Claude-host `codex` lane now classifies deterministically in `codex-courier.py`, with its own behavior table, rather than leaving an agent to read `codex exec` output. "Two lanes, two mechanisms, one of them never tested" is down to two lanes and two tested mechanisms. The entry's actual recommendation is untouched and still open: one shared classifier fed by a per-vendor descriptor, instead of the second copy this shipped.
+
 ## 2026-08-10: Don't cap audit rounds before removing the cheap ones
 
 **Tried:** #120's proposal to give CON-audit and DEC-audit a round budget, on the reasoning that eight rounds on `skills#27` and nine on `agent-guild#117` were obviously too many.

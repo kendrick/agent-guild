@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -863,20 +864,37 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         encoding="utf-8",
     ) as f:
         claude_courier = f.read()
+    # Each lane names its own runner and neither names the other's, and the
+    # shared role names no runner at all. Matching on the runner filenames
+    # rather than on "codex exec" is deliberate: the Claude adapter's prose
+    # still mentions that command while describing what the runner does, so a
+    # substring check on it now passes for the wrong reason.
     check(
         "courier protocol is shared while exact lane commands stay in adapters",
-        "codex exec" not in core_courier
+        "codex-courier.py" not in core_courier
         and "claude-courier.py" not in core_courier
-        and "codex exec" in claude_courier
+        and "codex-courier.py" in claude_courier
         and "claude-courier.py" not in claude_courier
         and "claude-courier.py" in courier_instructions
-        and "codex exec" not in courier_instructions,
+        and "codex-courier.py" not in courier_instructions,
         (
-            f"core_codex={'codex exec' in core_courier} "
+            f"core_codex={'codex-courier.py' in core_courier} "
             f"core_claude={'claude-courier.py' in core_courier} "
-            f"claude_codex={'codex exec' in claude_courier} "
-            f"codex_codex={'codex exec' in courier_instructions}"
+            f"claude_codex={'codex-courier.py' in claude_courier} "
+            f"codex_codex={'codex-courier.py' in courier_instructions}"
         ),
+    )
+    check(
+        "the Claude courier runs the fixed writable codex lane",
+        "python3 .agent-guild/scripts/codex-courier.py --task-id"
+        in claude_courier
+        and "-m gpt-5.6-terra" in claude_courier
+        and "--ignore-user-config" in claude_courier
+        and "-codex.json" in claude_courier
+        and "state/exhausted/codex" in claude_courier
+        and "never hand-format a ledger line" in claude_courier
+        and "stamps the model the lane ran" in claude_courier,
+        claude_courier[-1800:],
     )
     check(
         "the Codex courier runs the fixed read-only Claude lane",
@@ -891,18 +909,63 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         not in courier_instructions,
         courier_instructions[-1800:],
     )
+    # Both payloads ship both runners and the shared module. A host installs
+    # the kit before it knows which lane it is, and #94 shipped a package
+    # missing a courier piece with nothing noticing until a dispatch failed.
+    missing_payload = [
+        os.path.join(out, "project-template", ".agent-guild", "scripts", name)
+        for out in (codex_out, claude_out)
+        for name in ("claude-courier.py", "codex-courier.py", "_courier_lib.py")
+        if not os.path.isfile(
+            os.path.join(out, "project-template", ".agent-guild", "scripts", name)
+        )
+    ]
     check(
-        "the Codex project payload ships the deterministic Claude boundary",
-        os.path.isfile(
-            os.path.join(
-                codex_out,
-                "project-template",
-                ".agent-guild",
-                "scripts",
-                "claude-courier.py",
-            )
-        ),
-        codex_out,
+        "both project payloads ship both courier boundaries",
+        missing_payload == [],
+        repr(missing_payload),
+    )
+
+    # Each lane's model literal is written in three places that cannot import
+    # each other: the adapter prose a courier reads, the runner constant that
+    # goes on the wire as `-m`, and the gate's copy that a returned verdict is
+    # measured against. A shared config file would cross the deliberate
+    # stdlib-only boundary between .agent-guild/scripts and .agent-guild/hooks,
+    # so the property bought here is narrower and sufficient: they cannot drift
+    # without this failing. (compose-brief.py names gpt-5.6-terra too, in an
+    # argparse help string. That one is illustrative, not a pin, so it is
+    # deliberately not a source here.)
+    def slurp(*parts):
+        with open(os.path.join(ROOT, *parts), encoding="utf-8") as handle:
+            return handle.read()
+
+    lib_text = slurp(".agent-guild", "hooks", "_lib.py")
+    lane_sources = {}
+    for lane, adapter, runner in (
+        ("codex", "claude.json", "codex-courier.py"),
+        ("claude", "codex.json", "claude-courier.py"),
+    ):
+        adapter_suffix = json.loads(
+            slurp("scripts", "plugin-src", "adapters", adapter)
+        )["agent_body_suffixes"]["checker-courier"]
+        runner_text = slurp(".agent-guild", "scripts", runner)
+        gate = re.search(
+            rf'"{lane}":\s*{{[^}}]*"model":\s*"([^"]+)"', lib_text
+        )
+        lane_sources[lane] = {
+            "adapter": re.search(r"pinned model is `([^`]+)`", adapter_suffix),
+            "runner": re.search(r'^MODEL = "([^"]+)"', runner_text, re.M),
+            "gate": gate,
+        }
+    drifted = {
+        lane: {name: (m.group(1) if m else None) for name, m in sources.items()}
+        for lane, sources in lane_sources.items()
+        if len({m.group(1) if m else None for m in sources.values()}) != 1
+    }
+    check(
+        "each lane's pinned model reads the same in adapter, runner, and gate",
+        drifted == {},
+        repr(drifted),
     )
     codex_guidance_path = os.path.join(
         codex_out,

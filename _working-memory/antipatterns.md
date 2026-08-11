@@ -14,6 +14,13 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-10: Don't cap audit rounds before removing the cheap ones
+
+**Tried:** #120's proposal to give CON-audit and DEC-audit a round budget, on the reasoning that eight rounds on `skills#27` and nine on `agent-guild#117` were obviously too many.
+**What broke:** Nothing yet, because it was measured before it was built. Replaying #117 against a three-round cap: the cap lands before DEC r2 found a task holding a clause its own worker was forbidden to clear, and before DEC r3 found a `check_method` instructing a verdict `validate-verdict.py` refuses to write. The budget buys wall clock by cutting exactly where the value was.
+**Why we backed out:** The round count was a symptom. Six of #117's eleven audit findings were provable by a script — unresolvable citations, a count disagreeing with its source file, a clause saying "five files" above a list of six, a DAG hole — and each cost a full opus round at 300-550 seconds. Remove those and the round count falls out; cap the rounds and you lose the judgment ones too, since the mechanical defects surface first.
+**Don't suggest:** a budget, a timeout, or a "good enough after N rounds" rule on any verification loop before measuring what the loop is actually spending its rounds on. Sort the findings into "a script could have proven this" and "this needed judgment" first. If the first pile is large, that is the fix.
+
 ## 2026-08-10: Don't validate the far side on a value you never sent it
 
 **Tried:** Pinning courier identity on receipt only. Both host adapters require a returned verdict to carry `checker: checker-courier` and the lane's model, and `claude-courier.py` rejects a mismatch by name. Nothing on either lane told the vendor what those values were.

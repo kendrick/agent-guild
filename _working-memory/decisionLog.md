@@ -14,6 +14,22 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-10: Speed Comes From Not Auditing Cheap Defects, Not From Auditing Less
+
+**Source:** #117's run measured end to end; design pass filed as #132-#136; epic #126 rewritten
+
+**Context:** Three runs now measure the same shape — roughly half a guild job's wall clock is an opus auditor reading the orchestrator's own paperwork. #117 was 64 of 133 subagent-minutes across nine audit rounds, with every dispatch serial and 13 of 15 checks passing first time.
+
+**Decision:** Four pieces, sequenced by risk to #34's corpus rather than by size. A pre-flight linter (#132) proves what a script can prove before an auditor is dispatched. Tasks declare the files they own (#133), with overlap legal only where a dependency edge orders it. The stop gate's existing next-move computation grows into a wave (#125) and something dispatches it (#134). A dependent task then starts on its dependency's artifact rather than its verdict (#135), with discarded crossings recorded as such (#136).
+
+**The premise that was wrong:** #120 called a round budget the cheapest and largest win. #117 disproves it — a three-round cap would have stopped before the rounds that found a deadlocked task and a `check_method` instructing a verdict `validate-verdict.py` refuses to write. The round count was the symptom; six of eleven findings were mechanically provable and cost four opus rounds at 300-550 seconds each.
+
+**The scheduler is machinery, not a role.** It computes; it never decides. Every FAIL, dispute, escalation, and ambiguous rollback wakes the orchestrator. The guild's roles are the things that exercise judgment and can be wrong in interesting ways; this one's failure mode is a bug.
+
+**Honest ceiling:** about 2.5x on #117's numbers, not 10x. Six of its seven tasks sat on one dependency chain, so concurrency had little to bite on. Past that needs flatter decompositions, which no scheduler can fix, and #123's tiering so a small change stops paying a large one's ceremony.
+
+**Alternatives considered:** parallel audit dimensions, several auditors per round (rejected for now — several of #117's rounds found defects introduced by the previous round's repair, which parallel dimensions cannot see); worktree isolation per worker with merge-back (rejected — overlap is usually a decomposition defect, and the merges most likely to conflict are the append-only files); a round budget as filed (deferred to after #132, when the argument is against different data).
+
 ## 2026-08-10: What The Vendor Must Know Lives In The Brief, And What A Field Means Lives In The Schema
 
 **Source:** #113 and #115, fixed together

@@ -1,0 +1,181 @@
+_lib.py project_dir() fallback
+  ok   fallback: candidate with .agent-guild/ → accepted
+  ok   fallback: candidate without .agent-guild/ → raises RuntimeError
+_lib.py parse_frontmatter block scalars (#109)
+  ok   block scalar '>-': body reaches the checker
+  ok   block scalar '>-': clauses beside it still parse as a list
+  ok   block scalar '>': body reaches the checker
+  ok   block scalar '>': clauses beside it still parse as a list
+  ok   block scalar '|': body reaches the checker
+  ok   block scalar '|': clauses beside it still parse as a list
+  ok   literal '|-' strips the trailing newline, keeps interior blanks
+  ok   a key after a block scalar body still parses
+  ok   literal '|+' keeps the trailing blank lines
+  ok   folded '>+' keeps the trailing blank lines
+  ok   folded: blank line breaks the fold, a more-indented line stays verbatim
+  ok   block scalar '|': its '- ' lines are body, not list items
+  ok   block scalar '|': a real block list after it still parses
+  ok   block scalar '>-': its '- ' lines are body, not list items
+  ok   block scalar '>-': a real block list after it still parses
+  ok   block scalar with no body → empty string, next key intact
+_lib.py unverifiable()
+  ok   cites clauses, empty check_method → a reason naming the task file
+  ok   cites clauses with a check_method → None
+  ok   cites no clauses → None even with an empty check_method
+  ok   a single clause written as a bare scalar still counts
+stop-gate.py
+  ok   no tasks dir contents → exit 0
+  ok   open task → exit 2
+  ok   open task → names next move (checker)
+  ok   PAUSED + open task → exit 0
+  ok   all terminal → exit 0
+  ok   livelock strikes 1,2 block
+  ok   livelock strike 3 → exit 0
+  ok   livelock strike 3 → STALLED.md written
+  ok   verdict landing resets the stall counter
+  ok   verdict landing → no spurious STALLED.md on strike 3
+  ok   the turn is still blocked (progress is not completion)
+  ok   a checker owing a verdict still stalls after three strikes
+  ok   stall-counter double-invocation: one fire → count 1
+  ok   stall-counter double-invocation: same blocked state fired twice → counter advances by two total
+  ok   both fires individually blocked the turn (rc==2 each)
+  ok   malformed task → exit 2 (fail closed)
+  ok   (setup) main-session block seeds stop-gate.state
+  ok   subagent Stop, two open tasks → exit 0, empty output
+  ok   subagent Stop → stop-gate.state byte-identical
+dispatch-guard.py
+  ok   non-guild agent → exit 0
+  ok   worker w/o Task-ID → exit 2
+  ok   worker, missing task file → exit 2
+  ok   worker before CON-audit PASS → exit 2
+  ok   worker on pending (not assigned) → exit 2
+  ok   model mismatch (opus task, sonnet dispatch) → exit 2
+  ok   model match (opus override) → exit 0
+  ok   wrong executor agent → exit 2
+  ok   legal worker dispatch → exit 0
+  ok   legal worker dispatch → logged
+  ok   retries > max → exit 2 (escalate)
+  ok   checker on 'checking' → exit 0
+  ok   checker on 'needs-check' → exit 2
+  ok   auditor with Audit-ID → exit 0
+  ok   auditor w/o Audit-ID → exit 2
+  ok   auditor, linter exits 0 → exit 0
+  ok   auditor, linter exits 1 → exit 2
+  ok   auditor, linter exits 1 → message reads as two sentences, not run together
+  ok   auditor, linter exits 3 → exit 2, distinct from exit-1 message
+  ok   auditor, linter times out → exit 0 (allow-through, not a block)
+  ok   auditor, linter times out → gate-gaps.log records the gap
+  ok   auditor, linter times out → stderr carries the notice
+  ok   auditor, no linter script (payload freeze) → exit 0
+  ok   worker w/ failing linter, no CON-audit → exit 2 on CON-audit, not job-spec
+  ok   worker w/ failing linter, CON-audit PASS → exit 0 (linter is auditor-only)
+  ok   audition dispatch (Audition-ID, no Task-ID) → exit 0
+  ok   audition dispatch → logged
+  ok   no Task-ID and no Audition-ID → exit 2
+  ok   block-scalar check_method → dispatch allowed
+  ok   cites clauses, no check_method → worker blocked
+  ok   that block names the task file
+  ok   cites clauses, no check_method → checker blocked too
+dispatch-guard.py: structured dispatch_id (issue #71)
+  ok   dispatch_id carries a Task-ID → exit 0
+  ok   underscored wire form resolves to the same task → exit 0
+  ok   underscored id is logged canonically as T-001
+  ok   underscored Audit-ID resolves → exit 0
+  ok   prompt line still works with no dispatch_id → exit 0
+  ok   dispatch_id in no known namespace → exit 2
+  ok   dispatch_id carries an Audit-ID → exit 0
+  ok   auditor handed a Task-ID → exit 2
+  ok   dispatch_id carries an Audition-ID → exit 0
+dispatch-guard.py: per-dispatch task_name (issue #77)
+  ok   discriminated wire name resolves to the task → exit 0
+  ok   discriminator never reaches the dispatch log
+  ok   discriminated Audit-ID resolves → exit 0
+  ok   a retry's distinct name still resolves → exit 0
+dispatch-guard.py: followup_task refusal (issue #77)
+  ok   followup at a guild agent → exit 2
+  ok   followup refusal names a fresh name to use instead
+  ok   followup through a rooted agent path → exit 2
+  ok   followup at a non-guild agent → exit 0
+  ok   a refused followup is never logged as a dispatch
+dispatch-guard.py: namespaced subagent_type (issue #27)
+  ok   namespaced worker w/o Task-ID → exit 2, blocked like bare form
+  ok   namespaced worker, fully legal (no DEFAULT_MODEL KeyError, no executor mismatch) → exit 0
+  ok   dispatch log records the RAW namespaced string, not the bare name
+  ok   bare-name worker, fully legal (regression after normalization) → exit 0
+dispatch-guard.py: checker-courier (issue #8)
+  ok   checker-courier on checking task named for checker-judgment → exit 0
+  ok   checker-courier with a model override → exit 2, says drop the override
+  ok   checker-courier requesting workspace-write → exit 2, read-only by contract
+  ok   checker-courier requesting danger-full-access → exit 2, read-only by contract
+  ok   checker-courier dispatch under exhausted/codex → exit 2, substitutes nothing
+  ok   checker-courier dispatch once sentinel is cleared → exit 0
+second_opinion_debts(): the debt gate (#100)
+  ok   so: debt with the task at checking blocks the turn
+  ok   so: debt with the task at complete blocks the turn
+  ok   so: a codex lane sibling discharges the debt
+  ok   so: a claude lane sibling discharges the debt
+  ok   so: an exhausted lane discharges the debt
+  ok   so: the exhausted-lane discharge follows the host lane
+  ok   so: a denied waiver discharges the debt
+  ok   so: a blocked verdict of record owes nothing
+  ok   so: an auditor stem owes nothing
+  ok   so: the debt is per retry round
+  ok   so: an unreadable verdict of record owes a debt
+  ok   so: PAUSED stands the debt gate down
+  ok   so: courier dispatch allowed on a complete task with a debt
+  ok   so: courier dispatch still refused on a complete task with no debt
+  ok   so: an in-family checker is still refused on a complete task
+  ok   so: a debt-bearing courier dispatch is still refused for a model override
+  ok   so: a debt-bearing courier dispatch is still refused for workspace-write
+subagent-return.py
+  ok   non-guild agent → exit 0
+  ok   worker returned clean → exit 0
+  ok   worker, list-content transcript → exit 0
+  ok   worker, tool_use-dispatch transcript → exit 0
+  ok   worker, Agent-tool dispatch transcript → exit 0
+  ok   worker skipped protocol → exit 2
+  ok   worker needs-check but no artifacts → exit 2
+  ok   checker wrote conforming JSON verdict → exit 0
+  ok   checker, missing verdict JSON → exit 2, names the path
+  ok   checker, malformed verdict JSON → exit 2
+  ok   checker, schema violation (bad verdict enum) → exit 2, names the field
+  ok   checker, fail verdict with empty findings → exit 2, names findings
+  ok   checker, conforming blocked verdict → exit 0
+  ok   no id in transcript → exit 0 loud, no hang
+  ok   missing transcript → exit 0 loud, no hang
+  ok   transcript with no id → exit 0 loud, no hang
+  ok   id resolves but no task file → exit 0 loud, no hang
+  ok   auditor wrote CON-audit verdict → exit 0
+  ok   audition subagent (A-001 transcript) → exit 0
+  ok   worker clean return on T-001 while T-002 sits assigned → exit 0, no T-002 mention
+  ok   checker valid return on T-001 while T-002 has no verdict → exit 0, no T-002 demand
+subagent-return.py: checker-courier (issue #8)
+  ok   checker-courier valid lane-suffixed verdict (T-NNN-<tier>-r<retries>-codex.json) → exit 0
+  ok   in-family checker return on the same task still validated at the standard stem → exit 0
+  ok   checker-courier quota return (ledger quota_event + sentinel, no verdict) → exit 0
+  ok   checker-courier return with neither verdict nor quota evidence → exit 2
+orchestrator-write-guard.py
+  ok   no job → any write allowed (exit 0)
+  ok   job active, write under .agent-guild/state/ → exit 0
+  ok   job active, write outside .agent-guild/state/ → exit 2
+  ok   job active, subagent (agent_id) writes deliverable → exit 0
+  ok   PAUSED lifts write-guard → exit 0
+session-nudge.py
+  ok   no .agent-guild/ at all → silent, exit 0
+  ok   state dirs missing → nudges, mentions init
+  ok   state dirs missing → exactly one stdout line
+  ok   CLAUDE.md missing → nudges, mentions init
+  ok   fully initialized → silent, exit 0
+session-nudge.py: double-registration detection (issue #41)
+  ok   plugin-rooted + copy-in settings.json → one double-registration warning
+  ok   plugin-rooted + copy-in settings.json → exactly one stdout line
+  ok   double-registration warning cites the verified stall-counter consequence
+  ok   double-registration warning names --scope local, not --scope project, as the resolution
+  ok   double-registration warning names the kendrick-qualified plugin id
+  ok   plugin-rooted + no copy-in registration → no double-registration warning
+  ok   malformed settings.json → no crash, exit 0
+  ok   malformed settings.json → no HOOK ERROR
+  ok   malformed settings.json → no double-registration warning
+  ok   project-rooted + copy-in settings.json → no double-registration warning
+
+163 passed, 0 failed

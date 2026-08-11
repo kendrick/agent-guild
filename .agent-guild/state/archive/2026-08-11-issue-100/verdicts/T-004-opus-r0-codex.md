@@ -1,0 +1,20 @@
+---
+task: T-004
+checker: checker-courier
+vendor: openai
+model: gpt-5.6-terra
+verdict: BLOCKED
+checked_at: 2026-08-11T14:38:14Z
+duration_ms: None
+cost_usd: None
+---
+
+<!-- GENERATED FILE—do not hand-edit. Rendered by render-verdict.py
+from the verdict JSON, the record of record. Edit the JSON and
+re-render instead. -->
+
+## Per-clause results
+
+| clause | severity | description | evidence |
+| ------ | -------- | ------------ | -------- |
+| C-7 | blocker | Identity verification failed: the far-side response reported model='gpt-5.6' but the pinned lane model is 'gpt-5.6-terra'. The verdict object itself is schema-conforming, but the identity does not match the expected values. | Raw vendor response from codex exec: checker='checker-courier' (match), vendor='openai' (match), model='gpt-5.6' (mismatch, expected 'gpt-5.6-terra'). The response was otherwise valid: 2 major findings and 2 info findings on C-7, verdict=fail. |

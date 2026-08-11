@@ -1,0 +1,48 @@
+{
+  "task_id": "T-006",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "The r0 defect is fixed and the replacement is true against the data: the duplicate-rows finding now says the #32 archive's four rows carry no `job` key, that an absent key means unattributed rather than attributed to #32, and that grouping by `job` counts the #27 copies toward #32 while leaving the #32 archive's own rows in no job at all.",
+      "evidence": "_working-memory/openQuestions.md:37. Re-derived, not read: python3 over both archives printed `A job values: Counter({'kendrick/skills#17': 7, 'kendrick/skills#27': 7, 'kendrick/skills#32': 4})` and `B job values: Counter({None: 4})`; `grep -c '\"job\"' 2026-08-08-issue-32/log/vendor-calls.jsonl` -> 0 against 18 for the #27 file. Per-row match ignoring `job`: `B[0] matches A indices [7]`, `B[1] -> [8]`, `B[2] -> [9]`, `B[3] -> [10]`, each with `full-row diff: {'job': ('kendrick/skills#32', None)}` — so the #32 archive's four rows are indices 7-10 of #27, identical but for the added key, and a naive tree walk counts 22 rows for 18 distinct crossings. Grouping the 22 rows by `job` therefore yields #32 -> the four #27 copies and no group at all for the #32 archive's own rows, exactly as the sentence now states."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "The rework stayed inside its diagnosis: `_working-memory/openQuestions.md` is the only artifact modified after the r0 verdict was written, and its diff against HEAD is purely additive within the new #117 section, so no previously-confirmed content was revised.",
+      "evidence": "`stat -f \"%Sm %N\"` -> openQuestions.md 2026-08-10 20:42:49, against T-006-opus-r0.json at 20:36:10; every other artifact predates the verdict (conventions.md 20:27:59, dataContracts.md 20:29:36, vendor-call.schema.json 20:30:42, docs/vendor-ledger.md 20:31:27, ledger-append.py 19:49:41). `git diff --stat _working-memory/openQuestions.md` -> `1 file changed, 15 insertions(+)`, zero deletions, the hunk header `@@ -28,2 +28,17 @@` placing all 15 added lines in the new `## Ledger Defects #117 Recorded and Left Alone` section."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "The other two recorded findings are accurate against the ledger file: ten rows carry `/Users/karnett/` paths at exactly the indices named, and exactly one `started_at` carries fractional seconds at the index named.",
+      "evidence": "_working-memory/openQuestions.md:35-36. python3 over 2026-08-08-issue-27/log/vendor-calls.jsonl printed `rows with /Users/karnett/: [1, 3, 4, 6, 8, 12, 13, 14, 15, 16] count 10` and `fractional started_at: [(2, '2026-08-08T00:15:45.686223Z')]` — the file's indices and the quoted timestamp match character for character, and the file is 18 rows (`wc -l` -> 18), so the other 17 are whole seconds."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "The schema's `job` description states what the field holds and that an absent key means unattributed, and `ledger-append.py`'s module docstring documents the three-step precedence the code actually implements.",
+      "evidence": ".agent-guild/schemas/vendor-call.schema.json, `properties.job.description` read via python3: \"The guild run this call belongs to, written as that run's provenance ref (e.g. \\\"kendrick/skills#17\\\"). ledger-append.py takes it from --job, else from spec.md's provenance header, else leaves the key out. An absent key means the row is unattributed; that absence is the only spelling of it, since the field is never written as null.\" `required` does not list `job`. The docstring (via `ast.get_docstring`) numbers the three steps `--job VALUE` / spec.md provenance `ref` from cwd / key omitted; the code matches at ledger-append.py:214 `job = args.job if args.job is not None else derive_job()` with `SPEC_PATH = os.path.join(os.getcwd(), ...)` at line 70 and `derive_job` at line 154."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "`docs/vendor-ledger.md` documents the field and its derivation, `_working-memory/dataContracts.md` carries it in the ledger description, and `_working-memory/conventions.md` carries the rule that a run's archive includes `log/` — with an accurate cross-reference to the retrospective skill's step 3.",
+      "evidence": "`git diff` shows vendor-ledger.md adding the `job` bullet (\"string, optional...The one key in the line that can be absent\"), the null-spelling paragraph, the three-step derivation paragraph, `--job VALUE` in the flags line, and `\"job\": \"kendrick/skills#17\"` in the sample line. dataContracts.md adds the paragraph beginning \"`job` names the run a row came from\" including \"it sits in `properties` and not in `required`\", which the schema's `required` list confirms. conventions.md adds `## Run Archives` citing `guild-core/workflows/retrospective/SKILL.md` step 3; that file's heading at line 24 is `## 3. Offer to archive` and line 29 reads \"- `log/`—dispatches, escalations, the stop gate's counter, and `vendor-calls.jsonl`.\" Its claim that seven #17 crossings were archived under #27 matches the `Counter({'kendrick/skills#17': 7, ...})` above."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "minor",
+      "description": "The two repo-local findings in the same section check out, but the ~25-hour skew is stated in UTC while the evidence for it is a local-time file mtime, so a reader on another machine cannot re-derive it from the file alone.",
+      "evidence": "_working-memory/openQuestions.md:42 claims T-004's courier row reads `2026-08-10T00:15:00Z` for a verdict that \"landed at `2026-08-11T01:16:01Z`\". The row is confirmed: .agent-guild/state/log/vendor-calls.jsonl line 2 carries `\"started_at\": \"2026-08-10T00:15:00Z\"`. The verdict file's timestamp is `2026-08-10T20:16:01` local with `date +%Z%z` -> `CDT -0500`, which converts to 2026-08-11T01:16:01Z exactly, so the claim and the ~25h skew are correct — the conversion is just left implicit. The wrong-file finding is likewise consistent: no `calls.jsonl` remains in .agent-guild/state/log/ and the row sits in vendor-calls.jsonl. Not a defect in a fact C-9 names; recorded so it isn't mistaken for unchecked."
+    }
+  ],
+  "timestamp": "2026-08-10T21:05:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

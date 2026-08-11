@@ -1,0 +1,60 @@
+{
+  "task_id": "T-001",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "Case 1 of the precedence, re-derived in a scratch cwd outside this repo: with a fixture .agent-guild/state/spec.md carrying ref \"acme/widgets#999\" and no --job flag, the written ledger line carries that ref.",
+      "evidence": "cwd=/private/tmp/claude-501/.../scratchpad/c2, ran /Users/k.arnett/repos/agent-guild/.agent-guild/scripts/ledger-append.py with no --job; raw line read back from c2/.agent-guild/state/log/vendor-calls.jsonl: {\"task_id\": \"T-999\", ..., \"quota_event\": false, \"job\": \"acme/widgets#999\"} (rc 0, empty stderr). Fixture header line was: ref: \"acme/widgets#999\" — the one matching quote pair is stripped."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "Case 2: the same fixture spec plus --job override/from#flag writes the flag's value, so the flag wins outright over the derivable provenance ref.",
+      "evidence": "Same scratch cwd, extra argv ['--job', 'override/from#flag']; raw line: {..., \"quota_event\": false, \"job\": \"override/from#flag\"} — the spec's \"acme/widgets#999\" is present on disk and does not appear in the line."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "Case 3, the discriminating one: with no spec.md anywhere under the scratch cwd, the line omits the job key entirely rather than emitting null, and does not fall back to this repo's spec — confirming the path resolves against cwd, not the script's own location.",
+      "evidence": "Scratch spec.md removed (os.path.exists -> False); raw line: {\"task_id\": \"T-999\", ..., \"artifacts\": [], \"quota_event\": false} with no job key ('job' in obj -> False). This repo's .agent-guild/state/spec.md carries `ref: /Users/k.arnett/.claude/plans/lets-fix-gh-issue-tidy-cook.md`, so a script-relative resolution would have emitted that string as job and silently passed; it did not."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "The cwd assumption is explicit in the source: SPEC_PATH is built from os.getcwd() alongside DEFAULT_LEDGER, deliberately not from SCRIPT_DIR (which is used only to locate the schema).",
+      "evidence": ".agent-guild/scripts/ledger-append.py:60-70 — SCRIPT_DIR/SCHEMA_PATH at 60-63, then DEFAULT_LEDGER at 64-66 and `SPEC_PATH = os.path.join(os.getcwd(), \".agent-guild\", \"state\", \"spec.md\")` at line 70, with the comment at 67-69 naming the copied-into-other-projects reason."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "The schema carries job under properties typed string and keeps it out of required, so a pre-change row with no job key still validates.",
+      "evidence": ".agent-guild/schemas/vendor-call.schema.json:60-63 (job in properties, \"type\": \"string\") and :65-79 (required lists 13 fields, no job). Read programmatically: job under properties: True / job type: 'string' / job in required: False. Validating a legacy 13-key row via this repo's load_schema()+schema_violation() returned None."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "No code path can emit \"job\": null — the key is assigned only under an `is not None` guard, and an empty or missing ref collapses to None upstream, so absence is the only spelling of unattributed.",
+      "evidence": ".agent-guild/scripts/ledger-append.py:212-216 — `job = args.job if args.job is not None else derive_job()` then `if job is not None: line[\"job\"] = job`; this is the sole write to line[\"job\"] (grep -n 'job' shows assignments only at 214/216). derive_job returns None on OSError (161-163), on a missing/!--- header (166-167, 180), and returns `val or None` at 179. Belt and braces, the schema rejects it anyway: schema_violation({...,'job':None}) -> ('job', 'expected type string, got null (None)')."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "The new ref reader strips at most one matching quote pair using the val[0] == val[-1] form, character-for-character the same guard compose-brief.py and check-provenance.py already use.",
+      "evidence": ".agent-guild/scripts/ledger-append.py:177-178 — `if len(val) >= 2 and val[0] == val[-1] and val[0] in \"\\\"'\":` / `val = val[1:-1]`; identical text at .agent-guild/scripts/compose-brief.py:64-65 and .agent-guild/scripts/check-provenance.py:74-75."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "No character-set strip appears anywhere in the file: every strip() call is a bare whitespace strip, and the #127 defect is called out by name in a comment rather than reintroduced.",
+      "evidence": "grep -n 'strip(' .agent-guild/scripts/ledger-append.py returns only lines 166, 169, 174 (all bare `.strip()`) plus the comment at 175-176 (\"never str.strip(\\\"'\\\\\\\"\\\"), which trims any number of quote characters regardless of balance (#127)\"). Behavior re-derived by calling derive_job on six fixture headers: 'ref: \"x#9\"' -> 'x#9'; \"ref: 'x#9'\" -> 'x#9'; 'ref: \"x#9' -> '\"x#9' (unbalanced leading quote kept); 'ref: x#9\"' -> 'x#9\"' (unbalanced trailing quote kept); 'ref: \"\"x#9\"\"' -> '\"x#9\"' (exactly one pair removed); 'ref: x#9' -> 'x#9'."
+    }
+  ],
+  "timestamp": "2026-08-11T00:52:53Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

@@ -1,0 +1,31 @@
+---
+task: CON-audit
+tier: orchestrator
+retry: 1
+checker: auditor
+verdict: PASS
+checked_at: 2026-07-14T00:00:00Z
+---
+
+<!-- CON-audit round 1. Re-audit triggered by a material post-PASS amendment:
+DEC-audit r0 proved the r0 seam impossible, so C-1 was rewritten to normalize at
+dispatch-guard's entry seam (raw kept for the log) and C-4's footprint widened to
+three hook files. Audited independently, in full. -->
+
+## Per-clause results
+
+| clause | method | evidence (command output / quoted artifact) | expected | actual | result |
+| ------ | ------ | ------------------------------------------- | -------- | ------ | ------ |
+| C-1 | checker-judgment: read `_lib.py` + `dispatch-guard.py` diffs for one normalization at the entry seam, raw-string log fidelity, downstream bare-name consumption, no out-of-scope change | Amended text now REQUIRES the dispatch-guard change it once forbade: `agent = <helper>(ti.get("subagent_type",""))` at the entry (dispatch-guard.py:42), raw kept in its own variable for `_log`. This clears the two raw-`str` sites DEC r0 proved fatal: L68 `agent == "auditor"` and L114 `agent != executor` now compare bare-to-bare. The r0 latent contradiction with C-4 is gone — C-1 no longer asserts dispatch-guard needs no changes, and its bounded seam change lives inside C-4's widened footprint (no leftover contradiction). Falsifying artifact still bites the amended clause: normalizing inside `_log()` makes the log show `worker-standard` for a `agent-guild:worker-standard` dispatch, violating "the raw dispatched string ... is what `_log` records." Rubric is judgment-applicable; routed to checker-judgment — correct. | sound, self-consistent, falsifiable | sound; C-1/C-4 agree, failing example valid | PASS |
+| C-2 | `check-build.sh '<two-payload pipeline>'` | Ran the exact command against today's unfixed tree: namespaced no-id worker → `rc1=0`, empty stderr, `grep "has no id line"` fails → first-half FAIL, exactly as required pre-fix (buggy code waves the namespaced dispatch through as non-guild). Under the amended source-seam fix this flips: normalize@L42 → in `GUILD_AGENTS` → no id → "has no id line" exit 2; namespaced auditor + legal Audit-ID → normalized "auditor" → L68 True → exit 0. Both halves pass ONLY under source-seam normalization — the wrapper-only seam DEC r0 killed would block the namespaced auditor at L68 (exit 2) and fail the second half. So C-2 now discriminates the wrong seam from the right one, consistent with amended C-1. Deterministic → checker-deterministic. | FAIL today, PASS post source-seam fix | FAILs today for the right reason | PASS |
+| C-3 | `check-build.sh 'test_hooks.py \| grep -qE "(5[3-9]\|[6-9][0-9]\|[1-9][0-9]{2,}) passed, 0 failed"'` | Ran against today's tree: suite reports `51 passed, 0 failed` → check exits 1 (FAIL), as required. Floor ≥53 (51 baseline + ≥2 new) still discriminates broken from fixed. Under source-seam normalization the legal namespaced-worker fixture (fixture 2) passes because L114 compares bare-to-bare, so ≥53/0 is reachable only when the fix is real. Regex unchanged from r0 (never accepts nonzero-failed). Deterministic → checker-deterministic. | FAIL today (51), PASS at ≥53/0 | FAILs today | PASS |
+| C-4 | `check-build.sh 'test -z "$(git status --porcelain -- . :(exclude)_lib.py :(exclude)dispatch-guard.py :(exclude)test_hooks.py)"'` | Dry-ran the amended three-exclude command on git 2.50.1 (Apple Git-155). Clean tree → empty → PASS. Injected scratch edits to all three in-scope files PLUS a fourth file (`SCRATCH_FOURTH.txt`): residual after excludes was exactly `?? .agent-guild/hooks/SCRATCH_FOURTH.txt` → non-empty → FAIL. The three in-scope edits are correctly ignored; the fourth is caught. Third exclude parses cleanly. Restored the tree (clean). Footprint bound is exactly the three hook files, and dispatch-guard.py is in scope precisely because C-1's seam requires it. | correct three-file assertion, third exclude parses | works both directions; fourth-file edit caught | PASS |
+| C-5 | checker-judgment: read helper comment + fixture labels | Unchanged from r0 and still sound: concrete rubric (fail on bare `# strip prefix` or non-descriptive fixture names), anchored on `in_subagent()`'s comment voice; falsifying artifact = helper ships with no why-comment. Severity major (documentation, non-gate). Routed to checker-judgment — correct. | sound clause | sound clause | PASS |
+
+Coverage of the issue's requirements (re-confirmed): normalize-before-lookup is pinned by C-1 (source-seam implementation) + C-2 (end-to-end behavior); bare+namespaced fixture coverage by C-3 (+ C-1/C-5 on fixture quality); footprint discipline by C-4 (now the three real deliverable files). The "land before #21" constraint is honored by scoping the job to `_lib.py` + `dispatch-guard.py` + `test_hooks.py` and excluding the plugin-tree commit as a non-goal. The SubagentStop matcher and the double-registration/stale-dist footgun stay correctly scoped out. No two clauses contradict — the r0 C-1/C-4 latent contradiction is resolved by the amendment. No protected content to resolve.
+
+## Notes (non-blocking; do not gate)
+
+- **The r0 non-blocking notes still stand, unchanged.** C-2's rename-bypass failing example is discriminated by C-1's text (rename-robust `<ns>:` → suffix), not by C-2's own `agent-guild:`-only payloads; C-3's legal-path failing example is discriminated behaviorally by C-2 plus C-1's single-seam normalization, not by C-3's count. Each affected requirement is still enforced by a partner clause, so neither undermines soundness. The amendment does not touch this.
+
+- **C-1 wording is slightly looser than its enumerated confirmations, but not ambiguously so.** "zero changes beyond the seam and the helper" reads against a correct implementation that must also reroute the `_log(agent, ...)` calls (dispatch-guard.py:54/69/95) to the raw variable. That rerouting IS the log-fidelity half of the entry-seam split, and the check explicitly lists "raw-string log fidelity" as a thing to confirm — so a judgment checker (opus) reading the four confirmations together will correctly pass a clean source-seam diff rather than FAIL it on the `_log` argument change. Sound as written; flagged only so the checker reads "the seam" to include capturing raw and re-pointing `_log` at it.

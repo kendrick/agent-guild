@@ -1,0 +1,30 @@
+{
+  "task_id": "T-005",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "Step 3 enumerates all six required directories and all three required files, with log/ as its own bullet.",
+      "evidence": "guild-core/workflows/retrospective/SKILL.md, Step 3: bullets after \"Everything the run wrote goes:\"."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "It explains that log/ contains the vendor-call ledger and that leaving it live lets the next job append rows, mixing runs under identical task IDs.",
+      "evidence": "guild-core/workflows/retrospective/SKILL.md, Step 3: paragraph beginning \"Check log/ last\"."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "The explicit instruction to check log/ last makes retention of the ledger a checkable archive action rather than a skimmable aside.",
+      "evidence": "guild-core/workflows/retrospective/SKILL.md, Step 3: \"Check log/ last, since it's the one that gets left behind.\""
+    }
+  ],
+  "timestamp": "2026-08-11T01:21:56Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

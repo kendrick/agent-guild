@@ -1,0 +1,18 @@
+{
+  "task_id": "T-002",
+  "checker": "checker-deterministic",
+  "vendor": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "All six required test cases are present and passing in the test suite.",
+      "evidence": "all six cases present and passing"
+    }
+  ],
+  "timestamp": "2026-08-10T20:07:16Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

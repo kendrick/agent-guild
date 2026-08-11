@@ -1,0 +1,18 @@
+{
+  "task_id": "T-002",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "All six required verbatim job-field cases are present, passing, and contain behavior-specific assertions that would detect their respective regressions.",
+      "evidence": "Artifact excerpt: six check() calls labelled `job: ...`; `.agent-guild/state/log/ledger-suite.out`: six corresponding `ok` lines and `43 passed, 0 failed`."
+    }
+  ],
+  "timestamp": "2026-08-10T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

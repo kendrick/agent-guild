@@ -1,0 +1,54 @@
+{
+  "task_id": "T-004",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "Rows 7-10 are #32's: each is byte-identical to a row of the #32 archive's own ledger once the added job key is removed, and no other row in the file matches any #32 row.",
+      "evidence": "python3 compare (rows minus 'job' vs .agent-guild/state/archive/2026-08-08-issue-32/log/vendor-calls.jsonl):\n7 <-> 0 identical(minus job): True\n8 <-> 1 identical(minus job): True\n9 <-> 2 identical(minus job): True\n10 <-> 3 identical(minus job): True\n=== do any OTHER rows match a #32 row? ===\n  (none listed = clean)"
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "Rows 0-6 are #17's: rows 2, 3 and 6 carry T-005/T-006/T-007 judgment-tier stems that exist in no archive but 2026-08-08-issue-17, and rows 0-6 are one strictly ascending run that ends 13h before #32's intake, so the tier-ambiguous rows 0, 1, 4, 5 fall inside it.",
+      "evidence": "find over all six archives, judgment stems:\n2026-08-08-issue-17: T-001..T-007-judgment-r0-codex\n2026-08-08-issue-32: T-001..T-004-judgment-r0-codex only\n2026-08-07-issue-29: T-001-judgment-r0-codex only\nrow stamps 0-6 (strictly ascending): 2026-08-07T23:33:54Z, 23:55:55Z, 2026-08-08T00:15:45.686223Z, 00:42:59Z, 00:56:20Z, 01:22:22Z, 01:38:02Z\n#32 intake: archive/2026-08-08-issue-32/spec.md:6 `fetched_at: 2026-08-08T14:47:08Z`"
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "Rows 11-17 are #27's, including the two rows whose stamps contradict their job: row 15 is stamped 2026-08-08T00:00:00Z inside #17's window but carries T-006-sonnet-r0-codex stems held only by the #27 archive, and row 17 has an empty artifacts array and is placed by append position as the file's last row, after the #27 run.",
+      "evidence": "row 15 CUR: {\"task_id\": \"T-006\", ... \"started_at\": \"2026-08-08T00:00:00Z\", \"exit_code\": 143, ... \"artifacts\": [\".../T-006-sonnet-r0-codex.json\", \".../T-006-sonnet-r0-codex.md\"], \"quota_event\": false, \"job\": \"kendrick/skills#27\"}\nrow 17 CUR: {\"task_id\": \"T-007\", ... \"started_at\": \"2026-08-08T02:59:53Z\", \"exit_code\": 143, ... \"artifacts\": [], \"quota_event\": false, \"job\": \"kendrick/skills#27\"}\nT-006-sonnet-r0-codex.json/.md appear only under archive/2026-08-08-issue-27/verdicts/; #17's T-006 is judgment-tier."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "The three job values are spelled exactly as the corresponding archives' provenance refs.",
+      "evidence": "grep -E '^(ref|fetched_at):' over the three archives' spec.md:\n2026-08-08-issue-17: ref: kendrick/skills#17\n2026-08-08-issue-27: ref: kendrick/skills#27\n2026-08-08-issue-32: ref: kendrick/skills#32\nDistinct job values present in the file: kendrick/skills#17 (rows 0-6), kendrick/skills#32 (rows 7-10), kendrick/skills#27 (rows 11-17)."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "The file is modified but uncommitted in the skills repo, and the diff against its git baseline adds a job key and nothing else on all 18 rows: row count unchanged, order preserved, no field removed or altered, no timestamp corrected.",
+      "evidence": "git status --porcelain: ` M .agent-guild/state/archive/2026-08-08-issue-27/log/vendor-calls.jsonl` (unstaged; git diff --cached empty)\ngit diff --stat: 1 file changed, 18 insertions(+), 18 deletions(-)\nper-row compare vs `git show HEAD:<path>`: baseline rows: 18  current rows: 18 / rows whose only change is an added job key: 18 / 18 (added=={'job'}, removed==empty, changed==empty on every row)\njob is the last key on every row (index 13 of 13, all 18)\nPreserved untouched: row 2 `\"started_at\": \"2026-08-08T00:15:45.686223Z\"` (fractional seconds), row 15 `\"started_at\": \"2026-08-08T00:00:00Z\"` (wrong stamp), row 15's /Users/karnett/ absolute artifact paths."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "All 18 rows validate against the amended schema loaded from THIS repo's ledger-append.py, whose job property is present and not required.",
+      "evidence": "importlib load of /Users/k.arnett/repos/agent-guild/.agent-guild/scripts/ledger-append.py, then m.schema_violation(row, m.load_schema()) per row:\nschema has job in properties: True\njob in required: False\nconforming rows: 18 / 18"
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "minor",
+      "description": "Not a defect in the artifact, but the check_method's third discriminator is overstated: sonnet and opus stems are NOT unique to the #27 archive, so rows 11 and 12 need a further step that the rubric does not name, and the clause text should be tightened before it is reused.",
+      "evidence": "T-001-sonnet-r0-codex.json and T-002-opus-r0-codex.json (rows 11 and 12's artifacts) also exist under archive/2026-08-07/verdicts/; archive/2026-08-06/ holds T-002-sonnet, T-003-sonnet, T-004-opus stems.\nRows 11-12 are still #27's on independent evidence: archive/2026-08-07/log/vendor-calls.jsonl already books its own T-001-sonnet call at 2026-08-07T04:18:46Z and T-002-opus at 04:33:26Z, both with .json AND .md artifacts, whereas rows 11-12 are stamped 2026-08-09T01:23:06Z and 01:45:43Z with .json only; they postdate #27's intake (archive/2026-08-08-issue-27/spec.md:6 `fetched_at: 2026-08-08T19:28:16Z`) and head the ascending run 01:23 -> 01:45 -> 02:17 -> 02:19 -> 02:44 whose rows 13, 14 and 16 carry #27-unique stems."
+    }
+  ],
+  "timestamp": "2026-08-10T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

@@ -1,0 +1,53 @@
+happy path
+  ok   happy path: exit 0
+  ok   happy path: one line written
+  ok   happy path: task_id recorded
+  ok   happy path: tokens_in recorded
+  ok   happy path: tokens_out recorded
+  ok   happy path: cost_usd recorded
+  ok   happy path: artifacts recorded
+  ok   happy path: quota_event true
+  ok   happy path: brief_tokens null (no --brief)
+  ok   happy path: tokenizer null (no --brief)
+nulls for omitted tokens/cost
+  ok   omitted tokens/cost: exit 0
+  ok   omitted tokens_in is null
+  ok   omitted tokens_out is null
+  ok   omitted cost_usd is null
+  ok   empty --artifacts is []
+  ok   quota_event defaults false
+--brief computes bytes/4
+  ok   --brief: exit 0
+  ok   --brief: brief_tokens is bytes/4
+  ok   --brief: tokenizer recorded
+validation rejection (nonzero exit, file untouched)
+  ok   missing required field (--task-id): nonzero exit
+  ok   missing required field: file untouched
+  ok   wrong type (--duration-ms): nonzero exit
+  ok   wrong type: file untouched
+  ok   artifacts absent: nonzero exit
+  ok   artifacts absent: file untouched
+resilience: reader identifies a malformed middle line by number, still parses the rest
+  ok   reader: two valid records parsed
+  ok   reader: valid records are the right ones
+  ok   reader: malformed line identified by number (line 2)
+resilience: append succeeds cleanly onto a ledger with a malformed line
+  ok   append past malformed line: exit 0
+  ok   append past malformed line: original malformed line untouched
+  ok   append past malformed line: exactly one new line appended
+  ok   append past malformed line: appended line parses and is correct
+two sequential appends yield two independently parseable lines
+  ok   first append: exit 0
+  ok   second append: exit 0
+  ok   two lines total
+  ok   first line is T-101
+  ok   second line is T-102
+job: derivation, override, absence, legacy tolerance, distinguishability, schema
+  ok   job: derived from provenance ref
+  ok   job: flag overrides provenance
+  ok   job: absent when no spec exists
+  ok   job: legacy row without the key still validates
+  ok   job: two jobs are distinguishable
+  ok   job: schema keeps the field optional
+
+43 passed, 0 failed

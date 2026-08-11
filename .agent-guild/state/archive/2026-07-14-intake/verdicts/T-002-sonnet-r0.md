@@ -1,0 +1,17 @@
+---
+task: T-002
+tier: sonnet
+retry: 0
+checker: checker-judgment
+verdict: PASS
+checked_at: 2026-07-14T18:27:00Z
+---
+
+## Per-clause results
+
+| clause | method | evidence (command output / quoted artifact / fetched page) | expected | actual | result |
+| ------ | ------ | ---------------------------------------------------------- | -------- | ------ | ------ |
+| C-1 | checker-judgment: all six intake forms, single spec.md output, issue title+verbatim-body, no-fabrication failure path | SKILL.md §1 enumerates forms 1–6 (bare/`#N`, `owner/repo#N`, issue URL, local file with `test -f`, other URL, no-arg); §2 gives a distinct `gh`/fetch action per form; §2 form 6 explains "two ways forward: point `/job` at an issue, a file, or a URL … or … run `/constitution`" instead of guessing; §3 "Exactly one file, and nothing else … `.agent-guild/state/spec.md`" with "the provenance header first, then the spec content, in that order"; §3 issue content "the issue title as a Markdown heading (`# <title>`) … then the full issue body exactly as `gh` returned it … Do not summarize, trim, or editorialize"; §2 failure bullets each end "Write nothing." plus §intro "never fabricate" | every form covered; write target = spec.md only; header-then-content; title+verbatim body; failure writes nothing | all present as quoted | PASS |
+| C-2 | checker-judgment: header the skill writes vs contract check-provenance.py enforces, both directions | Skill §3 keys: `source: github-issue \| file \| url`, `ref`, `issue`/`title` "only when source is github-issue", `fetched_at` ISO-8601 UTC with required trailing `Z` (`date -u +%Y-%m-%dT%H:%M:%SZ`). Validator `ALLOWED_SOURCES=("github-issue","file","url")`, `validate()` requires source/ref/fetched_at, source∈allowed, `ISO_UTC_RE=^\d{4}-...T...(\.\d+)?Z$` (trailing Z), and for `github-issue` requires `issue`+`title` present, `issue.isdigit()`, and `ref` `#N` == issue. Skill derives `ref` as `owner/repo#N` for all github-issue forms (regex on url) → ref always carries `#N` matching `issue`. `--issue N` self-check in §4 matches validator's `--issue` mismatch rule. No key, allowed value, or requiredness rule drifts either way. | exact bidirectional match | matches | PASS |
+| C-8 | checker-judgment: house style vs constitution/SKILL.md | Frontmatter `name: job`; description contains the literal trigger "start a job from issue 15" plus "kick off a job from this spec", "build issue #12" — selects on the target phrasing. Body is imperative with concrete commands (`gh issue view N --json number,title,body,url`, `test -f "$ARGUMENTS"`, `date -u +%Y-%m-%dT%H:%M:%SZ`, `.agent-guild/scripts/check-provenance.py … --issue N`). No hand-waving: failure path enumerates missing CLI / auth error / not-found each with a concrete response. Only session-optional tool is `gh`, whose absence the skill handles explicitly; form 5 gives a `curl -sL` fallback for WebFetch. Same shape/register as constitution/SKILL.md. | reads like existing skills, triggering description, no hand-waving, gh-absence handled | holds | PASS |
+| C-7 | `.agent-guild/scripts/check-build.sh "git diff --quiet HEAD -- .claude/settings.json .claude/agents .agent-guild/hooks/dispatch-guard.py .agent-guild/hooks/orchestrator-write-guard.py .agent-guild/hooks/stop-gate.py .agent-guild/hooks/subagent-return.py"` | `check-build.sh: exit 0`; shell `EXIT=0` | exit 0 (declared surface untouched) | exit 0 | PASS |

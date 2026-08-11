@@ -1,0 +1,24 @@
+{
+  "task_id": "T-003",
+  "checker": "checker-deterministic",
+  "vendor": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "All three consumer test suites passed: test_ledger_append.py (43 passed), test_hooks.py (136 passed), and build-plugin.py --check validation passed with no drift.",
+      "evidence": "Command 1 output: OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds; the Claude plugin passes strict validation"
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "Working tree changes are scoped to the job's owned paths; HEAD remains at expected commit and no out-of-scope modifications are present.",
+      "evidence": "Command 2: HEAD at 164057dbe07d537136677ba3dae139e61ff2c328 (no mid-job commits); Command 3: OK: 17 path(s) in scope"
+    }
+  ],
+  "timestamp": "2026-08-10T21:06:42Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

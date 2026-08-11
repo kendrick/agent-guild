@@ -1,10 +1,9 @@
-# Run state is a per-job message bus, never committed. Keep the dirs, drop the
-# contents. The !.agent-guild/state/**/ line re-includes directories so the .gitkeep
-# negations below can take effect (git won't re-include a file whose parent
-# dir is still excluded).
-.agent-guild/state/**
-!.agent-guild/state/**/
-!.agent-guild/state/**/.gitkeep
+# Live guild state is per-machine and mutable: task statuses flip on every
+# dispatch, verdicts are transient, and two sessions running at once would
+# collide here. Archived runs are the opposite, immutable history worth
+# carrying, so they travel while the working state stays local.
+.agent-guild/state/*
+!.agent-guild/state/archive/
 
 # check-a11y self-bootstraps these on first run; they're heavy and host-specific.
 .agent-guild/scripts/node_modules/

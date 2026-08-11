@@ -874,7 +874,69 @@ check("checker-courier dispatch once sentinel is cleared → exit 0", rc == 0, f
 # it with a positive control in the same project—the identical fixture minus
 # (or plus) the one thing under test—so a pass can't be "the predicate saw
 # nothing," only "correctly discharged" or "correctly still owing."
+#
+# #141 raised the bar for what counts as "discharged": a lane-suffixed file's
+# mere presence used to be enough (#100's actual bug), so any case below that
+# claims a discharge now has to earn it through the real dispatch-guard
+# reserve + subagent-return promote round trip—never by hand-writing the lane
+# file, which is exactly the shape of the incident this job closes off.
 print("second_opinion_debts(): the debt gate (#100)")
+
+
+def authorize_courier_crossing(proj, tid, tier="sonnet", retries=0, lane="codex"):
+    """Legitimately authorize a courier crossing for (tid, tier, retries) on
+    `lane`, through the real gates—never by hand-writing the lane file, which
+    is the #100 shape #141 closes off. Returns the verdict JSON path.
+
+    lane="codex" simulates a Claude-hosted courier: dispatch-guard reserves
+    with the default (Claude) lane, the courier writes its own verdict file,
+    and subagent-return validates + promotes straight off that file.
+
+    lane="claude" simulates a Codex-hosted courier: dispatch-guard reserves
+    with hook_host=codex (so courier_lane resolves to the reciprocal "claude"
+    lane), the read-only courier can't write anything itself, so
+    subagent-return promotes from its returned AGENT_GUILD_COURIER_OUTCOME
+    marker—and this helper then persists the verdict file itself, exactly as
+    documented for "the parent" (constraint #2: a design that only works
+    when the courier writes the file strands every Codex-lane debt forever).
+    """
+    seed_verdict_toolchain(proj)  # both branches validate through validate-verdict.py
+    stem = f"{tid}-{tier}-r{retries}"
+    dispatch_payload = {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": f"Task-ID: {tid}"}}
+    if lane == "claude":
+        dispatch_payload["hook_host"] = "codex"
+    rc, _, err = run_hook("dispatch-guard.py", dispatch_payload, proj)
+    assert rc == 0, f"authorize_courier_crossing: reservation dispatch failed rc={rc} err={err}"
+
+    if lane == "codex":
+        vpath = write_verdict_json(proj, f"{stem}-codex.json", task_id=tid,
+                                    checker="checker-courier", vendor="openai",
+                                    model="gpt-5.6-terra", verdict="pass")
+        tx = transcript(proj, f"Task-ID: {tid}")
+        rc, _, err = run_hook("subagent-return.py",
+                              {"agent_type": "checker-courier", "transcript_path": tx}, proj)
+        assert rc == 0, f"authorize_courier_crossing: promotion return failed rc={rc} err={err}"
+        return vpath
+
+    verdict = {"task_id": tid, "checker": "checker-courier", "vendor": "anthropic",
+               "model": "claude-haiku-4-5-20251001", "verdict": "pass", "findings": [],
+               "timestamp": "2026-07-22T18:00:00Z", "duration_ms": 1200, "cost_usd": 0.02}
+    outcome = {
+        "status": "verdict", "verdict": verdict, "attempts": 1, "diagnostic": None,
+        "ledger": {"task_id": tid, "vendor": "claude", "model": "claude-haiku-4-5-20251001",
+                   "started_at": "2026-07-22T18:00:00Z", "duration_ms": 1200, "exit_code": 0,
+                   "tokens_in": 100, "tokens_out": 50, "cost_usd": 0.02, "quota_event": False},
+    }
+    tx = transcript(proj, f"Task-ID: {tid}")
+    rc, _, err = run_hook(
+        "subagent-return.py",
+        {"agent_type": "checker-courier", "transcript_path": tx, "hook_host": "codex",
+         "last_assistant_message": "AGENT_GUILD_COURIER_OUTCOME\n" + json.dumps(outcome)},
+        proj,
+    )
+    assert rc == 0, f"authorize_courier_crossing: codex promotion return failed rc={rc} err={err}"
+    return write_verdict_json(proj, f"{stem}-claude.json", **verdict)
 
 # 1. A debt registers even while a task sits at "checking"—and specifically
 # swaps the block message from the generic "act on the verdict" line to the
@@ -912,37 +974,48 @@ check("so: debt with the task at complete blocks the turn",
       rc1 == 2 and "T-031-sonnet-r0-codex.json" in err1 and rc2 == 0,
       f"rc1={rc1} err1={err1!r} rc2={rc2}")
 
-# 3. Discharge route 1: a codex-lane sibling. Positive control in the same
-# project—remove the sibling and the identical fixture now owes—so the clean
-# exit can't be "the predicate saw nothing," only "correctly discharged."
+# 3. Discharge route 1: a codex-lane sibling—but #141 raised the bar for what
+# counts. Refuse-case: a hand-written sibling, exactly the #100 shape (a
+# file with the right name, no dispatch behind it), still owes. Allow-case:
+# the identical fixture, minus the forgery, reached through the real
+# dispatch-guard reserve + subagent-return promote round trip—the only thing
+# that should ever flip this from owing to discharged.
 proj = fresh_proj()
 write_task(proj, "T-032", status="complete", retries=0)
-verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
 write_verdict_json(proj, "T-032-sonnet-r0.json", task_id="T-032")
-sibling = write_verdict_json(proj, "T-032-sonnet-r0-codex.json", task_id="T-032",
-                              checker="checker-courier", vendor="openai",
-                              model="gpt-5.6-terra")
-rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
-os.remove(sibling)
-rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
-check("so: a codex lane sibling discharges the debt",
-      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+forged = write_verdict_json(proj, "T-032-sonnet-r0-codex.json", task_id="T-032",
+                             checker="checker-courier", vendor="openai",
+                             model="gpt-5.6-terra")
+rc_forged, _, err_forged = run_hook("stop-gate.py", {}, proj)
+os.remove(forged)
+check("so: an unauthorized codex lane sibling does not discharge the debt (#100)",
+      rc_forged == 2 and "T-032-sonnet-r0-codex.json" in err_forged,
+      f"rc={rc_forged} err={err_forged!r}")
 
-# 4. Discharge route 2: a claude-lane sibling. Same positive-control shape, so
-# a predicate that only recognizes ONE lane's sibling (a real way to
-# half-implement route 2) still gets caught.
+authorize_courier_crossing(proj, "T-032", lane="codex")
+rc_auth, _, err_auth = run_hook("stop-gate.py", {}, proj)
+check("so: a codex lane sibling discharges the debt once the gate authorized it (#141)",
+      rc_auth == 0, f"rc={rc_auth} err={err_auth!r}")
+
+# 4. Discharge route 2: a claude-lane sibling. Same refuse/allow shape as
+# case 3, so a predicate that only recognizes ONE lane's authorization (a
+# real way to half-implement route 2) still gets caught.
 proj = fresh_proj()
 write_task(proj, "T-033", status="complete", retries=0)
-verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
 write_verdict_json(proj, "T-033-sonnet-r0.json", task_id="T-033")
-sibling = write_verdict_json(proj, "T-033-sonnet-r0-claude.json", task_id="T-033",
-                              checker="checker-courier", vendor="anthropic",
-                              model="claude-opus-4")
-rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
-os.remove(sibling)
-rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
-check("so: a claude lane sibling discharges the debt",
-      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+forged = write_verdict_json(proj, "T-033-sonnet-r0-claude.json", task_id="T-033",
+                             checker="checker-courier", vendor="anthropic",
+                             model="claude-haiku-4-5-20251001")
+rc_forged, _, err_forged = run_hook("stop-gate.py", {}, proj)
+os.remove(forged)
+check("so: an unauthorized claude lane sibling does not discharge the debt (#100)",
+      rc_forged == 2 and "T-033" in err_forged,
+      f"rc={rc_forged} err={err_forged!r}")
+
+authorize_courier_crossing(proj, "T-033", lane="claude")
+rc_auth, _, err_auth = run_hook("stop-gate.py", {}, proj)
+check("so: a claude lane sibling discharges the debt once the gate authorized it (#141)",
+      rc_auth == 0, f"rc={rc_auth} err={err_auth!r}")
 
 # 5. Discharge route 3: the courier's own quota sentinel, on this (default,
 # Claude-host) lane.
@@ -1031,17 +1104,20 @@ check("so: an auditor stem owes nothing",
       f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
 
 # 10. The debt is tracked per verdict-of-record STEM (task + tier + retry),
-# not per task: r0 has a lane sibling and is discharged, r1 has none and still
-# owes, in the same run. A predicate that discharged by task_id alone would
-# clear both the moment either retry got a sibling.
+# not per task: r0 gets a genuinely AUTHORIZED lane sibling and is discharged,
+# r1 has none and still owes, in the same run. A predicate that discharged by
+# task_id alone would clear both the moment either retry got a sibling; a
+# predicate that only checked file presence (pre-#141) would pass this even
+# with a hand-written r1 sibling, so the pairing below with case 3/4 is what
+# actually pins "per retry round" to authorization rather than to a filename.
 proj = fresh_proj()
+write_task(proj, "T-039", status="checking", retries=0)
+authorize_courier_crossing(proj, "T-039", retries=0, lane="codex")
 write_task(proj, "T-039", status="complete", retries=1)
 write_verdict_json(proj, "T-039-sonnet-r0.json", task_id="T-039")
-write_verdict_json(proj, "T-039-sonnet-r0-codex.json", task_id="T-039",
-                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
 write_verdict_json(proj, "T-039-sonnet-r1.json", task_id="T-039")
 rc, _, err = run_hook("stop-gate.py", {}, proj)
-check("so: the debt is per retry round",
+check("so: the debt is per retry round, and only an authorized round discharges",
       rc == 2 and "T-039-sonnet-r1-codex.json" in err
       and "T-039-sonnet-r0-codex.json" not in err,
       f"rc={rc} err={err!r}")
@@ -1098,24 +1174,33 @@ check("so: courier dispatch allowed on a complete task with a debt",
 
 # 14. The widening is debt-gated, not status-gated: a `complete` task whose
 # debt is already discharged still refuses a courier on status, the same as
-# any other non-checking task.
+# any other non-checking task. Refuse-case: the debt is discharged for real
+# (authorized via the same round trip as case 3), so the courier dispatch is
+# refused on status alone. Allow-case, differing in exactly the one thing
+# under test (authorization, not the file's presence): the identical fixture
+# with an unauthorized sibling still owes, so the widening still lets the
+# courier through—proving the refusal above tracks discharge, not a filename.
 proj = fresh_proj()
+write_task(proj, "T-043", status="checking", retries=0)
+authorize_courier_crossing(proj, "T-043", lane="codex")
 write_task(proj, "T-043", status="complete", retries=0)
-verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
 write_verdict_json(proj, "T-043-sonnet-r0.json", task_id="T-043")
-sibling = write_verdict_json(proj, "T-043-sonnet-r0-codex.json", task_id="T-043",
-                              checker="checker-courier", vendor="openai",
-                              model="gpt-5.6-terra")
 rc1, _, err1 = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-courier",
                                         "prompt": "Task-ID: T-043"}}, proj)
-os.remove(sibling)
+check("so: courier dispatch still refused on a complete task with no debt (#141: authorized, not merely present)",
+      rc1 == 2 and "not 'checking'" in err1, f"rc1={rc1} err1={err1!r}")
+
+proj_unauth = fresh_proj()
+write_task(proj_unauth, "T-047", status="complete", retries=0)
+write_verdict_json(proj_unauth, "T-047-sonnet-r0.json", task_id="T-047")
+write_verdict_json(proj_unauth, "T-047-sonnet-r0-codex.json", task_id="T-047",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
 rc2, _, err2 = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-courier",
-                                        "prompt": "Task-ID: T-043"}}, proj)
-check("so: courier dispatch still refused on a complete task with no debt",
-      rc1 == 2 and "not 'checking'" in err1 and rc2 == 0,
-      f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+                                        "prompt": "Task-ID: T-047"}}, proj_unauth)
+check("so: an unauthorized sibling still owes, so the widening still allows the courier dispatch",
+      rc2 == 0, f"rc2={rc2} err2={err2!r}")
 
 # 15. The debt only relaxes the status check for checker-courier itself. An
 # in-family checker (checker-judgment here) still needs `checking` even on a
@@ -1156,6 +1241,114 @@ rc, _, err = run_hook(
     proj)
 check("so: a debt-bearing courier dispatch is still refused for workspace-write",
       rc == 2 and "read-only" in err, f"rc={rc} err={err!r}")
+
+# 18. C-1's anti-laundering requirement: a forged sibling that PREDATES any
+# dispatch for its stem stays unauthorized even once a real courier for that
+# exact round is legitimately dispatched and returns—reserve_crossing()
+# refuses to record authorization for a stem something already occupies, so
+# the forged content can never be laundered by the next legitimate crossing.
+# Both the dispatch and the return report success (nothing about THEM is
+# illegal), and the debt still stands—the discharge is what's refused, not
+# the subagent's own protocol.
+proj = fresh_proj()
+seed_verdict_toolchain(proj)
+write_task(proj, "T-050", status="checking", retries=0)
+write_verdict_json(proj, "T-050-sonnet-r0.json", task_id="T-050")
+write_verdict_json(proj, "T-050-sonnet-r0-codex.json", task_id="T-050",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+rc_dispatch, _, err_dispatch = run_hook(
+    "dispatch-guard.py",
+    {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-050"}}, proj)
+tx = transcript(proj, "Task-ID: T-050")
+rc_return, _, err_return = run_hook(
+    "subagent-return.py", {"agent_type": "checker-courier", "transcript_path": tx}, proj)
+write_task(proj, "T-050", status="complete", retries=0)
+rc_stop, _, err_stop = run_hook("stop-gate.py", {}, proj)
+check("so: a forged file that predates its dispatch is never laundered into authorization (#141)",
+      rc_dispatch == 0 and rc_return == 0 and rc_stop == 2 and "T-050" in err_stop,
+      f"rc_dispatch={rc_dispatch} err_dispatch={err_dispatch!r} rc_return={rc_return} "
+      f"err_return={err_return!r} rc_stop={rc_stop} err_stop={err_stop!r}")
+
+# 19. C-2, the #100 incident verbatim: a courier dispatched for T-051 also
+# wrote a sibling's (T-052) verdict, and T-052 was never itself dispatched.
+# Refuse-case: the write is surfaced (a row under state/log/, naming both
+# Task-IDs) and T-052's own debt stays owed regardless. Allow-case, differing
+# in exactly the one thing under test: the identical fixture except T-053 (in
+# place of T-052) WAS legitimately dispatched—its own reservation exists,
+# courier still in flight—the exact concurrency shape C-2 requires not be
+# mistaken for the incident. A time-window predicate would fire on this case;
+# reservation-based discharge does not.
+proj = fresh_proj()
+seed_verdict_toolchain(proj)
+write_task(proj, "T-051", status="checking", retries=0)
+write_task(proj, "T-052", status="checking", retries=0)
+run_hook("dispatch-guard.py",
+         {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-051"}}, proj)
+write_verdict_json(proj, "T-051-sonnet-r0.json", task_id="T-051")
+write_verdict_json(proj, "T-051-sonnet-r0-codex.json", task_id="T-051",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+# T-052's verdict shows up too, from no dispatch of its own—the #100 shape.
+write_verdict_json(proj, "T-052-sonnet-r0.json", task_id="T-052")
+write_verdict_json(proj, "T-052-sonnet-r0-codex.json", task_id="T-052",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+tx = transcript(proj, "Task-ID: T-051")
+rc_return, _, err_return = run_hook(
+    "subagent-return.py", {"agent_type": "checker-courier", "transcript_path": tx}, proj)
+log_path = os.path.join(proj, ".agent-guild", "state", "log", "foreign-stem-writes.log")
+log_text = open(log_path, encoding="utf-8").read() if os.path.exists(log_path) else ""
+check("so: a foreign-stem write (#100) is surfaced under state/log/, naming both Task-IDs",
+      rc_return == 0 and "T-051" in log_text and "T-052" in log_text,
+      f"rc_return={rc_return} log={log_text!r}")
+
+write_task(proj, "T-052", status="complete", retries=0)
+rc_stop, _, err_stop = run_hook("stop-gate.py", {}, proj)
+check("so: the foreign write still does not discharge the OTHER task's own debt",
+      rc_stop == 2 and "T-052" in err_stop, f"rc_stop={rc_stop} err_stop={err_stop!r}")
+
+proj2 = fresh_proj()
+seed_verdict_toolchain(proj2)
+write_task(proj2, "T-053", status="checking", retries=0)
+write_task(proj2, "T-054", status="checking", retries=0)
+run_hook("dispatch-guard.py",
+         {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-053"}}, proj2)
+run_hook("dispatch-guard.py",
+         {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-054"}}, proj2)
+write_verdict_json(proj2, "T-053-sonnet-r0.json", task_id="T-053")
+write_verdict_json(proj2, "T-053-sonnet-r0-codex.json", task_id="T-053",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+write_verdict_json(proj2, "T-054-sonnet-r0.json", task_id="T-054")
+write_verdict_json(proj2, "T-054-sonnet-r0-codex.json", task_id="T-054",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+tx2 = transcript(proj2, "Task-ID: T-053")
+rc_return2, _, err_return2 = run_hook(
+    "subagent-return.py", {"agent_type": "checker-courier", "transcript_path": tx2}, proj2)
+log_path2 = os.path.join(proj2, ".agent-guild", "state", "log", "foreign-stem-writes.log")
+log_text2 = open(log_path2, encoding="utf-8").read() if os.path.exists(log_path2) else ""
+check("so: a concurrent agent's OWN reserved crossing is never surfaced as foreign (C-2)",
+      rc_return2 == 0 and "T-054" not in log_text2, f"rc={rc_return2} log={log_text2!r}")
+
+# 20. C-5's two authorization-shaped malformed inputs: a missing authorization
+# record, and a truncated/non-JSON one. Neither may crash the gate—loud, not
+# silent, same contract case 11 already pins for a malformed verdict of
+# record—and both read as unauthorized (still owing), never as a free pass.
+proj = fresh_proj()
+write_task(proj, "T-055", status="complete", retries=0)
+write_verdict_json(proj, "T-055-sonnet-r0.json", task_id="T-055")
+write_verdict_json(proj, "T-055-sonnet-r0-codex.json", task_id="T-055",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+rc_missing, _, err_missing = run_hook("stop-gate.py", {}, proj)
+check("so: a missing authorization record owes rather than crashing",
+      rc_missing == 2 and "HOOK ERROR" not in err_missing and "T-055" in err_missing,
+      f"rc={rc_missing} err={err_missing!r}")
+
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+with open(os.path.join(verdicts_dir, "T-055-sonnet-r0-codex.authorized"), "w",
+          encoding="utf-8") as f:
+    f.write("{not json")
+rc_truncated, _, err_truncated = run_hook("stop-gate.py", {}, proj)
+check("so: a truncated/non-JSON authorization record owes rather than crashing",
+      rc_truncated == 2 and "HOOK ERROR" not in err_truncated and "T-055" in err_truncated,
+      f"rc={rc_truncated} err={err_truncated!r}")
 
 # --------------------------------------------------------- subagent-return
 print("subagent-return.py")

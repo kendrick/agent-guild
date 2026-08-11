@@ -46,3 +46,11 @@ Two more surfaced in this repo during #117's own run. Both are about the courier
 ## Why four probes recorded no `SubagentStop` while the event fires
 
 Verified 2026-07-31: `SubagentStop` fires on codex-cli 0.145.0 at agent completion, about a second after `SubagentStart`, with a complete payload. Four earlier probes across two projects captured nothing, under both a no-matcher catch-all and the guild's own agent-name matcher, while `SessionStart`, `PreToolUse`, and `Stop` all landed in the same directories through the same recorder. The one asymmetry noticed but not tested: those capture directories sat under `/private/tmp`, and Codex's sandbox denies writes there, though the parent's `PreToolUse` captures reached them anyway. Until this is understood, treat an absent capture as weak evidence and register a control event known to fire in the same session before concluding anything from silence.
+
+## Should a Gating Heuristic Announce Itself?
+
+`check-job-spec.py` refuses an auditor dispatch on the first rule that fires, and eleven rules all block identically. Seven of them prove: a cited line exists, a script is executable, the graph is acyclic. Four infer, each carrying constants tuned against a single seven-task corpus. `run_rules` already orders them proofs-first and its docstring says so, but nothing downstream carries the distinction.
+
+The failure modes are not symmetric. A proof that fires means the paperwork is wrong; an inferring rule that fires may mean the rule misread the prose, and on a misread the job stops with no recourse short of `PAUSED`, which stands down every gate rather than the one that misfired. #132's adversarial review produced false positives in R2, R10, R4's preamble scan, and R9. Three are fixed; R9's is documented at the rule as a deliberate trade, because the only fix that closes it re-blinds the rule on three real sentences.
+
+So the original worry runs in both directions. #132 warned that approximating judgment gives false confidence; the measured cost so far is the reverse, where a misfire deadlocks rather than under-catches. Tracked as #139, which lays out three directions and picks none, because choosing needs evidence about how often heuristics misfire in real jobs and there is exactly one corpus so far. Warn-only is already ruled out (see [[antipatterns]]).

@@ -14,6 +14,18 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-11: A Script Proves the Paperwork Before an Auditor Reads It
+
+**Source:** #132 and #121, shipped as PR #138 (squashed to `6570005`); follow-up filed as #139
+
+**Context:** Six of #117's eleven audit findings were provable mechanically, and each one cost a full opus round at 300-550 seconds. The decision below is the first half of the #126 arc; #119, #120, and #122 all get cheaper once mechanical defects stop reaching a round.
+
+**Decision:** `.agent-guild/scripts/check-job-spec.py` runs eleven rules over the constitution and task set, proofs before heuristics, and exits nonzero naming the first thing it can prove wrong in one line. `dispatch-guard` refuses an auditor dispatch while it fails, mirroring the CON-audit gate on workers. Its regression suite is #117's own archive rather than invented fixtures: the DEC-audit-r4 state that shipped must exit 0, and each finding is reproduced as a one-line mutation of that same corpus, run against a pinned fixture repo root so the test doesn't rot when a cited file moves.
+
+Testing against a real audit is what made it correct. Measurement overturned three rules that read fine on paper: a cross-artifact similarity threshold whose signal sat at 0.39 under a noise floor of 0.55, a build-ordering rule whose first formulation required a task to be upstream of itself, and an anchor rule that failed the very corpus it had to pass. A later adversarial check found four more, every one of them a false positive that blocked correct paperwork, and every one in an inferring rule rather than a proof.
+
+**Alternatives considered:** A rule counting prose enumerations was cut rather than shipped warn-only, because a non-gating rule inside a hook-invoked subprocess produces output nothing reads; the constitution template and skill now ask for a list instead, which keeps the check mechanical. `markdown-it-py` and PyYAML were both rejected (see [[antipatterns]]). Coverage is stated honestly rather than rounded up: four of the six findings reproduce literally, two by class.
+
 ## 2026-08-10: Speed Comes From Not Auditing Cheap Defects, Not From Auditing Less
 
 **Source:** #117's run measured end to end; design pass filed as #132-#136; epic #126 rewritten

@@ -18,6 +18,20 @@ as that file's byte size divided by 4 and records `tokenizer` as
 "heuristic-bytes/4" (a stdlib stand-in — no tiktoken, per the kit's
 stdlib-only rule); without `--brief`, both stay null.
 
+`job` names the guild run a call belongs to, so two runs' rows stay
+distinguishable after `.agent-guild/state/` is wiped between them. It's
+resolved in this order and no other:
+
+1. `--job VALUE`, when passed.
+2. Otherwise, the `ref` field from `.agent-guild/state/spec.md`'s
+   provenance header, read from the current working directory. That's the
+   same assumption `DEFAULT_LEDGER` already makes, and deliberately not
+   this script's own location: the script gets copied into other projects,
+   where a script-relative path would find this repo's spec while
+   appending to that project's ledger.
+3. Otherwise, the key is left out of the line entirely. There's no null
+   spelling for it—a row either names its job or it doesn't.
+
 The assembled line is validated against vendor-call.schema.json BEFORE the
 ledger file is touched. Once valid, exactly one newline-terminated JSON line
 is appended to .agent-guild/state/log/vendor-calls.jsonl (or `--ledger PATH`),
@@ -40,6 +54,7 @@ coupling this script's behavior to changes made for a different schema.
 import argparse
 import json
 import os
+import re
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +64,12 @@ SCHEMA_PATH = os.path.normpath(
 DEFAULT_LEDGER = os.path.join(
     os.getcwd(), ".agent-guild", "state", "log", "vendor-calls.jsonl"
 )
+# Same cwd assumption as DEFAULT_LEDGER, not SCRIPT_DIR: this script is
+# copied into other projects, and a script-relative path would find this
+# repo's spec.md while appending to that project's ledger.
+SPEC_PATH = os.path.join(os.getcwd(), ".agent-guild", "state", "spec.md")
+
+FM_REF_RE = re.compile(r"^ref:\s*(.*)$")
 
 
 def _type_name(value):
@@ -130,6 +151,35 @@ def load_schema(schema_path=SCHEMA_PATH):
         return json.load(f)
 
 
+def derive_job(spec_path=SPEC_PATH):
+    """Return the `ref` value from spec_path's provenance frontmatter, or
+    None if the file is missing or carries no `ref:` line. Only reads the
+    leading `--- ... ---` block, matching the header the /job intake skill
+    writes — see check-provenance.py for the fuller version of this parser."""
+    try:
+        with open(spec_path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        m = FM_REF_RE.match(line)
+        if not m:
+            continue
+        val = m.group(1).strip()
+        # At most one matching quote pair — never str.strip("'\""), which
+        # trims any number of quote characters regardless of balance (#127).
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        return val or None
+    return None
+
+
 def build_line(args):
     """Assemble the ledger line dict from parsed CLI args. Returns
     (line, None) or (None, error_message) — a --brief file that can't be
@@ -158,6 +208,13 @@ def build_line(args):
         "artifacts": args.artifacts,
         "quota_event": args.quota_event,
     }
+
+    # --job wins outright; otherwise fall back to spec.md's provenance ref;
+    # otherwise the key is left out entirely — never written as null.
+    job = args.job if args.job is not None else derive_job()
+    if job is not None:
+        line["job"] = job
+
     return line, None
 
 
@@ -195,6 +252,12 @@ def parse_args(argv=None):
         help="files verified on disk after the call; pass with no PATHs for an empty list",
     )
     ap.add_argument("--quota-event", action="store_true", default=False)
+    ap.add_argument(
+        "--job",
+        default=None,
+        metavar="VALUE",
+        help="job this call belongs to; defaults to spec.md's provenance ref, then omitted",
+    )
     ap.add_argument("--brief", default=None, metavar="PATH", help="brief file; sets brief_tokens to bytes/4 and tokenizer to heuristic-bytes/4")
     ap.add_argument("--ledger", default=DEFAULT_LEDGER, metavar="PATH", help="ledger file (default: .agent-guild/state/log/vendor-calls.jsonl)")
     return ap.parse_args(argv)

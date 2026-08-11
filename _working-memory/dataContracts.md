@@ -62,6 +62,8 @@ A Codex in-family checker (`checker-deterministic`, `checker-judgment`) runs `sa
 
 `state/log/vendor-calls.jsonl`, one JSON line per external invocation, schema `.agent-guild/schemas/vendor-call.schema.json`, appended only through `ledger-append.py` (validate-before-append; append-only even over a malformed line). Null means the vendor didn't report it — never a fabricated zero. `brief_tokens` uses the `heuristic-bytes/4` estimator, named in the `tokenizer` field. Collector doc: `docs/vendor-ledger.md`, including the three courier obligations #8's constitution must enforce.
 
+`job` names the run a row came from, spelled as that run's provenance `ref` (`kendrick/skills#17`). It's the line's only optional key, and optional on purpose: it sits in `properties` and not in `required`, so rows written before #117 still validate. An absent key reads as unattributed rather than attributed to nothing; there is no null spelling. `ledger-append.py` resolves it in three steps and no others: `--job VALUE`, then `spec.md`'s provenance `ref` read from the working directory, then omission. Deriving from the spec is what makes it stick—`.agent-guild/state/` is wiped between jobs, and a courier that has to pass a flag is a courier that can forget to. (#117)
+
 ## Briefs
 
 `state/briefs/T-NNN.md` from `compose-brief.py T-NNN [--out PATH] [--vendor V --model M]`: task id/title, the full text of every cited constitution clause (never ids alone), the `## Spec excerpt` verbatim, and `## Prior attempt diagnosis` only when a rework diagnosis exists. Self-contained by contract — no state paths presented as readable, no CLAUDE.md references. The golden tests in `test_compose_brief.py` pin this format; it's what external vendors receive.

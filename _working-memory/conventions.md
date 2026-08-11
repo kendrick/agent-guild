@@ -20,6 +20,11 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 - Verdicts and disputes embed tier and retry: `T-NNN-<tier>-r<retries>.md` (e.g. `T-007-opus-r1.md`), so a per-tier retry reset never overwrites an earlier tier's file. Audit verdicts use `CON-audit-rN.md` / `DEC-audit-rN.md`. (`.agent-guild/templates/verdict.md`)
 - That naming is prompt-deep and nothing checks it (#101). A Codex run wrote `T-001-checker-deterministic-r0`—checker name where the tier belongs—then reused the stem across a rework and overwrote the FAIL with the PASS, leaving no file record that the failure happened. Read a stem as a claim, not a guarantee, until the return gate validates it.
 
+## Run Archives
+
+- A run's archive holds everything under `.agent-guild/state/` that the run produced, `log/` among them: tasks, verdicts, disputes, notes, briefs, and logs move into `archive/<date>/` together. The vendor ledger belongs to the record it documents, not to the directory the next job inherits. (`guild-core/workflows/retrospective/SKILL.md` step 3)
+- Leaving `log/` behind is how a ledger stops being attributable. Seven crossings the #17 run made stayed live in `.agent-guild/state/log/vendor-calls.jsonl` and got archived under #27, two jobs later, which is what #117's `job` field and its 18-row backfill exist to undo. The field makes the mistake recoverable; moving `log/` with the rest is what keeps it from happening.
+
 ## Hooks and Checks
 
 - Hooks are Python 3, stdlib only, and fail loud / fail closed. Never add a dependency. (`.agent-guild/hooks/`)

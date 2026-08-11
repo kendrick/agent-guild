@@ -48,6 +48,50 @@ def _log(agent, task, model):
         pass
 
 
+def _log_gate_gap(ident, timeout_s):
+    """Best-effort record that check-job-spec didn't finish for `ident`, so
+    the auditor dispatched with the paperwork gate un-consulted. Same path
+    resolution and bare except Exception: pass posture as _log above—this is
+    the one thing that makes an allow-through-on-timeout auditable instead of
+    silent, so it must never itself be the reason a dispatch fails."""
+    try:
+        os.makedirs(_lib.state_path("log"), exist_ok=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with open(_lib.state_path("log", "gate-gaps.log"), "a", encoding="utf-8") as f:
+            f.write(
+                f"{ts} | check-job-spec | {ident} | timed out after "
+                f"{timeout_s}s, auditor dispatched with the gate un-run\n"
+            )
+    except Exception:
+        pass
+
+
+def _join_sentence(lead, tail):
+    """Join two sentence fragments so the result reads as prose regardless of
+    whether `lead` (the linter's own stderr line) already ends in
+    punctuation. Without this, a stderr line with no trailing period runs
+    straight into the sentence appended after it."""
+    lead = lead.rstrip()
+    if lead and lead[-1] not in ".!?":
+        lead += "."
+    return f"{lead} {tail}"
+
+
+# 20s: real headroom over the ~3s check-job-spec takes on a 7-task job today,
+# while staying well clear of the PreToolUse hook's own 30s budget (see
+# plugin/hooks/hooks.json)—that budget covers this subprocess plus Python
+# startup plus every check_method's own work, so the gap between 20 and 30
+# has to absorb all of that, not just the linter's run time.
+#
+# Test-only seam: production always waits the full JOB_SPEC_TIMEOUT_S below.
+# The timeout test needs to actually exercise a real subprocess.run() timeout
+# to prove the branch works, and waiting out a real 20s would make every run
+# of this suite crawl. AGENT_GUILD_JOB_SPEC_TIMEOUT lets that one test shrink
+# the wait to a fraction of a second while running the identical code path;
+# no real dispatch has any reason to set it.
+JOB_SPEC_TIMEOUT_S = float(os.environ.get("AGENT_GUILD_JOB_SPEC_TIMEOUT", "20"))
+
+
 def _job_spec_block(ident):
     """None if the auditor may proceed for `ident`; else the message to hand
     _lib.block(). Shells out to check-job-spec.py rather than importing it,
@@ -60,9 +104,14 @@ def _job_spec_block(ident):
     note), so a repo can be running hooks newer than its own scripts/—and a
     gate that hard-fails when check-job-spec.py simply isn't there yet would
     brick every auditor dispatch on that payload. A timeout gets the same
-    pass: an unresponsive linter isn't proof the paperwork is broken, only
-    that this run couldn't tell, and the auditor is still there to catch what
-    the linter would have.
+    allow-through, for the same deadlock-avoidance reason: a hard fail on a
+    slow linter would block every job behind it. But it is not the same as
+    "free"—an unresponsive linter is exactly the epistemic state exit 3 is,
+    "the gate did not run," and unlike exit 3 it would otherwise be silent.
+    That's a real gap: the auditor still runs, but nothing checked the
+    paperwork first, and #132 exists because that check catches things worth
+    catching. _log_gate_gap() and the stderr note below are what keep the gap
+    auditable instead of invisible.
     """
     linter = os.path.join(_lib.project_dir(), ".agent-guild", "scripts", "check-job-spec.py")
     if not os.path.exists(linter):
@@ -72,9 +121,18 @@ def _job_spec_block(ident):
     reproduce = f"python3 {linter} --audit-id {ident} --repo-root {repo_root}"
     try:
         proc = subprocess.run(
-            cmd, cwd=repo_root, capture_output=True, text=True, timeout=15,
+            cmd, cwd=repo_root, capture_output=True, text=True,
+            timeout=JOB_SPEC_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
+        _log_gate_gap(ident, JOB_SPEC_TIMEOUT_S)
+        sys.stderr.write(
+            f"dispatch-guard: check-job-spec timed out after "
+            f"{JOB_SPEC_TIMEOUT_S:g}s for {ident}—the paperwork gate did not "
+            f"run for this dispatch. Logged to "
+            ".agent-guild/state/log/gate-gaps.log; the auditor is dispatched "
+            "unchecked.\n"
+        )
         return None
     if proc.returncode == 0:
         return None
@@ -86,9 +144,10 @@ def _job_spec_block(ident):
             f"reproduce with: {reproduce}"
         )
     detail = proc.stderr.strip() or f"check-job-spec exited {proc.returncode}"
-    return (
-        f"{detail} Fix that before spending an opus auditor on a defect a "
-        f"script already proved. Reproduce with: {reproduce}"
+    return _join_sentence(
+        detail,
+        "Fix that before spending an opus auditor on a defect a script "
+        f"already proved. Reproduce with: {reproduce}",
     )
 
 

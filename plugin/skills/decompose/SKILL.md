@@ -33,6 +33,8 @@ Optional: a constitution may designate select high-severity clauses cross-vendor
 
 A task that changes a shared contract—a schema, a template shape, a hook-visible format—cites the constitution's consumer-suite clause in its `check_method`, so the checker runs every suite that consumes the contract, not just the contract's own tests. Tasks that don't touch a shared contract carry no such citation.
 
+`check-job-spec.py --audit-id DEC-audit` proves the mechanical half of a decomposition before an auditor reads it: every cited clause exists and is keyed in the task's `check_method`, every `deps` id resolves and the graph is acyclic, and whichever task regenerates the shipped trees sits downstream of every task that edits a build input. Run it before you dispatch the auditor, since `dispatch-guard` refuses that dispatch until it passes. #117 lost a round to a terminal task that wasn't terminal, so a regeneration could pass while a later edit was still coming and every verdict stayed green.
+
 Done when every task names an executor, a checker, a check method covering each cited clause, and a spec excerpt a worker could act on cold.
 
 ## 4. Send it to audit

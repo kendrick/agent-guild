@@ -24,8 +24,10 @@ HOOKS = os.path.dirname(os.path.abspath(__file__))
 passed = failed = 0
 
 
-def run_hook_path(script_path, payload, proj):
+def run_hook_path(script_path, payload, proj, extra_env=None):
     env = dict(os.environ, CLAUDE_PROJECT_DIR=proj)
+    if extra_env:
+        env.update(extra_env)
     p = subprocess.run(
         [sys.executable, script_path],
         input=json.dumps(payload), capture_output=True, text=True, env=env,
@@ -33,8 +35,8 @@ def run_hook_path(script_path, payload, proj):
     return p.returncode, p.stdout, p.stderr
 
 
-def run_hook(name, payload, proj):
-    return run_hook_path(os.path.join(HOOKS, name), payload, proj)
+def run_hook(name, payload, proj, extra_env=None):
+    return run_hook_path(os.path.join(HOOKS, name), payload, proj, extra_env)
 
 
 def copy_in_hooks(proj):
@@ -101,19 +103,25 @@ def con_pass(proj):
     write_verdict(proj, "CON-audit-r0.md", "PASS")
 
 
-def write_fake_linter(proj, exit_code, stderr_line="job-spec: fake finding at T-001.md:1"):
+def write_fake_linter(proj, exit_code, stderr_line="job-spec: fake finding at T-001.md:1",
+                       sleep_seconds=None):
     """A stand-in for scripts/check-job-spec.py. dispatch-guard depends on
     that CLI's exit code and stderr and nothing else, so a fake with a
     hardcoded exit drives all three branches. Using the real linter would tie
     these cases to its lint rules, and a rule change would then break the
-    hook suite for a reason that has nothing to do with the hook."""
+    hook suite for a reason that has nothing to do with the hook.
+
+    sleep_seconds, when given, makes the fake outlive dispatch-guard's own
+    subprocess timeout instead of exiting—the fixture for the timeout branch,
+    which needs a linter that genuinely never returns in time."""
     d = os.path.join(proj, ".agent-guild", "scripts")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, "check-job-spec.py")
     with open(path, "w", encoding="utf-8") as f:
+        f.write("#!/usr/bin/env python3\n" "import sys\n")
+        if sleep_seconds is not None:
+            f.write("import time\n" f"time.sleep({sleep_seconds})\n")
         f.write(
-            "#!/usr/bin/env python3\n"
-            "import sys\n"
             f"sys.stderr.write({stderr_line!r} + chr(10))\n"
             f"sys.exit({exit_code})\n"
         )
@@ -544,12 +552,40 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "auditor", "prompt": "Audit-ID: CON-audit"}}, proj)
 check("auditor, linter exits 1 → exit 2", rc == 2
       and "T-001.md:57 cites a stale line" in err and "check-job-spec" in err, err)
+# The fixture's stderr line has no trailing punctuation on purpose (like the
+# real linter's), so this pins that the appended sentence gets its own
+# period instead of running on: "...stale line Fix that..." was the bug.
+check("auditor, linter exits 1 → message reads as two sentences, not run together",
+      "stale line. Fix that before spending an opus auditor" in err, err)
 
 write_fake_linter(proj, 3, "job-spec: could not parse constitution.md")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "auditor", "prompt": "Audit-ID: CON-audit"}}, proj)
 check("auditor, linter exits 3 → exit 2, distinct from exit-1 message",
       rc == 2 and "exit 3" in err and "T-001.md:57 cites a stale line" not in err, err)
+
+# auditor: linter times out (#132's adversarial-checker finding). The allow-
+# through decision doesn't change—a hard fail here would deadlock a job
+# behind a slow linter—but the gap has to be observable: a log line and a
+# stderr note, where before there was nothing at all. AGENT_GUILD_JOB_SPEC_TIMEOUT
+# shrinks dispatch-guard's own timeout so this test doesn't wait out the real
+# (20s) one; see the seam's justifying comment in dispatch-guard.py.
+write_fake_linter(proj, 0, sleep_seconds=1)
+gate_gaps = os.path.join(proj, ".agent-guild", "state", "log", "gate-gaps.log")
+if os.path.exists(gate_gaps):
+    os.remove(gate_gaps)
+rc, out, err = run_hook(
+    "dispatch-guard.py",
+    {"tool_input": {"subagent_type": "auditor", "prompt": "Audit-ID: CON-audit"}},
+    proj, extra_env={"AGENT_GUILD_JOB_SPEC_TIMEOUT": "0.1"})
+check("auditor, linter times out → exit 0 (allow-through, not a block)",
+      rc == 0, f"rc={rc} err={err}")
+gate_gap_logged = os.path.exists(gate_gaps) and "CON-audit" in open(gate_gaps).read()
+check("auditor, linter times out → gate-gaps.log records the gap",
+      gate_gap_logged,
+      open(gate_gaps).read() if os.path.exists(gate_gaps) else "gate-gaps.log missing")
+check("auditor, linter times out → stderr carries the notice",
+      "timed out" in err and "CON-audit" in err, err)
 
 os.remove(os.path.join(proj, ".agent-guild", "scripts", "check-job-spec.py"))
 rc, out, err = run_hook("dispatch-guard.py",

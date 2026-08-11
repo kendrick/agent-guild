@@ -1070,6 +1070,29 @@ rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
 check("so: a denied waiver discharges the debt",
       rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
 
+# 7b. C-5's fourth discharge behavior, and route 4's ordering pinned rather
+# than incidental: a `.denied` waiver discharges even at a stem carrying an
+# UNAUTHORIZED lane verdict—the #100 shape again, a hand-written sibling with
+# no reservation behind it. The routes are tried in sequence (1/2, then 3,
+# then 4), so an implementation that instead branches on "does a lane file
+# exist at all" and only THEN asks about authorization would treat the
+# sibling's mere presence as disqualifying the waiver below it, discharging
+# nothing. Case 7 above proves the waiver works with no sibling in the way;
+# this proves the sibling doesn't get in the way when it's there.
+proj = fresh_proj()
+write_task(proj, "T-048", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-048-sonnet-r0.json", task_id="T-048")
+write_verdict_json(proj, "T-048-sonnet-r0-codex.json", task_id="T-048",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+waiver = os.path.join(verdicts_dir, "T-048-sonnet-r0-codex.denied")
+open(waiver, "w").close()
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(waiver)
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: a denied waiver discharges the debt with an unauthorized lane sibling still on disk (#141)",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
 # 8. Discharge route 5: a `blocked` verdict of record has nothing yet for a
 # crossing to compare against, so it owes nothing. Rewriting the SAME file to
 # a non-blocked verdict, with nothing else in the fixture changed, is what

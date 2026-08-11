@@ -234,11 +234,15 @@ def _validate_structured_output(envelope, task_id):
         path, reason = violation
         return None, f"structured_output failed verdict validation at {path}: {reason}"
 
+    # `model` is absent from this list on purpose. The far side knows which
+    # task it judged, which role it was filling, and whose API answered; it
+    # does not know its own name, it is only repeating one it was handed. The
+    # codex lane lost a sound judgment to that distinction (#142), so identity
+    # is stamped below rather than demanded here.
     expected_identity = {
         "task_id": task_id,
         "checker": "checker-courier",
         "vendor": "anthropic",
-        "model": MODEL,
     }
     for key, expected in expected_identity.items():
         if verdict.get(key) != expected:
@@ -247,7 +251,12 @@ def _validate_structured_output(envelope, task_id):
                 f"structured_output {key} was {verdict.get(key)!r}, "
                 f"expected {expected!r}",
             )
+    verdict["model"] = MODEL
 
+    # This check survives the change above, because it is not a self-report:
+    # modelUsage is the CLI's own accounting of which model it billed, which
+    # is exactly the vendor-structural evidence the codex lane turned out not
+    # to have.
     model_usage = envelope.get("modelUsage")
     if isinstance(model_usage, dict) and model_usage:
         unexpected = sorted(set(model_usage) - {MODEL})

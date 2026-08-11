@@ -44,7 +44,11 @@ class CourierError(Exception):
 
 
 def utc_now():
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    """Whole seconds. One archived ledger row carries microseconds where the
+    other seventeen don't, which costs nothing until a collector sorts or
+    compares these as text (#117)."""
+    stamp = datetime.now(timezone.utc).replace(microsecond=0)
+    return stamp.isoformat().replace("+00:00", "Z")
 
 
 def number(value, expected_type):

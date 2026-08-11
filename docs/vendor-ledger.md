@@ -35,11 +35,15 @@ The four nullable fields (`tokens_in`, `tokens_out`, `cost_usd`, `brief_tokens`)
 
 ## Courier Obligations
 
-These three rules are what make the ledger trustworthy. A collector can assume they hold; a courier that violates one has produced a ledger line that lies.
+These rules are what make the ledger trustworthy. A collector can assume they hold; a courier that violates one has produced a ledger line that lies.
 
 1. **Tokens and cost come from vendor-reported usage, or they're null.** Pull `tokens_in`, `tokens_out`, and `cost_usd` from the vendor's own accounting (`codex exec --json` usage events, for example), never from an estimate. When the vendor doesn't report a figure, write null. Guessing a number here is worse than admitting it's missing, because a guess looks like data.
-2. **`artifacts[]` lists what the courier verified on disk, never what the vendor claimed.** A vendor's transcript saying "I wrote `foo.py`" is not evidence that `foo.py` exists. Only list a path after the courier has checked it's actually there.
+2. **`artifacts[]` lists what the courier verified on disk, never what the vendor claimed.** A vendor's transcript saying "I wrote `foo.py`" is not evidence that `foo.py` exists. Only list a path after the courier has checked it's actually there. Write them relative to the project root: an absolute path from the machine that produced the row records nothing anywhere else, and ten rows in one archive name a home directory that no longer exists.
 3. **A quota exhaustion writes its ledger line before touching any exhaustion sentinel.** When a vendor call hits a quota limit, append the ledger line (with `quota_event: true`) first, then write the sentinel. That ordering means the sentinel is never orphaned: the ledger always has the record that explains why it exists.
+4. **`vendor` is the lane; `model` is what the courier established locally.** `vendor` names the lane (`codex` from a Claude host, `claude` from a Codex host), never the provider. The provider is the verdict's own `vendor` field, so a completed crossing on a Claude host reads `codex` here and `openai` there. `model` is the model the courier pinned and, where the CLI reports what it ran, what the CLI said. It is never the far side's echo of its own name: a model asked to write down what it is called is repeating a string, not reporting a fact, and the two have already diverged in production.
+5. **One line per crossing, not per attempt.** A call retried after malformed output is still one crossing, and its row sums the reported usage of both attempts. A crossing that blocked or hit quota still gets its line; the outcome changes the fields, not whether the row exists.
+
+Historical rows predate rules 2, 4, and 5, and the #100 archive is the clearest example: it books one lane as `openai` on three rows and `codex` on five, and mixes absolute with repo-relative artifact paths. Nothing has been rewritten, since a run that corrects another run's record makes a repair indistinguishable from a rewrite afterward. Read old rows knowing the conventions were not yet enforced.
 
 ## Writing a Line
 

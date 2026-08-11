@@ -22,7 +22,9 @@ One thing learned on 2026-08-02 changes how much that count is worth: the sample
 
 ## Codex quota failure shape, pending a live encounter
 
-The `codex exec` flags, sandbox modes, output mechanisms, and usage reporting were all verified live on 2026-07-24 (issue #2's closing comment is the reference; that machine pinned `gpt-5.6-terra` as the default in `~/.codex/config.toml`, but the file is machine-local and absent on at least one other checkout, and the lane command passes no `-m`, so identity depends on whatever the CLI defaults to there. `-m gpt-5.6-terra` does resolve on codex-cli 0.146.1). The one remaining unknown: the quota/rate-limit failure shape — exit code and stderr wording — that the courier's exhaustion detection must match. Nothing triggered it cheaply; tune on the first real quota event.
+The `codex exec` flags, sandbox modes, output mechanisms, and usage reporting were all verified live on 2026-07-24 (issue #2's closing comment is the reference). The identity half of this note is settled and moved to [[decisionLog]]. The one remaining unknown: the quota/rate-limit failure shape — exit code and stderr wording — that the courier's exhaustion detection must match. Nothing triggered it cheaply; tune on the first real quota event.
+
+**2026-08-11: what a rejected turn looks like.** #142's probe sent `-m definitely-not-a-model` and drew a structured refusal rather than a bare exit. `codex exec` exits 1, writes no `-o` file, and emits two things worth matching on: a top-level `{"type":"error","message":…}` event, and a `turn.failed` whose `error.message` is a JSON *string* wrapping `{"type":"error","status":400,…}`. Stderr carried nothing but `Reading additional input from stdin...`. If a 429 arrives the same way, and there's no reason to think it wouldn't, then exhaustion detection has to read a status out of that nested string. The wording it was written to match sat on a stream that stayed empty.
 
 ## Does `sandbox_mode: read-only` deny a write inside the workspace?
 

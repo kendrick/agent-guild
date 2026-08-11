@@ -395,7 +395,7 @@ Prove the lane with a crossing, not a status query. `codex login status` will re
 
 Run the probe from inside the host session rather than a shell beside it, and from an empty directory. `-s read-only` blocks writes, not reads, so a vendor started in the project root will shell out and read the repo it is supposed to be judging blind.
 
-On a Codex host the boundary script is the probe, because it is the same code the courier runs:
+Either host's boundary script is its probe, because it is the same code the courier runs. On a Codex host:
 
 ```sh
 mkdir -p /tmp/ag-lane-probe && cd /tmp/ag-lane-probe
@@ -419,16 +419,26 @@ Expect a JSON outcome with `"status": "verdict"`.
 
 Verify the token where the courier runs and nowhere else. A keychain the CLI can reach takes precedence over the variable, so exporting it on your own machine gets you a crossing that succeeds on keychain credentials and tells you nothing about whether the token works. The sandbox is the only place the answer differs.
 
-A Claude host has no equivalent script yet (#84), so probe the raw lane, substituting vendor `openai` and model `gpt-5.6-terra` into the same prompt:
+On a Claude host, the same shape with the other lane's identity. `--dry-run` is what keeps a probe from filing a verdict for the fictional T-000:
 
 ```sh
 mkdir -p /tmp/ag-lane-probe && cd /tmp/ag-lane-probe
-codex exec --skip-git-repo-check -s read-only --ephemeral --json \
+printf 'Task-ID: T-000\nEmit one verdict object: task_id "T-000", checker "checker-courier", vendor "openai", model "gpt-5.6-terra", verdict "pass", findings [], timestamp any ISO8601, duration_ms null, cost_usd null.\n' \
+  | python3 <ABSOLUTE project path>/.agent-guild/scripts/codex-courier.py --task-id T-000 --dry-run
+```
+
+Expect `"status": "verdict"` and an `identity` block reporting the model the lane ran. `echo_matched: false` there is not a failure: it means the far side answered to a different name than the one it was handed, which the runner records and moves past.
+
+If the runner blocks, run the lane by hand to see what the CLI actually said:
+
+```sh
+codex exec --skip-git-repo-check -s read-only --ephemeral --ignore-user-config --json \
+  -m gpt-5.6-terra \
   --output-schema <ABSOLUTE project path>/.agent-guild/schemas/verdict.schema.json \
   -o /tmp/ag-lane-probe/verdict.json "<the prompt above>" < /dev/null
 ```
 
-Expect exit 0, exactly one `agent_message` event, no `command_execution` events at all, and identity fields matching the pinned lane. A `command_execution` event means the empty directory did not hold and the vendor went looking for context you did not give it.
+Expect exit 0, exactly one `agent_message` event, and no `command_execution` events at all. A `command_execution` event means the empty directory did not hold and the vendor went looking for context you did not give it. After a real crossing you can check the same thing after the fact, since a divergent or retried call leaves its whole event stream in `.agent-guild/state/log/courier-raw/`.
 
 Repeat C0, then create a correct `guild-motto.txt` and set T-001 to `status: checking`, `artifacts: [guild-motto.txt]`, `retries: 0`.
 
@@ -452,8 +462,13 @@ Expect exit 0. Preserve its output and exit code as the evidence supplied to the
 test -f .agent-guild/state/verdicts/T-001-sonnet-r0-<lane>.json && echo "suffixed verdict present"
 test -f .agent-guild/state/verdicts/T-001-sonnet-r0-<lane>.md && echo "rendered sibling present"
 python3 .agent-guild/scripts/validate-verdict.py .agent-guild/state/verdicts/T-001-sonnet-r0-<lane>.json
-tail -n1 .agent-guild/state/log/vendor-calls.jsonl | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print('exit_code:', d['exit_code'], 'brief_tokens:', d['brief_tokens'])"
+tail -n1 .agent-guild/state/log/vendor-calls.jsonl | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print('exit_code:', d['exit_code'], 'brief_tokens:', d['brief_tokens'], 'vendor:', d['vendor'], 'model:', d['model'])"
+python3 -c "import json,sys; d=json.load(open('.agent-guild/state/verdicts/T-001-sonnet-r0-<lane>.json')); print('verdict vendor:', d['vendor'], 'model:', d['model'])"
 ```
+
+The two `vendor` values are supposed to differ, and reading them side by side is the point. On a Claude host the ledger says `codex` and the verdict says `openai`: one names the lane, the other the provider. The `model` matches across both, because the runner establishes it once and stamps it in both places rather than asking the far side.
+
+Both hosts reach this check through a script, which is what makes the ledger line worth asserting on. Before #84 nothing on a Claude host owned the append, so a crossing could succeed and leave no line at all.
 
 A missing CLI, authentication failure, timeout, or two malformed replies produces a valid `blocked` suffixed verdict and ledger entry. It does not fail the worker or consume a retry.
 

@@ -250,6 +250,15 @@ FAKE_CLAUDE = textwrap.dedent(
     elif mode == "wrong_identity":
         success["structured_output"]["task_id"] = "T-999"
         print(json.dumps(success))
+    elif mode == "echoed_wrong_model":
+        # modelUsage still names the pinned model: the CLI billed what we
+        # asked for and only the model's own text disagrees.
+        success["structured_output"]["model"] = "claude-haiku-4-5"
+        print(json.dumps(success))
+    elif mode == "billed_wrong_model":
+        success["modelUsage"] = {"claude-opus-4-1": {
+            "inputTokens": 101, "outputTokens": 23, "costUSD": 0.02}}
+        print(json.dumps(success))
     elif mode.startswith("row_"):
         exit_code, envelope, stderr_text = ROWS[mode[len("row_"):]]
         if stderr_text:
@@ -589,6 +598,35 @@ try:
         and "CLAUDE_CODE_OAUTH_TOKEN" in description
         and "exited 1" not in description,
         f"rc={process.returncode} description={description!r}",
+    )
+finally:
+    temp.cleanup()
+
+temp, process, outcome, calls, prompt = run_courier("echoed_wrong_model")
+try:
+    check(
+        "an echoed model name is overwritten, not treated as a mismatch",
+        process.returncode == 0
+        and outcome is not None
+        and outcome["status"] == "verdict"
+        and outcome["verdict"]["verdict"] == "pass"
+        and outcome["verdict"]["model"] == MODEL,
+        f"rc={process.returncode} stdout={process.stdout!r}",
+    )
+finally:
+    temp.cleanup()
+
+temp, process, outcome, calls, prompt = run_courier("billed_wrong_model")
+try:
+    description = ""
+    if outcome and outcome.get("verdict"):
+        description = outcome["verdict"]["findings"][0]["description"]
+    check(
+        "a modelUsage naming another model still blocks, because the CLI attested it",
+        outcome is not None
+        and outcome["verdict"]["verdict"] == "blocked"
+        and "modelUsage" in description,
+        f"description={description!r}",
     )
 finally:
     temp.cleanup()

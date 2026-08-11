@@ -24,61 +24,34 @@ signal produces no verdict; the parent records the ledger line before creating
 state/exhausted/claude.
 """
 import argparse
-import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+import _courier_lib  # noqa: E402  needs SCRIPT_DIR on the path first
+
 SCHEMA_PATH = os.path.normpath(
     os.path.join(SCRIPT_DIR, "..", "schemas", "verdict.schema.json")
 )
 VALIDATOR_PATH = os.path.join(SCRIPT_DIR, "validate-verdict.py")
 MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_TIMEOUT_SECONDS = 120.0
-QUOTA_RE = re.compile(
-    r"(?:rate[ -]?limit|quota|usage[ -]?limit|spend(?:ing)?[ -]?cap"
-    r"|(?<![\w.])429(?![\w.]))",
-    re.IGNORECASE,
-)
-# Same 401 boundary guard as QUOTA_RE's 429, for the same reason.
-AUTH_RE = re.compile(
-    r"(?:not logged in|please run /login|invalid api key"
-    r"|authentication (?:failed|required)|unauthorized"
-    r"|(?<![\w.])401(?![\w.]))",
-    re.IGNORECASE,
-)
 
-
-class CourierError(Exception):
-    """The local courier boundary cannot produce a classified outcome."""
-
-
-def _load_validator():
-    spec = importlib.util.spec_from_file_location(
-        "agent_guild_validate_verdict", VALIDATOR_PATH
-    )
-    if spec is None or spec.loader is None:
-        raise CourierError(
-            f"cannot load verdict validator from {VALIDATOR_PATH}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-VALIDATOR = _load_validator()
-
-
-def _utc_now():
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+# Both lanes share these; see _courier_lib for why the 429 boundary is the
+# part worth stating once.
+CourierError = _courier_lib.CourierError
+QUOTA_RE = _courier_lib.QUOTA_RE
+AUTH_RE = _courier_lib.AUTH_RE
+VALIDATOR = _courier_lib.load_validator(VALIDATOR_PATH)
+_utc_now = _courier_lib.utc_now
+_number = _courier_lib.number
 
 
 def _adapted_schema():
@@ -261,11 +234,15 @@ def _validate_structured_output(envelope, task_id):
         path, reason = violation
         return None, f"structured_output failed verdict validation at {path}: {reason}"
 
+    # `model` is absent from this list on purpose. The far side knows which
+    # task it judged, which role it was filling, and whose API answered; it
+    # does not know its own name, it is only repeating one it was handed. The
+    # codex lane lost a sound judgment to that distinction (#142), so identity
+    # is stamped below rather than demanded here.
     expected_identity = {
         "task_id": task_id,
         "checker": "checker-courier",
         "vendor": "anthropic",
-        "model": MODEL,
     }
     for key, expected in expected_identity.items():
         if verdict.get(key) != expected:
@@ -274,7 +251,12 @@ def _validate_structured_output(envelope, task_id):
                 f"structured_output {key} was {verdict.get(key)!r}, "
                 f"expected {expected!r}",
             )
+    verdict["model"] = MODEL
 
+    # This check survives the change above, because it is not a self-report:
+    # modelUsage is the CLI's own accounting of which model it billed, which
+    # is exactly the vendor-structural evidence the codex lane turned out not
+    # to have.
     model_usage = envelope.get("modelUsage")
     if isinstance(model_usage, dict) and model_usage:
         unexpected = sorted(set(model_usage) - {MODEL})
@@ -285,12 +267,6 @@ def _validate_structured_output(envelope, task_id):
                 f"model {MODEL!r}: {sorted(model_usage)!r}",
             )
     return verdict, None
-
-
-def _number(value, expected_type):
-    if isinstance(value, bool):
-        return None
-    return value if isinstance(value, expected_type) else None
 
 
 def _usage(envelope):
@@ -317,36 +293,10 @@ def _usage(envelope):
 
 
 def _blocked_verdict(task_id, description, evidence):
-    verdict = {
-        "task_id": task_id,
-        "checker": "checker-courier",
-        "vendor": "anthropic",
-        "model": MODEL,
-        "verdict": "blocked",
-        "findings": [
-            {
-                "clause_id": "external-lane",
-                "severity": "blocker",
-                "description": description,
-                "evidence": evidence,
-            }
-        ],
-        "timestamp": _utc_now(),
-        "duration_ms": None,
-        "cost_usd": None,
-    }
-    schema, schema_error = VALIDATOR.load_schema()
-    if schema_error:
-        raise CourierError(schema_error)
-    violation = VALIDATOR.schema_violation(verdict, schema)
-    if violation is None:
-        violation = VALIDATOR.semantic_violation(verdict)
-    if violation is not None:
-        path, reason = violation
-        raise CourierError(
-            f"internally generated blocked verdict is invalid at {path}: {reason}"
-        )
-    return verdict
+    return _courier_lib.blocked_verdict(
+        VALIDATOR, task_id, "checker-courier", "anthropic", MODEL,
+        description, evidence,
+    )
 
 
 def _ledger(
@@ -364,18 +314,10 @@ def _ledger(
         tokens_in, tokens_out, cost_usd = _usage(envelope)
     else:
         tokens_in = tokens_out = cost_usd = None
-    return {
-        "task_id": task_id,
-        "vendor": "claude",
-        "model": MODEL,
-        "started_at": started_at,
-        "duration_ms": duration_ms,
-        "exit_code": call["returncode"],
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-        "cost_usd": cost_usd,
-        "quota_event": quota_event,
-    }
+    return _courier_lib.ledger_record(
+        task_id, "claude", MODEL, started_at, duration_ms,
+        call["returncode"], tokens_in, tokens_out, cost_usd, quota_event,
+    )
 
 
 def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
@@ -535,27 +477,11 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     prompt = sys.stdin.read()
-    if not re.fullmatch(r"T-\d+", args.task_id):
-        sys.stderr.write(
-            "claude-courier: --task-id must have the form T-NNN\n"
-        )
-        return 2
-    if args.timeout_seconds <= 0:
-        sys.stderr.write(
-            "claude-courier: --timeout-seconds must be positive\n"
-        )
-        return 2
-    if not prompt.strip():
-        sys.stderr.write("claude-courier: prompt stdin is empty\n")
-        return 2
-    if not re.search(
-        rf"\bTask-ID:\s*{re.escape(args.task_id)}\b",
-        prompt,
-        re.IGNORECASE,
-    ):
-        sys.stderr.write(
-            f"claude-courier: prompt does not carry Task-ID: {args.task_id}\n"
-        )
+    invalid = _courier_lib.validate_courier_args(
+        "claude-courier", args.task_id, args.timeout_seconds, prompt
+    )
+    if invalid:
+        sys.stderr.write(invalid + "\n")
         return 2
 
     try:

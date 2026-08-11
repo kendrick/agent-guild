@@ -478,7 +478,14 @@ def second_opinion_debts(data=None):
             continue
 
         if os.path.exists(os.path.join(vdir, f"{stem}-{lane}.denied")):
-            continue  # route 4: the orchestrator's record that a host refused the dispatch outright (e.g. #94)
+            # Route 4: the orchestrator's hand-written record that no crossing
+            # is coming—a host that refused the dispatch outright (#94), and
+            # since #141 also a stem the gate never recorded as authorized.
+            # That second case has no other way out: reserve_crossing skips a
+            # stem that already carries a file (the anti-laundering rule), so
+            # no later dispatch can authorize this one, and without a waiver
+            # the debt rides to STALLED.md.
+            continue
 
         # Routes 1-4 settle before the file is ever opened, on purpose:
         # routes 1/2 ARE the file a courier writes, so an unreadable record

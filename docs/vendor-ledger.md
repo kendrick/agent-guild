@@ -19,13 +19,18 @@ No courier hand-formats these lines. `.agent-guild/scripts/ledger-append.py` val
 - `tokenizer` (string or null)—`"heuristic-bytes/4"` whenever `brief_tokens` was computed; null exactly when `brief_tokens` is null. This is a byte-count heuristic from the standard library, not a real tokenizer: the field exists so a better estimator can replace it later without changing what the historical data means.
 - `artifacts` (array of strings)—paths the courier verified on disk after the call. May be empty, but the field itself is always present.
 - `quota_event` (boolean)—true when this call registered a vendor quota exhaustion.
+- `job` (string, optional)—the guild run this call belongs to, spelled as that run's provenance `ref`, e.g. `"kendrick/skills#17"`. The one key in the line that can be absent.
 
 The four nullable fields (`tokens_in`, `tokens_out`, `cost_usd`, `brief_tokens`) share one rule: null means unreported, never zero. A courier whose vendor reports no cost figure writes null. Writing `0.0` there would tell every downstream cost analysis that the call was free, which is worse than admitting the number is missing.
+
+`job` says "missing" the other way around: those four hold null, this one isn't there at all. There's no null spelling, so a row either names its job or it doesn't, and one that doesn't is unattributed rather than attributed to nothing. That's why `job` went into the schema's `properties` and deliberately not into `required`: every line written before the field existed still validates, and none of them acquires a job it can't prove.
+
+`ledger-append.py` resolves the value in three steps and no others: `--job VALUE` when the flag is passed; otherwise the `ref` from the provenance header of `.agent-guild/state/spec.md`; otherwise the key is left out. The middle step is why couriers pass no flag. Inside a guild run the ledger already sits beside the spec that names the job, so the helper reads it instead of trusting the caller to remember. It looks for `spec.md` in the working directory, the same assumption the default ledger path makes and pointedly not the script's own location: the helper gets copied into other projects, where a script-relative path would find this repo's spec while appending to theirs.
 
 ## Sample Line
 
 ```json
-{"task_id": "T-007", "vendor": "codex", "model": "gpt-5.5", "started_at": "2026-07-22T18:00:00Z", "duration_ms": 41200, "exit_code": 0, "tokens_in": 18400, "tokens_out": 2100, "cost_usd": 0.31, "brief_tokens": 512, "tokenizer": "heuristic-bytes/4", "artifacts": ["scripts/foo.py"], "quota_event": false}
+{"task_id": "T-007", "vendor": "codex", "model": "gpt-5.5", "started_at": "2026-07-22T18:00:00Z", "duration_ms": 41200, "exit_code": 0, "tokens_in": 18400, "tokens_out": 2100, "cost_usd": 0.31, "brief_tokens": 512, "tokenizer": "heuristic-bytes/4", "artifacts": ["scripts/foo.py"], "quota_event": false, "job": "kendrick/skills#17"}
 ```
 
 ## Courier Obligations
@@ -46,6 +51,6 @@ These three rules are what make the ledger trustworthy. A collector can assume t
     --artifacts scripts/foo.py
 ```
 
-Omit `--tokens-in`, `--tokens-out`, or `--cost-usd` for null. Pass `--brief PATH` to compute `brief_tokens` and record the tokenizer. Pass `--quota-event` for a quota exhaustion line. `--artifacts` is required but accepts zero paths for an empty list. `--ledger PATH` overrides the default `.agent-guild/state/log/vendor-calls.jsonl`, mainly for tests.
+Omit `--tokens-in`, `--tokens-out`, or `--cost-usd` for null. Pass `--brief PATH` to compute `brief_tokens` and record the tokenizer. Pass `--quota-event` for a quota exhaustion line. `--artifacts` is required but accepts zero paths for an empty list. `--job VALUE` overrides the derived attribution, for a backfill or a call made outside a run; the command above passes no `--job` because it doesn't need to. `--ledger PATH` overrides the default `.agent-guild/state/log/vendor-calls.jsonl`, mainly for tests.
 
 The helper validates before it writes, so invalid input exits nonzero with the file untouched. Appends never read, rewrite, or repair earlier lines: a malformed line from a killed courier stays exactly where it is, and the next append still lands cleanly after it.

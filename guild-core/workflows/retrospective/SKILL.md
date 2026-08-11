@@ -23,4 +23,10 @@ Write `.agent-guild/state/retrospective.md` covering:
 
 ## 3. Offer to archive
 
-The next job reuses `.agent-guild/state/`. Offer to move this run's state to `.agent-guild/state/archive/<date>/` (get the date from the environment) so the record survives without colliding with the next constitution and task set.
+The next job reuses `.agent-guild/state/`, so offer to move this run's record into `.agent-guild/state/archive/<date>/` (get the date from the environment) before the next constitution and task set land on top of it. Everything the run wrote goes:
+
+- `tasks/`, `briefs/`, `verdicts/`, `disputes/`, `notes/`—the message bus.
+- `log/`—dispatches, escalations, the stop gate's counter, and `vendor-calls.jsonl`.
+- `spec.md`, `constitution.md`, and the `retrospective.md` you just wrote.
+
+`log/` is the one that gets left behind, since it reads like plumbing rather than like part of the record. Check it last. It isn't plumbing: the vendor-call ledger inside it accounts for what every crossing cost and how the second opinions landed, and a ledger left live is one the next job appends to—two jobs' rows in one file, keyed by the same task ids.

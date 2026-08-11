@@ -56,6 +56,10 @@
     "quota_event": {
       "type": "boolean",
       "description": "True when this call registered a vendor quota exhaustion. A quota_event line is always written before any exhaustion sentinel is touched, so the ledger always explains the sentinel."
+    },
+    "job": {
+      "type": "string",
+      "description": "The guild run this call belongs to, written as that run's provenance ref (e.g. \"kendrick/skills#17\"). ledger-append.py takes it from --job, else from spec.md's provenance header, else leaves the key out. An absent key means the row is unattributed, and absence is the only spelling of that: the field is never written as null."
     }
   },
   "required": [

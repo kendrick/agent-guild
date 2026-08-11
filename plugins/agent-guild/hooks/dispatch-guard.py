@@ -17,7 +17,10 @@ dispatch, this blocks unless:
   - a worker's dispatched model matches the task's current tier, catching a
     forgotten model override after an escalation;
   - for workers, the constitution has a PASS audit—verification reaches the
-    orchestrator's own work before any worker builds against it.
+    orchestrator's own work before any worker builds against it;
+  - for an auditor, .agent-guild/scripts/check-job-spec.py doesn't reject the
+    paperwork first—so an opus auditor is never spent on a defect a stdlib
+    script could have proven in about two seconds (#132).
 
 A Codex followup, which re-tasks a running agent rather than spawning one, is
 refused outright when it targets a guild agent: it carries nothing left to
@@ -26,6 +29,7 @@ check (#77).
 Every passing dispatch appends one line to .agent-guild/state/log/dispatches.log.
 """
 import os
+import subprocess
 import sys
 import time
 
@@ -42,6 +46,50 @@ def _log(agent, task, model):
     except Exception:
         # Logging is best-effort; never let it turn a legal dispatch into a block.
         pass
+
+
+def _job_spec_block(ident):
+    """None if the auditor may proceed for `ident`; else the message to hand
+    _lib.block(). Shells out to check-job-spec.py rather than importing it,
+    same reasoning as subagent-return.py's validate-verdict.py call: the CLI
+    is the documented contract, and a subprocess can't drift from it.
+
+    Missing script and a stalled linter both resolve to None (let the auditor
+    through), not a block. install.py never upgrades a project's copied-in
+    .agent-guild/ payload (see _working-memory/conventions.md's payload-freeze
+    note), so a repo can be running hooks newer than its own scripts/—and a
+    gate that hard-fails when check-job-spec.py simply isn't there yet would
+    brick every auditor dispatch on that payload. A timeout gets the same
+    pass: an unresponsive linter isn't proof the paperwork is broken, only
+    that this run couldn't tell, and the auditor is still there to catch what
+    the linter would have.
+    """
+    linter = os.path.join(_lib.project_dir(), ".agent-guild", "scripts", "check-job-spec.py")
+    if not os.path.exists(linter):
+        return None
+    repo_root = _lib.project_dir()
+    cmd = [sys.executable, linter, "--audit-id", ident, "--repo-root", repo_root]
+    reproduce = f"python3 {linter} --audit-id {ident} --repo-root {repo_root}"
+    try:
+        proc = subprocess.run(
+            cmd, cwd=repo_root, capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if proc.returncode == 0:
+        return None
+    if proc.returncode == 3:
+        return (
+            f"check-job-spec couldn't read the paperwork for {ident} (exit "
+            f"3): {proc.stderr.strip()}. An infra failure isn't evidence the "
+            f"paperwork is sound—fix whatever check-job-spec choked on, then "
+            f"reproduce with: {reproduce}"
+        )
+    detail = proc.stderr.strip() or f"check-job-spec exited {proc.returncode}"
+    return (
+        f"{detail} Fix that before spending an opus auditor on a defect a "
+        f"script already proved. Reproduce with: {reproduce}"
+    )
 
 
 def main(data):
@@ -139,6 +187,9 @@ def main(data):
                 "Audit-ID (CON-audit or DEC-audit). Workers and checkers take "
                 "a Task-ID."
             )
+        job_spec_msg = _job_spec_block(ident)
+        if job_spec_msg:
+            return _lib.block(job_spec_msg)
         _log(raw, ident, override or _lib.DEFAULT_MODEL[agent])
         return 0
 

@@ -19,6 +19,16 @@ Deterministic checks route to checker-deterministic (haiku); judgment checks
 route to checker-judgment (opus). A scoped-diff clause ("touch only these
 paths") has a standard script—don't hand-roll it as judgment prose:
 .agent-guild/scripts/check-diff-scope.py <allowed>... [--ignore <path>].
+
+Those two are the whole list. A shell pipeline written straight into the check
+is a third form nothing verifies, so hand it to the sanctioned runner instead:
+check-build.sh 'one; two; exit $((a|b))'. That is still the first form, and
+check-job-spec.py shell-parses whatever you pass it.
+
+When a clause names N things, list them instead of spreading them across a
+sentence. check-job-spec.py can compare a count against a list. It cannot
+compare one against prose, and #117 spent an audit round on a clause that read
+"five files" above six of them.
 -->
 
 ## Clauses

@@ -259,6 +259,70 @@ with tempfile.TemporaryDirectory() as d:
 # proof this side stays green. T-003.md:13 in particular wraps a bespoke
 # one-liner this way and DEC-r4 passed it.
 
+
+def preamble_task(preamble_line):
+    return f"""---
+id: T-001
+title: Preamble fixture
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  {preamble_line}
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: []
+escalations: []
+artifacts:
+  - out.txt
+---
+
+## Spec excerpt
+
+Fixture body.
+"""
+
+
+# A #132 adversarial finding: R4's preamble scan used to fire on ANY
+# mention of a script path ahead of a C-N: segment, not just one shaped
+# like an invocation—blocking a check_method that merely names a suite for
+# context (T-003's real preamble does exactly this: "The suite lives in
+# .agent-guild/scripts/test_ledger_append.py. Run these three commands...").
+print("R4: bare script mention in the preamble is not the #121 evasion")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+    write_lines(
+        os.path.join(state, "tasks", "T-001.md"),
+        preamble_task(
+            "The suite lives in .agent-guild/scripts/test_thing.py. Run these commands in order."
+        ).splitlines(),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("bare mention, not invocation-shaped: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# The evasion itself has to stay caught: a preamble that OPENS with the
+# script path reads as a command line, not prose naming it for context.
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+    write_lines(
+        os.path.join(state, "tasks", "T-001.md"),
+        preamble_task(
+            ".agent-guild/scripts/sneaky.sh --all handles everything, so nothing below matters."
+        ).splitlines(),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("invocation-shaped preamble: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("invocation-shaped preamble: R4 named", rule_hit(err, "R4"), f"err={err!r}")
+
 # --------------------------------------------- corpus: baseline + mutations
 if not os.path.isdir(ARCHIVE_DIR):
     print(f"note: corpus archive not found at {ARCHIVE_DIR} — skipping corpus-based "
@@ -398,6 +462,84 @@ else:
                 check("M6 count disagrees across artifacts: exit 1", rc == 1, f"rc={rc} err={err}")
                 check("M6: R12 named", rule_hit(err, "R12"), f"err={err!r}")
                 check("M6: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # ------------------------------------------- P1 (R2, #132 adversarial)
+        # An unrelated code aside sitting earlier in the SAME region used to
+        # become the anchor for every citation in it, regardless of which
+        # sentence either one was in—so a totally unrelated snippet could
+        # veto a citation it has nothing to do with. T-001's real citation
+        # (compose-brief.py:64, quoting the quote-stripping line) must stay
+        # correct after the aside is inserted ahead of it.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-001.md"),
+                "You need only `ref`.",
+                "A totally unrelated aside: `for line in sorted(paths, key=len): pass` is how "
+                "we iterate. You need only `ref`.",
+                "P1",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("P1 unrelated code span leaves the real citation alone: exit 0", rc == 0, f"rc={rc} err={err}")
+
+        # ------------------------------------------- P2 (R9, #132 adversarial)
+        # The veto list used to fire on "not"/"no"/etc. ANYWHERE in the
+        # sentence, so a genuine violation phrased with the negation next to
+        # something OTHER than "pass" read as vetoed. This is arguably the
+        # most natural way to write the defect R9 exists to catch.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-007.md"),
+                "On C-6 or C-9, an absent fact is a FAIL, never a pass carrying a finding.",
+                "If a named fact is not present, pass this task and file the gap as a major finding.",
+                "P2",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("P2 negation not governing pass no longer vetoes: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("P2: R9 named", rule_hit(err, "R9"), f"err={err!r}")
+                check("P2: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # ------------------------------------------ P3 (R10, #132 adversarial)
+        # A number before a colon that isn't a count of the following list—
+        # an issue id, here—used to be compared against the list length
+        # anyway, deadlocking a job on a coincidence. T-006's real, correct
+        # "three findings" must stay silent with an issue number added.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-006.md"),
+                "record three findings",
+                "record three findings, filed against issue 27,",
+                "P3",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("P3 issue number beside a correct count: exit 0", rc == 0, f"rc={rc} err={err}")
+
+        # ------------------------------------------ P4 (R10, #132 adversarial)
+        # Only the LAST number on the line used to be checked, so a wrong
+        # count word earlier on the line hid behind an unrelated number that
+        # happened to agree with the list by coincidence.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-006.md"),
+                "record three findings",
+                "record four findings, cross-checked against 3 sources",
+                "P4",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("P4 wrong early count no longer hidden by a coincidental match: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("P4: R10 named", rule_hit(err, "R10"), f"err={err!r}")
+                check("P4: no traceback", "Traceback" not in err, f"err={err!r}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

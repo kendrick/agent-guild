@@ -85,6 +85,20 @@ def _load_module(name, filename):
     return module
 
 
+# Loaded at module scope, not just inside main(), so `import check_job_spec;
+# rule_R9(ctx)` works without going through the CLI entrypoint first—main()
+# still does its own load (below) wrapped in a try/except that turns a real
+# import failure into the documented exit 3, so the CLI's error message
+# doesn't regress; this top-level load just means R9 has a real value to
+# read even when nothing has called main() yet. validate-verdict.py has no
+# `if __name__ == "__main__":`-gated side effects, so importing it here
+# costs nothing beyond the one-time module exec.
+try:
+    DEFECT_SEVERITIES = _load_module("validate_verdict_module_scope", "validate-verdict.py").DEFECT_SEVERITIES
+except Exception:
+    DEFECT_SEVERITIES = ()
+
+
 # ---------------------------------------------------------------------------
 # Frontmatter parsing: the base parser plus the two extensions the plan
 # calls for.
@@ -335,6 +349,31 @@ def scoped(text):
     return _blank(HTML_COMMENT_RE, _blank(FENCE_RE, text))
 
 
+# Sentence splitting, shared by R2 (anchor-span proximity), R9 (verdict
+# contradiction), and R12' (cross-artifact count)—defined once up here
+# since R2 needs it below.
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def sentences(text):
+    return [s.strip() for s in SENTENCE_SPLIT_RE.split(text) if s.strip()]
+
+
+def sentence_bounds(text, offset):
+    """(start, end) of the sentence in `text` that contains `offset`, using
+    the same split points as `sentences()`—so "the same sentence" means
+    what a reader would call the same sentence, not an arbitrary character
+    window."""
+    start = 0
+    end = len(text)
+    for m in SENTENCE_SPLIT_RE.finditer(text):
+        if m.start() >= offset:
+            end = m.start()
+            break
+        start = m.end()
+    return start, end
+
+
 # ---------------------------------------------------------------------------
 # R1 / R2 / R3: citations.
 # ---------------------------------------------------------------------------
@@ -352,9 +391,13 @@ SETEXT_UNDERLINE_RE = re.compile(r"^(=+|-+)\s*$")
 # excerpt of real code rather than a path fragment: T-001.md:57 alone carries
 # five backtick spans, and the 3-character `` `ref` `` one matches 18 lines
 # of check-provenance.py that have nothing to do with the cited line. Length
-# 24 plus "contains a space" leaves exactly one span standing in the whole
-# corpus—the 52-char quote-stripping excerpt that's the actual point of
-# that citation. Without this filter R2 fails the corpus it has to pass.
+# 24 plus "contains a space" cuts the corpus-wide count from 80 backtick
+# spans to 14 survivors (measured against the real #117 archive)—not down
+# to one, the way an earlier version of this comment claimed; what the
+# filter buys is ruling out path fragments and short identifiers, not
+# uniqueness. Proximity (below) is what narrows a citation down to the
+# right one of the 14. Without the length/space filter at all, R2 fails
+# the corpus it has to pass.
 def anchor_spans(text):
     spans = []
     for m in re.finditer(r"`([^`]*)`", text):
@@ -362,6 +405,33 @@ def anchor_spans(text):
         if len(content) >= 24 and " " in content:
             spans.append((m.start(), m.end(), content))
     return spans
+
+
+def nearest_anchor(text, citation_offset, exclude):
+    """The anchor-span content closest to `citation_offset`, scoped to the
+    citation's own sentence—None if nothing qualifies. Distance is
+    absolute: an anchor can sit either before its citation ("exactly as
+    `...` already do, see `compose-brief.py:64`") or after it ("see
+    `helper.py:6` for the reference implementation (`...`)"), and both
+    shapes appear in the corpus this rule has to pass.
+
+    #132's adversarial review found the BLOCKER this guards against:
+    `candidates[0]` used to mean "the first anchor span anywhere in the
+    region," so one unrelated code excerpt early in a check_method could
+    veto every later, correct citation in that same region. Scoping to the
+    citation's sentence and picking the nearest span by distance is what
+    keeps both real shapes working while refusing to let a span from a
+    different sentence stand in for either.
+    """
+    sent_start, sent_end = sentence_bounds(text, citation_offset)
+    best_dist, best_content = None, None
+    for start, end, content in anchor_spans(text):
+        if content == exclude or start < sent_start or end > sent_end:
+            continue
+        dist = start - citation_offset if start >= citation_offset else citation_offset - end
+        if best_dist is None or dist < best_dist:
+            best_dist, best_content = dist, content
+    return best_content
 
 
 def is_excluded_citation_path(path):
@@ -429,12 +499,15 @@ def check_citation_rules(regions, repo_root, want_rule):
             if want_rule == "R2":
                 # The citation's own backtick-wrapped form never counts as
                 # its own anchor—excluded so a long relative path can't
-                # accidentally "confirm" itself.
-                candidates = [c for _, _, c in anchor_spans(text) if c != f"{path}:{lineno}"]
-                if not candidates:
-                    continue  # nothing to check this citation against
+                # accidentally "confirm" itself. The anchor itself is
+                # scoped to this citation's own sentence and picked by
+                # proximity (see nearest_anchor)—a region can carry more
+                # than one citation, or an unrelated code aside, and
+                # neither may stand in for a citation it isn't next to.
+                anchor = nearest_anchor(text, offset, f"{path}:{lineno}")
+                if anchor is None:
+                    continue  # nothing nearby to check this citation against
                 target_stripped = " ".join(target_line.split())
-                anchor = candidates[0]
                 anchor_norm = " ".join(anchor.split())
                 if anchor_norm in target_stripped:
                     continue
@@ -451,10 +524,13 @@ def check_citation_rules(regions, repo_root, want_rule):
                         f"R2 citation-anchor: {label}:{src_line} cites {path}:{lineno} "
                         f"but the quoted code is at {path}:{actual_line}"
                     )
-                return (
-                    f"R2 citation-anchor: {label}:{src_line} cites {path}:{lineno} "
-                    f"but the quoted code {anchor!r} does not appear anywhere in {path}"
-                )
+                # The anchor text is absent from the WHOLE target file, not
+                # just the cited line. That's evidence this span isn't this
+                # citation's anchor at all—an unrelated excerpt sitting in
+                # the same sentence—not evidence the citation is wrong; a
+                # real drift case always leaves the quoted code findable
+                # somewhere in the file it was quoted from.
+                continue
     return None
 
 
@@ -505,9 +581,23 @@ def classify_check_text(text):
 
 # The #121 evasion: word a check_method's free-text preamble to *describe*
 # running a script, ahead of the real `C-N:` segments, so nothing keyed to a
-# clause ever has to name it. This catches any script-shaped token sitting
-# outside a segment, so the evasion has nowhere left to hide it.
+# clause ever has to name it. A bare mention for context ("the suite lives
+# in X.py") is common and harmless on its own—T-003's real preamble names
+# its own suite this way to orient the reader before the numbered
+# commands—so what has to stay caught is the INVOCATION shape: the token
+# opens the preamble outright (read as a command line, not prose), or sits
+# right before something command-arg shaped (a quote or a flag).
 SCRIPT_TOKEN_RE = re.compile(r"\S+\.(sh|py|mjs)\b")
+INVOCATION_TAIL_RE = re.compile(r"^\s*(['\"]|-\S)")
+
+
+def _invocation_shaped_script_mention(preamble):
+    for m in SCRIPT_TOKEN_RE.finditer(preamble):
+        if preamble[:m.start()].strip() == "":
+            return m  # opens the preamble outright
+        if INVOCATION_TAIL_RE.match(preamble[m.end():]):
+            return m  # followed by a quote or a flag, not just prose
+    return None
 
 
 def rule_R4(ctx, audit_id):
@@ -523,7 +613,7 @@ def rule_R4(ctx, audit_id):
     for task in ctx.tasks:
         text = scoped(task.check_method_text)
         preamble, segments = find_segments(text)
-        m = SCRIPT_TOKEN_RE.search(preamble)
+        m = _invocation_shaped_script_mention(preamble)
         if m:
             line = task.line_for_check_method_offset(m.start())
             return (
@@ -767,22 +857,45 @@ def citation_regions(ctx):
 PASS_TOKEN_RE = re.compile(r"\b(pass|passes|passing)\b", re.I)
 DEFECT_TOKEN_RE = re.compile(r"\b(major|blocker|defect|finding|gap)\b", re.I)
 
-# The veto list IS the rule. Without it, T-007's own fix for the defect R9
-# exists to catch—"an absent fact is a FAIL, never a pass carrying a
-# finding"—reads as an instance of it: "pass" and "finding" sit five words
-# apart. Every entry below is a word the corpus actually uses to negate a
-# pass+defect co-occurrence; add a veto token and a real instruction reads
-# as clean, drop one and a fix like this one reads as a violation of itself.
+# The veto list is still what separates a real violation from the correct
+# instruction that must exist to describe it—T-007's own C-9 text, "an
+# absent fact is a FAIL, never a pass carrying a finding," reads as an
+# instance of the very defect R9 exists to catch if all you check is
+# "pass" and a defect word somewhere in the same sentence.
+#
+# #132's adversarial review found the false negative this produced: the
+# veto used to fire on any of these words ANYWHERE in the sentence, so
+# "If a named fact is not present, pass this task and file the gap as a
+# major finding"—arguably the most natural phrasing of the exact defect
+# this rule exists to catch—read as vetoed, because "not" happens to sit
+# a few words upstream of an unrelated "present." The fix: a veto token
+# only counts if it directly GOVERNS the pass token—sits right before it,
+# with at most a determiner or two between ("never a pass", "refuses a
+# pass", "would accept a pass," which are T-007's own three real
+# instances)—rather than merely occurring somewhere in the same sentence.
+# "not present, pass" no longer qualifies: the comma between them is what
+# a person reads as the boundary between "not" governing "present" and
+# "pass" starting a new clause, and requiring the veto and pass to be
+# joined only by bare words (no comma reachable through `\s+\w+`) encodes
+# that same boundary without a separate clause-splitter.
+#
+# Known residual false positive, left in deliberately: "the checker passes
+# this clause only once every major finding it raised has been resolved
+# upstream" still fires, because its qualifier follows the pass token
+# instead of governing it. Widening the veto to look forward as well
+# silences T-007's three real instances too, so the choice was one
+# unlikely false positive against re-blinding the rule. If a real job hits
+# it, rephrase the check_method rather than widening this—every widening
+# here costs a defect the rule used to catch.
 VETO_TOKENS = (
     "never", "not", "no", "nothing", "refuses", "rejects", "forbid",
     "anyway", "instead of", "rather than", "would accept", "cannot", "fails",
 )
-VETO_RE = re.compile(r"\b(" + "|".join(re.escape(t) for t in VETO_TOKENS) + r")", re.I)
-SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def sentences(text):
-    return [s.strip() for s in SENTENCE_SPLIT_RE.split(text) if s.strip()]
+VETO_GOVERNS_PASS_RE = re.compile(
+    r"\b(" + "|".join(re.escape(t) for t in VETO_TOKENS) + r")\b"
+    r"(?:\s+\w+){0,2}\s+(?:pass|passes|passing)\b",
+    re.I,
+)
 
 
 def r9_fires(sentence):
@@ -792,7 +905,7 @@ def r9_fires(sentence):
     return bool(
         PASS_TOKEN_RE.search(sentence)
         and DEFECT_TOKEN_RE.search(sentence)
-        and not VETO_RE.search(sentence)
+        and not VETO_GOVERNS_PASS_RE.search(sentence)
     )
 
 
@@ -866,6 +979,40 @@ def is_real_number_match(text, match):
     return prev_word not in _ONE_IDIOM_GUARD
 
 
+# A number can sit on a list-introducing line without describing the list
+# at all: "the archive for issue 27:" (an id), "see version 2:" (a
+# version), "2026-08-08:" (a date). None of those are counts, so a bare
+# `#`, "issue", "version", or "v" immediately before the number—or a
+# hyphen touching either side, the shape a date or a version range takes
+# once NUMBER_TOKEN_RE has split it into separate digit runs—rules a
+# candidate out before it's ever compared against the list length.
+_COUNT_EXCLUDE_WORDS = ("issue", "version", "v")
+
+
+def _is_excluded_count_context(text, match):
+    start, end = match.start(), match.end()
+    if start > 0 and text[start - 1] in "#-":
+        return True
+    if end < len(text) and text[end] == "-":
+        return True
+    before = text[:start].rstrip()
+    prev_word = before.rsplit(None, 1)[-1].lower().strip(".,;:()") if before.split() else ""
+    return prev_word in _COUNT_EXCLUDE_WORDS
+
+
+# The other half of the fix: a real count word sits right before the noun
+# it's counting ("four findings", "3 archives"), so require that shape
+# instead of just grabbing whichever number happens to be last on the
+# line—T-006's "for issue 27" repro showed the last number is often
+# something else's id, not the list's count, and "record four findings,
+# each verified against all 3 archives" showed the reverse: the true count
+# ("four") sits earlier, with an unrelated number ("3", agreeing with the
+# list by coincidence) sitting last.
+def _governs_plural_noun(text, match):
+    tail = text[match.end():].lstrip()
+    return re.match(r"[A-Za-z][A-Za-z-]*s\b", tail) is not None
+
+
 LIST_ITEM_RE = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+")
 FENCE_LINE_RE = re.compile(r"^\s*```")
 BLOCKQUOTE_LINE_RE = re.compile(r"^\s*>")
@@ -921,9 +1068,14 @@ def find_r10_violation(text, line_of, label):
                     if indent == top_indent:
                         count += 1
                     k += 1
-                matches = [m for m in NUMBER_TOKEN_RE.finditer(stripped) if is_real_number_match(stripped, m)]
-                if matches:
-                    tok = matches[-1].group(1)
+                candidates = [
+                    m for m in NUMBER_TOKEN_RE.finditer(stripped)
+                    if is_real_number_match(stripped, m)
+                    and not _is_excluded_count_context(stripped, m)
+                    and _governs_plural_noun(stripped, m)
+                ]
+                for m in candidates:
+                    tok = m.group(1)
                     val = number_value(tok)
                     if val is not None and val != count:
                         line = line_of(offsets[i])
@@ -993,6 +1145,59 @@ def nearest_preceding_number(text, offset):
     return None
 
 
+# A pair can only reach the match.size >= 60 floor below if it shares a
+# common substring at least that long, which necessarily contains a run of
+# NGRAM_N consecutive characters identical in both stripped sentences—so
+# intersecting each pair's NGRAM_N-character shingle sets can never drop a
+# pair that would have fired; it only skips pairs provably capped below 60.
+# That's what keeps most pairs out of the SequenceMatcher step entirely.
+# Measured on the real #117 corpus (7 tasks, 90 entries after the len>=20
+# filter): the unindexed sweep ran 2.88s; indexed, 0.22s—about 13x, and
+# candidate-pair count stays well below the O(n^2) ceiling on realistically
+# varied prose (a 40-task synthetic corpus of hand-varied sentences: 0.28s;
+# dispatch-guard's 15s timeout would have made the unindexed version a
+# silent no-op somewhere around a 20-task job). The one case that still
+# scales closer to quadratic is highly templated prose—many tasks built
+# from the same handful of sentence shapes, sharing >=16-char boilerplate
+# runs regardless of subject—which is a stress case this comment names
+# rather than a realistic decomposition; even there, 40 templated tasks
+# ran in 0.28s and 160 in 3.8s, both comfortably inside a single check.
+NGRAM_N = 16
+
+
+def _shingles(s, n=NGRAM_N):
+    if len(s) < n:
+        return set()
+    return {s[i:i + n] for i in range(len(s) - n + 1)}
+
+
+def _candidate_pairs(shingle_sets, keys):
+    """[(i, j)] with i<j, restricted to entries sharing at least one
+    shingle AND belonging to different artifacts—both conditions the
+    O(n^2) loop used to check per-pair, checked here while the index is
+    built so a same-artifact or shingle-less pair never reaches the
+    expensive SequenceMatcher step at all."""
+    buckets = {}
+    pairs = []
+    seen = set()
+    for i, grams in enumerate(shingle_sets):
+        partners = set()
+        for g in grams:
+            bucket = buckets.get(g)
+            if bucket:
+                partners.update(bucket)
+            buckets.setdefault(g, []).append(i)
+        for j in partners:
+            if keys[i] == keys[j]:
+                continue
+            pair = (j, i) if j < i else (i, j)
+            if pair not in seen:
+                seen.add(pair)
+                pairs.append(pair)
+    pairs.sort()
+    return pairs
+
+
 def rule_R12(ctx):
     regions = gather_prose_regions(ctx)
     entries = []  # (region_index, sentence_text, start_offset_in_region_text)
@@ -1004,40 +1209,44 @@ def rule_R12(ctx):
             if start >= 0:
                 entries.append((ri, s, start))
 
-    for i, (ri_a, sa, off_a) in enumerate(entries):
-        akey_a = regions[ri_a][0]
-        ssa, map_a = strip_numbers_with_map(sa)
-        for ri_b, sb, off_b in entries[i + 1:]:
-            akey_b = regions[ri_b][0]
-            if akey_a == akey_b:
-                continue
-            ssb, map_b = strip_numbers_with_map(sb)
-            match = difflib.SequenceMatcher(None, ssa, ssb, autojunk=False).find_longest_match(
-                0, len(ssa), 0, len(ssb)
-            )
-            # 60 is a measured floor, not a round number: this corpus's own
-            # noise ceiling is 38 (two sentences about DIFFERENT counts that
-            # happen to share "record absolute artifact paths under"), and
-            # its one real duplicated-count pair shares 93. 60 sits with
-            # better than 2x margin over the noise and well under the signal
-            #—SequenceMatcher.ratio() has no such gap anywhere (see the
-            # module docstring's design notes for the numbers that ruled it out).
-            if match.size < 60:
-                continue
-            orig_a = map_a[match.a] if match.a < len(map_a) else len(sa)
-            orig_b = map_b[match.b] if match.b < len(map_b) else len(sb)
-            num_a = nearest_preceding_number(sa, orig_a)
-            num_b = nearest_preceding_number(sb, orig_b)
-            if num_a is None or num_b is None or num_a == num_b:
-                continue
-            label_a, label_b = regions[ri_a][1], regions[ri_b][1]
-            line_a = regions[ri_a][3](off_a + orig_a)
-            line_b = regions[ri_b][3](off_b + orig_b)
-            excerpt = ssa[match.a:match.a + match.size].strip()
-            return (
-                f"R12' cross-artifact-count: {label_a}:{line_a} says {num_a} where "
-                f"{label_b}:{line_b} says {num_b} for the same restated fact ({excerpt!r})"
-            )
+    # Stripped once per entry (was rebuilt inside the O(n^2) inner loop on
+    # every pair before), and again used to build the shingle index that
+    # replaces the full pairwise sweep below.
+    stripped = [strip_numbers_with_map(s) for _, s, _ in entries]
+    keys = [regions[ri][0] for ri, _, _ in entries]
+    shingle_sets = [_shingles(ss) for ss, _ in stripped]
+
+    for i, j in _candidate_pairs(shingle_sets, keys):
+        ri_a, sa, off_a = entries[i]
+        ri_b, sb, off_b = entries[j]
+        ssa, map_a = stripped[i]
+        ssb, map_b = stripped[j]
+        match = difflib.SequenceMatcher(None, ssa, ssb, autojunk=False).find_longest_match(
+            0, len(ssa), 0, len(ssb)
+        )
+        # 60 is a measured floor, not a round number: this corpus's own
+        # noise ceiling is 38 (two sentences about DIFFERENT counts that
+        # happen to share "record absolute artifact paths under"), and
+        # its one real duplicated-count pair shares 93. 60 sits with
+        # better than 2x margin over the noise and well under the signal
+        #—SequenceMatcher.ratio() has no such gap anywhere (see the
+        # module docstring's design notes for the numbers that ruled it out).
+        if match.size < 60:
+            continue
+        orig_a = map_a[match.a] if match.a < len(map_a) else len(sa)
+        orig_b = map_b[match.b] if match.b < len(map_b) else len(sb)
+        num_a = nearest_preceding_number(sa, orig_a)
+        num_b = nearest_preceding_number(sb, orig_b)
+        if num_a is None or num_b is None or num_a == num_b:
+            continue
+        label_a, label_b = regions[ri_a][1], regions[ri_b][1]
+        line_a = regions[ri_a][3](off_a + orig_a)
+        line_b = regions[ri_b][3](off_b + orig_b)
+        excerpt = ssa[match.a:match.a + match.size].strip()
+        return (
+            f"R12' cross-artifact-count: {label_a}:{line_a} says {num_a} where "
+            f"{label_b}:{line_b} says {num_b} for the same restated fact ({excerpt!r})"
+        )
     return None
 
 

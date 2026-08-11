@@ -43,6 +43,7 @@ jobs:
           python3 scripts/test_build_plugin.py
           python3 scripts/test_make_changelog.py
           python3 .agent-guild/scripts/test_check_diff_scope.py
+          python3 .agent-guild/scripts/test_check_job_spec.py
           python3 .agent-guild/scripts/test_claude_courier.py
           python3 .agent-guild/scripts/test_compose_brief.py
           python3 .agent-guild/scripts/test_ledger_append.py

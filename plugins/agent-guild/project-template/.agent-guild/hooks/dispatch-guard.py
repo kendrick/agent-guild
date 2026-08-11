@@ -278,7 +278,19 @@ def main(data):
     effective_model = override or _lib.DEFAULT_MODEL[agent]
 
     if agent in _lib.CHECKER_AGENTS:
-        if status != "checking":
+        is_courier = agent == "checker-courier"
+        # A debt only relaxes the status check for the courier itself, and
+        # only when one is actually outstanding on this task—`complete` and
+        # `rework` are the two statuses second_opinion_debts() finds a task
+        # parked at with a crossing still owed, so this is what lets a debt
+        # survive a FAIL verdict rather than clearing on the next status
+        # change. checker-deterministic and checker-judgment never set this,
+        # so their branch below is untouched: they still require `checking`
+        # no matter what the debt ledger says.
+        owes_debt = is_courier and any(
+            d_tid == tid for d_tid, _stem, _lane in _lib.second_opinion_debts(data)
+        )
+        if status != "checking" and not owes_debt:
             return _lib.block(
                 f"{tid} is '{status}', not 'checking'. Set status to checking "
                 "and update the task before dispatching its checker."
@@ -289,6 +301,16 @@ def main(data):
         # what the second-opinion contract needs—checker-courier below rides
         # this same allowance to run alongside the checker of record rather
         # than in place of it.
+        #
+        # The courier is explicitly not a second gate—CLAUDE.md's dual-check
+        # section says the standard-stem verdict alone decides complete or
+        # rework—so its dispatch legality doesn't need to track the task's
+        # gate status the way an in-family checker's does. A debt is owed
+        # precisely because nothing reopened the task to collect it, so
+        # requiring `checking` here would make the debt permanently
+        # uncollectable on any task the orchestrator already moved on from.
+        # Every OTHER courier condition below—model override, workspace
+        # access, exhausted lane—still applies unconditionally.
         if agent == "checker-courier":
             if override:
                 return _lib.block(

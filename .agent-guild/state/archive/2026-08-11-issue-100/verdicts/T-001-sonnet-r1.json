@@ -1,0 +1,42 @@
+{
+  "task_id": "T-001",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "The r0 blocker is fixed on the narrow reading the orchestrator pinned: the unreadable-record branch now sits below routes 1-4, so an unparseable verdict of record is still discharged by a lane sibling, the host's quota sentinel, or a lane-matched waiver, and owes only when route 5 alone is what it would have needed.",
+      "evidence": ".agent-guild/hooks/_lib.py:236-268 now orders the checks `if any(f\"{stem}-{l}.json\" in names for l in COURIER_LANES): continue` / `if lane_exhausted(lane): continue` / `if os.path.exists(...\"{stem}-{lane}.denied\"): continue` BEFORE `record = None; try: json.load(...)` and the `if not isinstance(record, dict)` branch, whose comment now reads `route 5 can't be established, so it owes (routes 1-4 already had their shot above)`. The four fixtures that failed at r0 all return `[]` now: unparseable `T-001-sonnet-r0.json` plus a `-codex.json` sibling -> `[]`; plus a `-claude.json` sibling -> `[]`; plus `state/exhausted/codex` -> `[]`; plus `T-001-sonnet-r0-codex.denied` -> `[]`. The same unparseable record with no route present still owes: `[('T-001', 'T-001-sonnet-r0', 'codex')]`."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "The rest of C-2 holds on re-derivation, and the reordering introduced no regression in lane pinning, route 5 reachability, or the never-raise contract.",
+      "evidence": "Hand-built fixture harness against scratch `CLAUDE_PROJECT_DIR` projects, no test suite read: 26/26 expectations met, zero mismatches. Five discharges alone: codex sibling `[]`; claude sibling `[]`; `exhausted/codex` `[]`; `-codex.denied` `[]`; record `\"verdict\": \"blocked\"` `[]`. Bare stem owes `[('T-001','T-001-sonnet-r0','codex')]`. Host-lane matrix, exactly one sentinel present at a time and removed before the next: `data={\"hook_host\":\"codex\"}` + `exhausted/claude` -> `[]`, + `exhausted/codex` -> `[('T-001','T-001-sonnet-r0','claude')]`; `data={}` + `exhausted/codex` -> `[]`, + `exhausted/claude` -> `[('T-001','T-001-sonnet-r0','codex')]`. Waiver lane pinning: a `-claude.denied` leaves a Claude host owing and clears a Codex host. Reorder-specific probes: an unreadable lane SIBLING still discharges (route 1 is existence-only) -> `[]`; a `blocked` record still discharges now that route 5 is evaluated last -> `[]`; a readable non-blocked record with no route owes; an unreadable record plus a WRONG-lane sentinel still owes on a Claude host `[('T-001','T-001-sonnet-r0','codex')]` while the right-lane sentinel clears it on a Codex host. Stem pattern `_RECORD_STEM_RE = ^(T-\\d+)-[A-Za-z0-9]+-r(\\d+)$` (_lib.py:192): a lone `T-001-sonnet-r0-codex.json` -> `[]`; `CON-audit-r0.md`, `CON-audit-r0.json`, `DEC-audit-r0.json`, `DEC-audit-r2.json` -> `[]`; `T-001-sonnet-r1` owes while `-r0` is discharged. Never-raise: missing `verdicts/` `[]`, zero-byte `.json` a debt, `{not json` a debt, a JSON-array record a debt, and `second_opinion_debts()` with no argument defaults to the codex lane. Return shape is the pinned 3-tuple `(task_id, stem, lane)`, e.g. `[('T-007', 'T-007-opus-r2', 'codex')]`. `COURIER_LANES = ('codex', 'claude')` at _lib.py:29, consumed at _lib.py:236."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "All three consumer suites run and combine green after the rework, with no drift between the build source and the three generated trees.",
+      "evidence": "`.agent-guild/scripts/check-build.sh 'python3 .agent-guild/hooks/test_hooks.py; a=$?; python3 .agent-guild/hooks/test_codex_adapter.py; b=$?; python3 scripts/build-plugin.py --check; c=$?; exit $((a|b|c))'` -> `check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260811T033203.log)`, tail showing `OK` for the codex adapter suite, `✔ Validation passed` for the plugin manifest, and `OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds; the Claude plugin passes strict validation`. Independently, `diff -q` reports `.agent-guild/hooks/_lib.py` identical to `plugin/hooks/_lib.py`, `plugins/agent-guild/hooks/_lib.py`, and `plugins/agent-guild/project-template/.agent-guild/hooks/_lib.py`, so the rework was regenerated rather than hand-edited into the mirrors."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "The working tree still changes only allowlisted paths after the rework, with `scripts/classify-crossings.py` left alone as the non-goal requires.",
+      "evidence": "`.agent-guild/scripts/check-diff-scope.py .agent-guild/hooks/_lib.py .agent-guild/hooks/stop-gate.py .agent-guild/hooks/dispatch-guard.py .agent-guild/hooks/test_hooks.py .agent-guild/CLAUDE.md _working-memory/ plugin/ plugins/ .claude/` -> `OK: 4 path(s) in scope`, exit 0. `git status --porcelain` lists exactly ` M .agent-guild/hooks/_lib.py`, ` M plugin/hooks/_lib.py`, ` M plugins/agent-guild/hooks/_lib.py`, ` M plugins/agent-guild/project-template/.agent-guild/hooks/_lib.py` and nothing else, so the check read a populated tree rather than one emptied by a commit."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The commit-message section names T-001, leads with the WHY, is free of attribution trailers and mid-paragraph breaks, passes the humanizer audit under C-8's three overrides, and the stale claim flagged at r0 has been corrected to describe the narrow reading the code now implements.",
+      "evidence": ".agent-guild/state/commit-message.md:1 `## T-001`; :5 opens on the WHY, `The dual-check regime says every checker of record gets a courier crossing, but nothing checked that it happened: a Claude host ran a task to `complete` on 2026-08-02 with no crossing, and no gate objected.` The r0 stale clause is gone, replaced by `A record it can't parse only rules out that last route—the lane-sibling, sentinel, and waiver routes still discharge it, because a lane sibling is exactly the file a courier writes, and refusing to check for one before declaring a record corrupt would leave a debt no future dispatch could ever clear.` — which matches the re-derived behavior above. Line-length scan: body paragraphs are single physical lines of 787, 241, and 131 characters (lines 5, 7, 9) separated by blank lines, so no break falls inside a paragraph. Scans for `Co-Auth`, `Co-auth`, `Generated with`, `Signed-off-by` returned `[]`; for curly quotes and en dashes, `[]`. Humanizer audit against ~/.claude/skills/humanizer/SKILL.md with C-8's overrides: the single em dash is unspaced and chains directly to text on both sides (`raw.count(\"—\") == 1`, `raw.count(\" — \") == 0`), satisfying the house override rather than §14; `the lane-sibling, sentinel, and waiver routes` is a true three (routes 1/2 collapse to one file shape, plus routes 3 and 4), not padding, so the §10 override applies; no watch-list vocabulary (§7), no promotional or significance inflation (§1, §4), no negative parallelism (§9), no boldface or emoji (§15, §18); §30 does not apply to an inherently version-scoped commit message. The r0 §3 participle pileup was dissolved by the rewrite into a standalone sentence."
+    }
+  ],
+  "timestamp": "2026-08-11T08:33:05Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

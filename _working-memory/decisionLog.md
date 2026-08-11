@@ -14,6 +14,20 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-11: The Second Opinion Is A Debt On Disk, Not A Step Someone Remembers
+
+**Source:** #100, built as a guild job under the gates it was changing
+
+**Context:** The dual-check regime has been contract since #34 opened: every checker of record gets a courier crossing. Nothing ever read `state/verdicts/` to confirm one landed. On the two live matrices of 2026-08-02, Codex dispatched a courier after every checker while Claude ran a task to `complete` without one, and no gate objected to either—so the corpus #34 will rule on grew or didn't depending on whether an orchestrator remembered.
+
+**Decision:** Make the obligation a predicate over files. `second_opinion_debts()` in `_lib.py` scans `state/verdicts/` for stems shaped `T-NNN-<tier>-r<N>.json` and reports each one still owing, per retry round, so a rework's `-r1` is its own debt rather than something the earlier round's crossing covers. Five routes discharge one: a `-codex` lane sibling, a `-claude` lane sibling, `state/exhausted/<lane>` for the lane `courier_lane(data)` returns and no other, a `…-<lane>.denied` waiver the orchestrator writes by hand, and a verdict of record that itself reads `blocked`. Pinning route 3 to this host's lane is what keeps a Codex host from discharging its debts off `exhausted/codex`, a sentinel its own lane would never produce. A record that can't be read or parsed owes, loudly—but only route 5 is foreclosed by that, since a lane sibling is the very file a courier writes, and refusing to look for one before declaring the record corrupt would strand a debt no dispatch could ever clear.
+
+Two gates read it. `stop-gate.py` computes debts before its open-task early exit, which is the whole point: that exit drops terminal tasks, and 2026-08-02's failure was a completed task with no crossing. Its block message names the missing lane-suffixed file and `checker-courier` as the dispatch that writes it, its `checking` next-move line says to dispatch the courier before completing rather than the generic "act on the verdict", and debts join the livelock digest so an `exhausted/<lane>` sentinel—which lives outside `verdicts/` and is invisible to the verdict listing—registers as progress instead of a third identical strike. `dispatch-guard.py` admits a courier on a debt-bearing task whatever its status, courier-only and debt-gated, because a debt exists precisely when nobody has reopened the task to collect it.
+
+**`blocked` is exempt, and not to save a call.** A verdict of record reading `blocked` means the in-family check never ran, so there is no judgment for a crossing to sit beside; a courier sent after it compares against nothing. The saved vendor call is a consequence of that, not the argument for it—if a blocked record carried a judgment, the crossing would be worth paying for.
+
+**Alternatives considered:** Leaving the regime prompt-only (rejected—2026-08-02 is the experiment, run twice, and it failed once). Requiring `status: checking` of the courier as well (rejected—a debt survives into `complete` and `rework`, so the status a courier would need is the one it can't have; the stop gate would demand a crossing the dispatch guard refuses and every job would end at `STALLED.md`). Treating an unreadable verdict of record as owing unconditionally (rejected—it creates a debt nothing can discharge, since a second courier writes a path that already exists).
+
 ## 2026-08-11: A Script Proves the Paperwork Before an Auditor Reads It
 
 **Source:** #132 and #121, shipped as PR #138 (squashed to `6570005`); follow-up filed as #139

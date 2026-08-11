@@ -1,0 +1,72 @@
+{
+  "task_id": "T-004",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "Every behavioral claim the rewritten dual-check section makes is true of the shipped hooks, re-derived by driving stop-gate.py as a process against scratch fixtures rather than by reading the prose against itself.",
+      "evidence": "Scratch project, complete task + uncrossed record: `CLAUDE_PROJECT_DIR=<scratch> python3 stop-gate.py <<< '{}'` -> rc=2, \"0 task(s) still open and 1 second opinion(s) outstanding... T-100: second opinion outstanding-dispatch checker-courier to write T-100-sonnet-r0-codex.json.\" (confirms \"counts the outstanding ones before it looks at open tasks at all\", \"a task you already moved to complete still holds your turn open\", and \"names the file that's missing and the dispatch that writes it\"; source stop-gate.py:122-124 above the `if not tasks and not debts` exit, stop-gate.py:173-177 composing `{stem}-{lane}.json`). Sibling absent -> \"  T-200 [checking] -> its checker of record has landed but the second opinion hasn't; dispatch checker-courier before completing.\"; with T-200-sonnet-r0-codex.json present the same line reverts to \"its checker is running or owes a verdict; act on the verdict (complete, or copy the diagnosis into rework).\" (stop-gate.py:37-45). T-200-sonnet-r0-claude.json alone, on this Claude host, also clears it -> confirms \"Either lane's suffix clears the debt\" (_lib.py:238 iterating COURIER_LANES). Fixture whose only file is a `\"verdict\":\"blocked\"` record -> rc=0; the identical fixture with `\"verdict\":\"pass\"` -> rc=2 naming T-300-sonnet-r0-codex.json, the positive control for \"a verdict of record that itself reads blocked owes no crossing at all\" (_lib.py:271-278). Per-round: with r0 crossed and r1 not, only \"T-300-sonnet-r1-codex.json\" is demanded, confirming \"-r0 and -r1 are separate obligations\"."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "The contract's dispatch-guard claims hold too: the widening is courier-only, debt-gated, at any status, with the model-override, sandbox, and exhausted-lane refusals intact.",
+      "evidence": "dispatch-guard.py driven as a process, same scratch project. checker-courier on T-400 (complete, uncrossed record) -> rc=0; checker-courier on T-402 (rework, uncrossed record) -> rc=0; checker-judgment on T-400 -> rc=2 \"T-400 is 'complete', not 'checking'.\"; checker-deterministic on T-400 -> rc=2, same message; checker-courier on T-401 (complete, no verdict, so no debt) -> rc=2, same message. With `model: opus` -> rc=2 \"carries a model override ('opus'). Drop the override\"; with \"workspace-write\" in the prompt -> rc=2 \"The lane is read-only by contract\"; on a checking task with state/exhausted/codex present -> rc=2 \"checker-courier's 'codex' lane is exhausted\". Source dispatch-guard.py:280-297 (`is_courier` gating `owes_debt`, `if status != \"checking\" and not owes_debt`) and 314-337."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "The state-map waiver entry and the lane trap it names match the predicate, and the two non-hook facts it rests on are supported by the sources it alludes to.",
+      "evidence": ".agent-guild/CLAUDE.md state map documents `T-NNN-<tier>-r<retries>-<lane>.denied`: who writes it (orchestrator, by hand), the one line that belongs in it, what it buys, and \"it is this host's lane, the same one exhausted/<lane> takes, because the predicate pins it\" - matched by _lib.py:248, which joins `f\"{stem}-{lane}.denied\"` for the single `lane = courier_lane(data)` and no other. The claim that auth failure, timeout, a missing CLI, and twice-malformed vendor output all land as a schema-conforming `blocked` verdict is guild-core/roles/checker-courier.md:28 verbatim (\"A second invalid response becomes a schema-conforming `blocked` second opinion... Authentication, missing CLI access, timeout, and other non-quota failures also become `blocked`\"). The #94 case is _working-memory/decisionLog.md:117 (\"The Claude package had been shipping six agents against Codex's nine since v0.5.0, missing `checker-courier`\")."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "The three mechanical confirmations all hold: decisionLog.md's diff is purely an addition, activeContext.md is at 20 lines, and conventions.md:15 no longer tells the reader to dispatch by hand.",
+      "evidence": "`git diff --numstat -- _working-memory/decisionLog.md` -> \"14 0\", hunk header `@@ -16,0 +17,14 @@`, so no existing line was touched (the file's own rule at decisionLog.md:3 is \"Append-only; newest entry on top\", and the entry is inserted at the top of the entry list). `wc -l _working-memory/activeContext.md` -> 20, against the flat ceiling at AGENTS.md:42 (\"Never let `activeContext.md` exceed 20 lines.\"). conventions.md:15 now reads \"Two gates enforce that regime (#100). `second_opinion_debts()` in `_lib.py` scans `state/verdicts/`...\"; `grep -n \"by hand on every task\\|Nothing enforces that regime\" _working-memory/conventions.md` -> no match. openQuestions.md:19 no longer carries the \"Second, nothing makes the second opinion dispatch at all (#100)\" caveat, and the deterministic-clause finding beside it survives verbatim apart from the lead-in the drop required."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "The three risk bullets evicted from activeContext.md to reach the ceiling are each recorded elsewhere in working memory, so nothing was destroyed; I recovered the pre-edit file from the session transcript rather than take the eviction on trust, since the file is gitignored and has no git baseline.",
+      "evidence": "Pre-edit copy (22 lines, 9 risk bullets) recovered from ~/.claude/projects/-Users-k-arnett-repos-agent-guild/49f9b405-...jsonl; diffed against the 20-line file on disk, the evicted three are: (1) \"A timed-out linter allows the dispatch. `state/log/gate-gaps.log` records it...\" -> _working-memory/dataContracts.md:77 (\"a missing script or a timeout allows the dispatch... A timeout appends to `state/log/gate-gaps.log`\"); (2) \"#34's headline measure may report tool access rather than model family...\" -> _working-memory/openQuestions.md:15 (\"Of 34 unique in-family findings, every classifiable one came from execution or repo-wide reading... it has to decide whether that measure is about vendors or about tool access\"); (3) \"Write-guard doesn't cover Bash; the orchestrator could bypass via shell redirect\" -> _working-memory/decisionLog.md:337 (\"Left open: the guard still ignores `Bash`, so the orchestrator could bypass it via shell redirection - tracked as a separate gap\"). The one added bullet (activeContext.md:15, the `.denied` lane trap) is accurate per _lib.py:248."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "All three consumer suites run and combine green, with no drift in the generated trees.",
+      "evidence": ".agent-guild/scripts/check-build.sh 'python3 .agent-guild/hooks/test_hooks.py; a=$?; python3 .agent-guild/hooks/test_codex_adapter.py; b=$?; python3 scripts/build-plugin.py --check; c=$?; exit $((a|b|c))' -> \"check-build.sh: exit 0\". Log .agent-guild/state/log/build-20260811T093037.log:182 \"163 passed, 0 failed\"; \"Ran 27 tests in 5.266s ... OK\"; \"OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds; the Claude plugin passes strict validation\". Independently, `diff plugin/project-template/.agent-guild/CLAUDE.md .agent-guild/CLAUDE.md` and `diff plugins/agent-guild/project-template/.agent-guild/CLAUDE.md .agent-guild/CLAUDE.md` both report no difference, so both template copies were regenerated rather than hand-edited or left stale."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "The working tree changes only paths this job owns.",
+      "evidence": ".agent-guild/scripts/check-diff-scope.py .agent-guild/hooks/_lib.py .agent-guild/hooks/stop-gate.py .agent-guild/hooks/dispatch-guard.py .agent-guild/hooks/test_hooks.py .agent-guild/CLAUDE.md _working-memory/ plugin/ plugins/ .claude/ -> exit 0, \"OK: 6 path(s) in scope\". `git status --porcelain` lists exactly: .agent-guild/CLAUDE.md, _working-memory/{conventions,decisionLog,openQuestions}.md, plugin/project-template/.agent-guild/CLAUDE.md, plugins/agent-guild/project-template/.agent-guild/CLAUDE.md. Nothing committed mid-task, so the check read a tree still holding this task's own changes."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The T-004 commit message exists, names the task, gives the why rather than only the what, carries no hard wrap and no attribution trailer, and passes the humanizer audit under C-8's three overrides.",
+      "evidence": ".agent-guild/state/commit-message.md:35-47, heading \"## T-004\" at line 35. Paragraph line lengths 78, 486, 784, 324, 796, 115 with blank lines between, so no line break falls inside a paragraph. `grep -in \"co-authored|generated with|assisted|signed-off|noreply\"` over lines 35+ -> no match. The why is line 39: \"The contract has said all along that every checker of record gets a courier crossing. `conventions.md` said in the next breath that nothing enforced it and to dispatch one by hand on every task. Both were true, which is the gap this closes\". Humanizer audit (~/.agents/skills/humanizer/SKILL.md, all 33 patterns): no watchword hits from SS1-7 or SS23-28, no copula avoidance, no negative parallelism, no boldface, no inline-header list, no emoji, no curly quotes, no generic positive conclusion. One em dash total, chained with no surrounding spaces (line 43, \"beside the sentinel-who writes it\"), which is the house override rather than SS14. Two three-item groupings (the three discharge files at line 41, the three things the state map documents at line 43) are true counts, not padding to three."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The `docs(contract):` conventional-commit prefix on the subject conforms to the repo convention, which is the standard C-8's house overrides defer to.",
+      "evidence": "_working-memory/conventions.md:52 \"Conventional-commit style with a scope: `feat(agents):`, `fix(hooks):`, `refactor(packaging):`, `docs:`, `style(docs):`, `chore:`. (see `git log`)\" and AGENTS.md:53 \"Conventional-commit messages with a scope\". `git log --oneline -8` shows the practice held on this branch and before it: \"test(hooks): add fixtures for the debt gate...\", \"feat(hooks): wire the second-opinion debt into the stop gate and dispatch guard\", \"docs(working-memory): what shipping a paperwork linter settled...\". `docs(contract):` matches that shape, and \"contract\" names the primary artifact (.agent-guild/CLAUDE.md, the orchestrator contract). Subject is 78 characters, in line with e.g. 8b03645's 81."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "minor",
+      "description": "The added openQuestions.md paragraph pins a specific number - \"26 subprocess confirmations\" - that is supportable but sits one recount away from being wrong; worth knowing it is a tally rather than a figure any file states.",
+      "evidence": "_working-memory/openQuestions.md:21. I tallied the subprocess runs described in .agent-guild/state/verdicts/T-002-sonnet-r0.json's findings: C-3 1 + 2 + 6 (three fires plus a three-fire control) + 2, C-4 5 + 3 (override, workspace-write, danger-full-access) + 5 (assigned, needs-check, disputed, pending, abandoned) + 2 = 26. The surrounding claims check out independently: T-002-sonnet-r0.json reads `\"verdict\": \"pass\"` and T-002-sonnet-r0-codex.json reads `\"verdict\": \"pass\"` (agreement), and the courier's own evidence strings read \"checker-confirmed C-3 subprocess evidence in the task brief\", i.e. it weighed handed-over reasoning rather than running anything."
+    }
+  ],
+  "timestamp": "2026-08-11T09:40:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

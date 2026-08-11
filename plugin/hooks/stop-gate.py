@@ -24,7 +24,25 @@ import _lib  # noqa: E402
 STALL_LIMIT = 3
 
 
-def _next_move(tid, status, retries):
+def _next_move(tid, status, retries, debts):
+    # A task can sit at `checking` with its checker of record already landed
+    # and only the courier crossing still missing. The generic "act on the
+    # verdict" line in `moves` lets a well-behaved orchestrator walk straight
+    # past that and call the task complete before the debt registers
+    # anywhere, and the debt list in the block message only catches it after
+    # the fact—so name the courier here instead. Matched to THIS retry round
+    # (not just this task) because an older round's still-open debt from a
+    # prior FAIL survives a rework cycle and shouldn't be mistaken for the
+    # current round's own crossing.
+    if status == "checking" and any(
+        d_tid == tid and d_stem.endswith(f"-r{retries}")
+        for d_tid, d_stem, _lane in debts
+    ):
+        return (
+            f"  {tid} [{status}] → its checker of record has landed but the "
+            "second opinion hasn't; dispatch checker-courier before "
+            "completing."
+        )
     moves = {
         "pending": "assign it and dispatch its executor.",
         "assigned": "its worker hasn't returned; dispatch the executor, or it's "
@@ -94,13 +112,21 @@ def main(data):
     if _lib.in_subagent(data):
         return 0
 
+    # Computed before open_tasks()'s early exit below, on purpose: that call
+    # drops terminal tasks, so a task the orchestrator already moved to
+    # `complete` is invisible to everything past this line—exactly the state
+    # the 2026-08-02 Claude run ended in, a completed T-001 with no crossing,
+    # and the gate said nothing because nothing here ever looked. A debt
+    # survives status changes the open-task picture doesn't, so it has to be
+    # checked independently of whether any task is still open.
+    debts = _lib.second_opinion_debts(data)
     tasks = _lib.open_tasks()
-    if not tasks:
+    if not tasks and not debts:
         # Clean slate—clear any stale block counter and let the turn end.
         _save_state(None, 0)
         return 0
 
-    digest = json.dumps([sorted(tasks), _verdicts_landed()])
+    digest = json.dumps([sorted(tasks), _verdicts_landed(), debts])
     prev = _load_state()
     stop_active = bool(data.get("stop_hook_active"))
 
@@ -119,10 +145,14 @@ def main(data):
             f"and no verdict landing:",
             "",
         ] + [f"- {t[0]} [{t[1]}] retries={t[2]}" for t in tasks] + [
+            f"- {d_tid}: second opinion outstanding for {d_stem}-{d_lane}.json"
+            for d_tid, d_stem, d_lane in debts
+        ] + [
             "",
             "The gate has stood down so the turn can end. Investigate by hand: a "
-            "checker owing a verdict, a dispute needing a ruling, or a task that "
-            "should be marked abandoned. Delete this file once resolved.",
+            "checker owing a verdict, a dispute needing a ruling, a second "
+            "opinion nobody dispatched, or a task that should be marked "
+            "abandoned. Delete this file once resolved.",
         ]
         try:
             with open(_lib.state_path("STALLED.md"), "w", encoding="utf-8") as f:
@@ -134,10 +164,21 @@ def main(data):
 
     _save_state(digest, count)
 
-    body = "\n".join(_next_move(*t) for t in tasks)
+    task_lines = [_next_move(*t, debts) for t in tasks]
+    # Named by the missing FILE, not the bare stem: a debt's `stem` is the
+    # verdict-of-record's own name (T-001-sonnet-r0), and printing that alone
+    # would point the orchestrator at the file that already exists instead of
+    # the lane-suffixed one (T-001-sonnet-r0-codex.json) that's actually
+    # missing.
+    debt_lines = [
+        f"  {d_tid}: second opinion outstanding—dispatch checker-courier to "
+        f"write {d_stem}-{d_lane}.json."
+        for d_tid, d_stem, d_lane in debts
+    ]
+    body = "\n".join(task_lines + debt_lines)
     return _lib.block(
-        f"{len(tasks)} task(s) still open—the turn can't end yet. Next move "
-        "for each:\n"
+        f"{len(tasks)} task(s) still open and {len(debts)} second opinion(s) "
+        "outstanding—the turn can't end yet. Next move for each:\n"
         f"{body}\n"
         "Do the next move, then stop again. If you need to hand control back to "
         "the user mid-job, the user can `touch .agent-guild/state/PAUSED`."

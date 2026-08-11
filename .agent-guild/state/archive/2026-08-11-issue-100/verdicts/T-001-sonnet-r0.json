@@ -1,0 +1,42 @@
+{
+  "task_id": "T-001",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-2",
+      "severity": "blocker",
+      "description": "The unreadable-verdict branch implements the broad reading the orchestrator ruled against: a record verdict that cannot be parsed is appended as a debt and `continue`s before routes 1-4 are ever consulted, so an unparseable stem that already has its lane sibling on disk owes a debt no dispatch can discharge, which is the livelock the narrow reading exists to prevent.",
+      "evidence": ".agent-guild/hooks/_lib.py:241-246 reads `if not isinstance(record, dict): ... debts.append((task_id, stem, lane)); continue`, with the comment `so it owes rather than silently passing through the routes below`. Four hand-built fixtures (scratch project, `verdicts/T-001-sonnet-r0.json` containing `{not json`, one discharge route added at a time) all returned a debt where the ruling requires `[]`: with sibling `T-001-sonnet-r0-codex.json` present -> `[('T-001', 'T-001-sonnet-r0', 'codex')]`; with `T-001-sonnet-r0-claude.json` -> same; with `state/exhausted/codex` -> same; with waiver `T-001-sonnet-r0-codex.denied` -> same. The same unparseable stem with no route present correctly returns `[('T-001', 'T-001-sonnet-r0', 'codex')]`, so only the routes-1-4 interaction is wrong."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "Everything else C-2 requires holds: each of the five discharges clears the debt alone, a stem with none of them owes, the exhausted-lane discharge follows `courier_lane(data)` on both hosts, the `.denied` waiver is lane-pinned, auditor and lane-suffixed stems produce no debt, the lane set lives in `COURIER_LANES`, the return shape is the pinned `(task_id, stem, lane)`, and the function never raises.",
+      "evidence": "Fixture harness output (scratch projects under a temp `CLAUDE_PROJECT_DIR`, no test suite read), 22/26 expectations met with the only four mismatches being the C-2 finding above. Discharges alone: route 1 codex sibling -> `[]`; route 2 claude sibling -> `[]`; route 3 `exhausted/codex` -> `[]`; route 4 `T-001-sonnet-r0-codex.denied` -> `[]`; route 5 record `\"verdict\": \"blocked\"` -> `[]`; bare stem -> `[('T-001', 'T-001-sonnet-r0', 'codex')]`. Host-lane matrix, one sentinel at a time and removed before the next: `data={\"hook_host\":\"codex\"}` + `exhausted/claude` -> `[]`, + `exhausted/codex` -> `[('T-001','T-001-sonnet-r0','claude')]`; `data={}` + `exhausted/codex` -> `[]`, + `exhausted/claude` -> `[('T-001','T-001-sonnet-r0','codex')]`. Waiver lane pinning: a `-claude.denied` waiver leaves a Claude host owing and clears a Codex host. Stem pattern (`_RECORD_STEM_RE = ^(T-\\d+)-[A-Za-z0-9]+-r(\\d+)$`, _lib.py:192): a lone `T-001-sonnet-r0-codex.json` -> `[]`; `CON-audit-r0.md`, `CON-audit-r0.json`, `DEC-audit-r0.json`, `DEC-audit-r2.json` -> `[]`; `T-001-sonnet-r1.json` owes while `-r0` is discharged. Never-raise: missing `verdicts/` -> `[]`; zero-byte `.json` -> a debt; `{not json` -> a debt; a JSON array record -> a debt; `second_opinion_debts()` with no argument -> defaults to the codex lane. Return shape: `[('T-007', 'T-007-opus-r2', 'codex')]`, each entry a 3-tuple. `COURIER_LANES = ('codex', 'claude')` at _lib.py:29, consumed at _lib.py:257."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "All three consumer suites run and combine green, with no drift between the build source and the generated trees.",
+      "evidence": "`.agent-guild/scripts/check-build.sh 'python3 .agent-guild/hooks/test_hooks.py; a=$?; python3 .agent-guild/hooks/test_codex_adapter.py; b=$?; python3 scripts/build-plugin.py --check; c=$?; exit $((a|b|c))'` -> `check-build.sh: exit 0`. Log `.agent-guild/state/log/build-20260811T022822.log` line 149 `146 passed, 0 failed` (test_hooks.py), lines 194-196 `Ran 27 tests in 4.802s` / `OK` (test_codex_adapter.py), line 200 `OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds; the Claude plugin passes strict validation`. Independently, `diff -q` reports `.agent-guild/hooks/_lib.py` identical to all three of `plugin/hooks/_lib.py`, `plugins/agent-guild/hooks/_lib.py`, and `plugins/agent-guild/project-template/.agent-guild/hooks/_lib.py`, each carrying one `def second_opinion_debts`."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "The working tree changes only allowlisted paths: the build source `_lib.py` and its three regenerated mirrors, with `scripts/classify-crossings.py` untouched as the non-goal requires.",
+      "evidence": "`.agent-guild/scripts/check-diff-scope.py .agent-guild/hooks/_lib.py .agent-guild/hooks/stop-gate.py .agent-guild/hooks/dispatch-guard.py .agent-guild/hooks/test_hooks.py .agent-guild/CLAUDE.md _working-memory/ plugin/ plugins/ .claude/` -> `OK: 4 path(s) in scope`, exit 0. `git status --porcelain` lists exactly ` M .agent-guild/hooks/_lib.py`, ` M plugin/hooks/_lib.py`, ` M plugins/agent-guild/hooks/_lib.py`, ` M plugins/agent-guild/project-template/.agent-guild/hooks/_lib.py` — no commit was made, so the check read a populated tree rather than an empty one."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The commit-message section exists under a heading naming T-001, leads with the WHY, carries no attribution trailer, hard-wraps nowhere, and passes the humanizer audit under C-8's three overrides — though its description of the unreadable-verdict behavior will need a one-clause edit once the C-2 defect is fixed.",
+      "evidence": ".agent-guild/state/commit-message.md:1 `## T-001`; :5 opens `The dual-check regime says every checker of record gets a courier crossing, but nothing checked that it happened: a Claude host ran a task to `complete` on 2026-08-02 with no crossing, and no gate objected.` — the WHY, not only the WHAT. Line-length scan: the three body paragraphs are single physical lines of 570, 241, and 131 characters (lines 5, 7, 9), separated by blank lines, so no break falls inside a paragraph. A scan for `Co-Auth`, `Co-auth`, `Generated with`, and `Signed-off-by` returned `[]`; a scan for the characters `— – “ ” ‘ ’` also returned `[]`. Humanizer audit against ~/.claude/skills/humanizer/SKILL.md with the three overrides: no watch-list vocabulary (§7), no promotional or significance inflation (§1, §4), no negative parallelism (§9), no boldface or emoji (§15, §18), no rule-of-three padding (§10 — the discharge list is four true items), and §30 does not apply since a commit message is inherently version-scoped. The one soft hit is §3, the participle pair `discharging on ... and treating anything it can't parse as ...` closing line 5; it enumerates real routes rather than manufacturing depth, so it is a style note, not a defect. The stale-claim risk is that this same clause asserts the predicate treats anything unparseable as an unresolved debt, which is precisely the behavior the C-2 finding sends back."
+    }
+  ],
+  "timestamp": "2026-08-11T07:32:24Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

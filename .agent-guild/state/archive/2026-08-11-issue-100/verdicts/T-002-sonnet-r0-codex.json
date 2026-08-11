@@ -1,0 +1,24 @@
+{
+  "task_id": "T-002",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "The supplied hook logic and subprocess evidence establish that outstanding second-opinion debt blocks completion, directs courier dispatch, participates in livelock progress, and preserves the subagent no-op.",
+      "evidence": "stop-gate.py:37-45, 112-113, 122-123, 173-177; checker-confirmed C-3 subprocess evidence in the task brief."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "The courier-only debt exception admits debt-bearing tasks at non-checking statuses while retaining the status rule for other checkers and all courier safety restrictions.",
+      "evidence": "dispatch-guard.py:280-337; checker-confirmed C-4 subprocess evidence in the task brief."
+    }
+  ],
+  "timestamp": "2026-08-11T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

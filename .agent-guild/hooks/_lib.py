@@ -23,6 +23,11 @@ import sys
 
 TERMINAL = {"complete", "abandoned"}
 
+# The two courier lanes a verdict of record can be seconded on. One home for
+# this pair: scripts/classify-crossings.py:122 still spells "codex"/"claude"
+# inline (out of scope for this change), but nothing new should.
+COURIER_LANES = ("codex", "claude")
+
 # Each guild agent's default model, so dispatch-guard can compute the effective
 # model of a dispatch (override if present, else this) and match it to the
 # task's current tier. Escalation bumps the model via override, not the agent.
@@ -177,6 +182,100 @@ def courier_lane(data=None):
 def read_input():
     raw = sys.stdin.read()
     return json.loads(raw) if raw.strip() else {}
+
+
+# A verdict of record's stem: T-<n>-<tier>-r<n>, no lane suffix. Anchored at
+# both ends so a lane sibling (…-r0-codex.json) can't match—its filename has
+# a segment past r<n> that this pattern has no room for—which matters because
+# a lane file matching here would owe a second opinion on its own second
+# opinion, a debt nothing could ever discharge.
+_RECORD_STEM_RE = re.compile(r"^(T-\d+)-[A-Za-z0-9]+-r(\d+)$")
+
+
+def second_opinion_debts(data=None):
+    """List of outstanding second-opinion debts, one per unresolved verdict
+    of record, as (task_id, stem, lane).
+
+    The dual-check regime (a courier crossing after every checker of record)
+    is contract, not code: nothing previously read the verdicts directory to
+    confirm a crossing actually landed, so a Claude-host run reached
+    `complete` on 2026-08-02 without one and no gate noticed. This is the
+    predicate stop-gate.py and dispatch-guard.py read to close that hole.
+
+    Discharge is generous—a courier response either way, the quota sentinel,
+    an orchestrator waiver, or a blocked verdict of record all clear a debt,
+    since a `blocked` in-family check has nothing yet for a crossing to
+    compare against. An unreadable verdict of record forecloses only that
+    last route, since `blocked` can't be established from a file that won't
+    parse; the first three still stand. A courier response IS one of them,
+    so declaring a record corrupt without first looking for one would strand
+    a debt no future dispatch could clear: the file the next courier would
+    write is already on disk.
+
+    Never raises, the same contract paused() and lane_exhausted() hold to:
+    stop-gate.py calls this every turn, so a crash here is a hook crash on
+    whatever verdict happens to be malformed that turn.
+    """
+    lane = courier_lane(data)
+    try:
+        vdir = state_path("verdicts")
+        names = set(os.listdir(vdir))
+    except OSError:
+        return []
+
+    debts = []
+    for name in sorted(names):
+        if not name.endswith(".json"):
+            continue
+        stem = name[: -len(".json")]
+        m = _RECORD_STEM_RE.match(stem)
+        if not m:
+            continue
+        task_id = m.group(1)
+
+        if any(f"{stem}-{l}.json" in names for l in COURIER_LANES):
+            continue  # routes 1/2: a courier response landed, either lane
+
+        if lane_exhausted(lane):
+            # Route 3, pinned to THIS host's lane and no other. A predicate
+            # that also accepted the far lane's sentinel would discharge a
+            # Codex host's debts off exhausted/codex, its own lane never
+            # having to exist—deadlocking it forever instead.
+            continue
+
+        if os.path.exists(os.path.join(vdir, f"{stem}-{lane}.denied")):
+            continue  # route 4: the orchestrator's record that a host refused the dispatch outright (e.g. #94)
+
+        # Routes 1-4 settle before the file is ever opened, on purpose:
+        # routes 1/2 ARE the file a courier writes, so an unreadable record
+        # treated as owing regardless would strand a debt no dispatch could
+        # clear—the next courier writes a path that is already there.
+        # Unreadable forecloses route 5 (below) and nothing above it.
+        record = None
+        try:
+            with open(os.path.join(vdir, name), encoding="utf-8") as f:
+                record = json.load(f)
+        except Exception:
+            record = None
+
+        if not isinstance(record, dict):
+            # Can't read it, can't parse it, or it's valid JSON that isn't an
+            # object—any of those means route 5 can't be established, so it
+            # owes (routes 1-4 already had their shot above).
+            debts.append((task_id, stem, lane))
+            continue
+
+        if record.get("verdict") == "blocked":
+            # checker-courier's own contract (guild-core/roles/checker-
+            # courier.md:28) turns auth failure, timeout, a missing CLI, and
+            # twice-malformed vendor output all into a blocked verdict at the
+            # lane stem—but a blocked verdict OF RECORD means the in-family
+            # check itself never ran, so there is nothing yet for a crossing
+            # to compare against.
+            continue
+
+        debts.append((task_id, stem, lane))
+    return debts
 
 
 def in_subagent(data):

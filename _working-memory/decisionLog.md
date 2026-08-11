@@ -14,6 +14,14 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-11: A Model's Account Of Its Own Name Is Not Evidence Of Its Identity
+
+**Source:** #142, with four live probes against codex-cli 0.146.1
+
+**Context:** The verdict schema carries a `model` field, and the way it got filled was to ask the far side to echo back the string it had been handed. Over the #100 run that produced one verdict of record carrying `gpt-5.6` where the adapter pins `gpt-5.6-terra`, and one crossing blocked over the same mismatch, throwing away a `fail` with two major findings. Both are the same defect from opposite ends: a field nothing could verify was being treated as though something had.
+**Decision:** The lane establishes `model`; the vendor doesn't. `codex-courier.py` passes `-m gpt-5.6-terra` and stamps that value onto the verdict on every path, which is what `claude-courier.py` already does on the reciprocal lane. What the far side echoes is compared and recorded—an `info` finding and the retained raw response when it diverges—and decides nothing. Three probes against codex-cli 0.146.1 back the design. The `exec --json` event stream carries no model anywhere (`thread.started` has only `thread_id`, `turn.completed` only `usage`), so there is no vendor-structural source to prefer over the flag. A bad `-m` fails loudly with a 400 instead of silently substituting, which is what makes the flag worth trusting. And `--ignore-user-config` keeps auth, so the lane stops inheriting whatever a machine-local `~/.codex/config.toml` happened to set. A fourth probe reran #142's own reproduction five times with `-m` and got the pinned string back every time, which is worth less than it looks: the prompt was two lines, where the crossings that mis-echoed carried full briefs and artifact text.
+**Alternatives considered:** Accepting a set of strings, or a normalization rule (rejected—it leaves the corpus carrying two names for one model, and that corpus is the measurement #34 exists to take); blocking on any mismatch (rejected—that is the T-004 harm, a sound judgment discarded over a field that was never evidence in the first place).
+
 ## 2026-08-11: The Second Opinion Is A Debt On Disk, Not A Step Someone Remembers
 
 **Source:** #100, built as a guild job under the gates it was changing

@@ -863,6 +863,300 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020"}}, proj_courier)
 check("checker-courier dispatch once sentinel is cleared → exit 0", rc == 0, f"rc={rc} err={err}")
 
+# ------------------------------------------ second_opinion_debts(): the debt gate (#100)
+# second_opinion_debts() is what stop-gate.py and dispatch-guard.py both read to
+# close the #100 hole: a Claude-host run reached `complete` on 2026-08-02 with a
+# completed task and no crossing, and nothing noticed. Every case below drives
+# one of the two GATES as a real process against a scratch verdicts/ directory
+# built by hand, never the predicate directly, so a regression in how a gate
+# USES second_opinion_debts() shows up here too, not only a regression in the
+# predicate itself. Where the sole observable is a clean exit, the case pairs
+# it with a positive control in the same project—the identical fixture minus
+# (or plus) the one thing under test—so a pass can't be "the predicate saw
+# nothing," only "correctly discharged" or "correctly still owing."
+print("second_opinion_debts(): the debt gate (#100)")
+
+# 1. A debt registers even while a task sits at "checking"—and specifically
+# swaps the block message from the generic "act on the verdict" line to the
+# courier-specific one. Removing the verdict-of-record on the identical
+# fixture keeps the task open (still blocks) but drops that specific line,
+# which is what pins the wording change to the debt and not to "checking" on
+# its own—the plain open-task case already covered above (line ~344) would
+# pass this case even with the debt path completely broken.
+proj = fresh_proj()
+write_task(proj, "T-030", status="checking", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-030-sonnet-r0.json", task_id="T-030")
+rc1, out1, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(os.path.join(verdicts_dir, "T-030-sonnet-r0.json"))
+rc2, out2, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: debt with the task at checking blocks the turn",
+      rc1 == 2 and "dispatch checker-courier before completing" in err1
+      and "T-030" in err1 and rc2 == 2
+      and "dispatch checker-courier before completing" not in err2,
+      f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 2. The #100 regression itself: a task already moved to `complete` still
+# owes, and stop-gate still blocks even though open_tasks() has nothing to
+# show for it (complete is terminal). Removing the verdict-of-record on the
+# identical fixture (no debt anywhere) flips it to a clean exit, pinning the
+# block to the debt alone.
+proj = fresh_proj()
+write_task(proj, "T-031", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-031-sonnet-r0.json", task_id="T-031")
+rc1, out1, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(os.path.join(verdicts_dir, "T-031-sonnet-r0.json"))
+rc2, out2, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: debt with the task at complete blocks the turn",
+      rc1 == 2 and "T-031-sonnet-r0-codex.json" in err1 and rc2 == 0,
+      f"rc1={rc1} err1={err1!r} rc2={rc2}")
+
+# 3. Discharge route 1: a codex-lane sibling. Positive control in the same
+# project—remove the sibling and the identical fixture now owes—so the clean
+# exit can't be "the predicate saw nothing," only "correctly discharged."
+proj = fresh_proj()
+write_task(proj, "T-032", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-032-sonnet-r0.json", task_id="T-032")
+sibling = write_verdict_json(proj, "T-032-sonnet-r0-codex.json", task_id="T-032",
+                              checker="checker-courier", vendor="openai",
+                              model="gpt-5.6-terra")
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(sibling)
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: a codex lane sibling discharges the debt",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 4. Discharge route 2: a claude-lane sibling. Same positive-control shape, so
+# a predicate that only recognizes ONE lane's sibling (a real way to
+# half-implement route 2) still gets caught.
+proj = fresh_proj()
+write_task(proj, "T-033", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-033-sonnet-r0.json", task_id="T-033")
+sibling = write_verdict_json(proj, "T-033-sonnet-r0-claude.json", task_id="T-033",
+                              checker="checker-courier", vendor="anthropic",
+                              model="claude-opus-4")
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(sibling)
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: a claude lane sibling discharges the debt",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 5. Discharge route 3: the courier's own quota sentinel, on this (default,
+# Claude-host) lane.
+proj = fresh_proj()
+write_task(proj, "T-034", status="complete", retries=0)
+write_verdict_json(proj, "T-034-sonnet-r0.json", task_id="T-034")
+exhausted_dir = os.path.join(proj, ".agent-guild", "state", "exhausted")
+os.makedirs(exhausted_dir, exist_ok=True)
+sentinel = os.path.join(exhausted_dir, "codex")
+open(sentinel, "w").close()
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(sentinel)
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: an exhausted lane discharges the debt",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 6. r0's finding, and the fifteenth case: the sentinel that discharges has to
+# be THIS host's lane, not any lane. Driven with hook_host: codex, so the far
+# side is claude—exhausted/claude must discharge, and exhausted/codex (the
+# WRONG lane for a Codex host) must not. A predicate that ignores `data` and
+# hardcodes "codex" passes case 5 above and fails only here, which is why
+# case 5 alone can't stand in for this one.
+proj = fresh_proj()
+write_task(proj, "T-035", status="complete", retries=0)
+write_verdict_json(proj, "T-035-sonnet-r0.json", task_id="T-035")
+exhausted_dir = os.path.join(proj, ".agent-guild", "state", "exhausted")
+os.makedirs(exhausted_dir, exist_ok=True)
+claude_sentinel = os.path.join(exhausted_dir, "claude")
+codex_sentinel = os.path.join(exhausted_dir, "codex")
+open(claude_sentinel, "w").close()
+rc_right_lane, _, err_right = run_hook("stop-gate.py", {"hook_host": "codex"}, proj)
+os.remove(claude_sentinel)
+open(codex_sentinel, "w").close()
+rc_wrong_lane, _, err_wrong = run_hook("stop-gate.py", {"hook_host": "codex"}, proj)
+os.remove(codex_sentinel)
+check("so: the exhausted-lane discharge follows the host lane",
+      rc_right_lane == 0 and rc_wrong_lane == 2,
+      f"exhausted/claude+hook_host=codex → rc={rc_right_lane} err={err_right!r}; "
+      f"exhausted/codex+hook_host=codex → rc={rc_wrong_lane} err={err_wrong!r}")
+
+# 7. Discharge route 4: the orchestrator's own waiver that a host refused the
+# dispatch outright.
+proj = fresh_proj()
+write_task(proj, "T-036", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-036-sonnet-r0.json", task_id="T-036")
+waiver = os.path.join(verdicts_dir, "T-036-sonnet-r0-codex.denied")
+open(waiver, "w").close()
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(waiver)
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: a denied waiver discharges the debt",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 8. Discharge route 5: a `blocked` verdict of record has nothing yet for a
+# crossing to compare against, so it owes nothing. Rewriting the SAME file to
+# a non-blocked verdict, with nothing else in the fixture changed, is what
+# proves the discharge tracks the `verdict` field rather than the fixture
+# just being empty.
+proj = fresh_proj()
+write_task(proj, "T-037", status="complete", retries=0)
+write_verdict_json(proj, "T-037-sonnet-r0.json", task_id="T-037", verdict="blocked")
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+write_verdict_json(proj, "T-037-sonnet-r0.json", task_id="T-037", verdict="pass")
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: a blocked verdict of record owes nothing",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 9. The named trap: `rc == 0` against a project whose only verdict file is an
+# auditor stem passes identically whether the predicate correctly skips
+# auditor stems, or crashes reading the directory and returns an empty list
+# either way. Adding a genuinely owing T-NNN stem alongside it, in the SAME
+# project, and confirming THAT flips the exit code (and that the auditor stem
+# never shows up as an owing debt itself) is what tells the two apart.
+proj = fresh_proj()
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+with open(os.path.join(verdicts_dir, "CON-audit-r0.json"), "w", encoding="utf-8") as f:
+    json.dump({"verdict": "PASS"}, f)
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+write_task(proj, "T-038", status="complete", retries=0)
+write_verdict_json(proj, "T-038-sonnet-r0.json", task_id="T-038")
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: an auditor stem owes nothing",
+      rc1 == 0 and rc2 == 2 and "T-038-sonnet-r0-codex.json" in err2
+      and "CON-audit" not in err2,
+      f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 10. The debt is tracked per verdict-of-record STEM (task + tier + retry),
+# not per task: r0 has a lane sibling and is discharged, r1 has none and still
+# owes, in the same run. A predicate that discharged by task_id alone would
+# clear both the moment either retry got a sibling.
+proj = fresh_proj()
+write_task(proj, "T-039", status="complete", retries=1)
+write_verdict_json(proj, "T-039-sonnet-r0.json", task_id="T-039")
+write_verdict_json(proj, "T-039-sonnet-r0-codex.json", task_id="T-039",
+                    checker="checker-courier", vendor="openai", model="gpt-5.6-terra")
+write_verdict_json(proj, "T-039-sonnet-r1.json", task_id="T-039")
+rc, _, err = run_hook("stop-gate.py", {}, proj)
+check("so: the debt is per retry round",
+      rc == 2 and "T-039-sonnet-r1-codex.json" in err
+      and "T-039-sonnet-r0-codex.json" not in err,
+      f"rc={rc} err={err!r}")
+
+# 11. A verdict of record that can't be parsed owes rather than crashing the
+# gate—loud, not silent, per _lib.py's own top-of-file contract. Asserting the
+# absence of the HOOK ERROR banner alongside the exit code is what rules out
+# an uncaught exception landing in run()'s own fail-loud handler, which also
+# exits 2, so this can't be satisfied by a crash instead of a clean debt.
+proj = fresh_proj()
+write_task(proj, "T-040", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+with open(os.path.join(verdicts_dir, "T-040-sonnet-r0.json"), "w", encoding="utf-8") as f:
+    f.write("{not json")
+rc, _, err = run_hook("stop-gate.py", {}, proj)
+check("so: an unreadable verdict of record owes a debt",
+      rc == 2 and "HOOK ERROR" not in err and "T-040" in err,
+      f"rc={rc} err={err!r}")
+
+# 12. PAUSED stands every gate down, the debt gate included—checked before any
+# of this logic runs. Clearing PAUSED on the identical fixture flips it
+# straight back to blocked, pinning the pass to PAUSED rather than to some
+# accidental absence of debt.
+proj = fresh_proj()
+write_task(proj, "T-041", status="complete", retries=0)
+write_verdict_json(proj, "T-041-sonnet-r0.json", task_id="T-041")
+paused_file = os.path.join(proj, ".agent-guild", "state", "PAUSED")
+open(paused_file, "w").close()
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(paused_file)
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: PAUSED stands the debt gate down",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 13. C-4's widening: checker-courier may run against a `complete` task whose
+# debt is still outstanding, so the stop gate's demand is actually
+# collectible. Clearing the debt (no verdict record at all) on the identical
+# fixture then refuses it on status, so the pass above can't be "courier
+# always runs on a complete task."
+proj = fresh_proj()
+write_task(proj, "T-042", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-042-sonnet-r0.json", task_id="T-042")
+rc1, _, err1 = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-042"}}, proj)
+os.remove(os.path.join(verdicts_dir, "T-042-sonnet-r0.json"))
+rc2, _, err2 = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-042"}}, proj)
+check("so: courier dispatch allowed on a complete task with a debt",
+      rc1 == 0 and rc2 == 2 and "not 'checking'" in err2,
+      f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 14. The widening is debt-gated, not status-gated: a `complete` task whose
+# debt is already discharged still refuses a courier on status, the same as
+# any other non-checking task.
+proj = fresh_proj()
+write_task(proj, "T-043", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-043-sonnet-r0.json", task_id="T-043")
+sibling = write_verdict_json(proj, "T-043-sonnet-r0-codex.json", task_id="T-043",
+                              checker="checker-courier", vendor="openai",
+                              model="gpt-5.6-terra")
+rc1, _, err1 = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-043"}}, proj)
+os.remove(sibling)
+rc2, _, err2 = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-043"}}, proj)
+check("so: courier dispatch still refused on a complete task with no debt",
+      rc1 == 2 and "not 'checking'" in err1 and rc2 == 0,
+      f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 15. The debt only relaxes the status check for checker-courier itself. An
+# in-family checker (checker-judgment here) still needs `checking` even on a
+# task carrying an outstanding debt—otherwise the checker of record could
+# re-run against a task nobody reopened.
+proj = fresh_proj()
+write_task(proj, "T-044", status="complete", retries=0)
+write_verdict_json(proj, "T-044-sonnet-r0.json", task_id="T-044")
+rc, _, err = run_hook("dispatch-guard.py",
+                      {"tool_input": {"subagent_type": "checker-judgment",
+                                      "prompt": "Task-ID: T-044"}}, proj)
+check("so: an in-family checker is still refused on a complete task",
+      rc == 2 and "not 'checking'" in err, f"rc={rc} err={err!r}")
+
+# Beyond the fifteen: every courier fixture above this task (and every one
+# already in the suite before it, at test_hooks.py:828-864) runs against a
+# debt-FREE task, so nothing covers the courier's own remaining conditions on
+# the debt-bearing path. Without these two, a dispatch guard that returns 0
+# early on any debt-bearing courier—ahead of the model and workspace checks
+# below—would pass every case above while making the read-only boundary a
+# dead letter for every real courier dispatch.
+proj = fresh_proj()
+write_task(proj, "T-045", status="complete", retries=0)
+write_verdict_json(proj, "T-045-sonnet-r0.json", task_id="T-045")
+rc, _, err = run_hook("dispatch-guard.py",
+                      {"tool_input": {"subagent_type": "checker-courier",
+                                      "prompt": "Task-ID: T-045", "model": "opus"}}, proj)
+check("so: a debt-bearing courier dispatch is still refused for a model override",
+      rc == 2 and "Drop the override" in err, f"rc={rc} err={err!r}")
+
+proj = fresh_proj()
+write_task(proj, "T-046", status="complete", retries=0)
+write_verdict_json(proj, "T-046-sonnet-r0.json", task_id="T-046")
+rc, _, err = run_hook(
+    "dispatch-guard.py",
+    {"tool_input": {"subagent_type": "checker-courier",
+                     "prompt": "Task-ID: T-046\nRun it with workspace-write access."}},
+    proj)
+check("so: a debt-bearing courier dispatch is still refused for workspace-write",
+      rc == 2 and "read-only" in err, f"rc={rc} err={err!r}")
+
 # --------------------------------------------------------- subagent-return
 print("subagent-return.py")
 proj = fresh_proj()

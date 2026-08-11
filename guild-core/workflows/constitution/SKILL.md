@@ -22,6 +22,8 @@ Turn each quality bar into a clause in `.agent-guild/state/constitution.md`. Per
 - a script: `.agent-guild/scripts/check-foo.sh <args>`, which routes the clause to checker-deterministic;
 - a rubric: `checker-judgment: <one line>`, which routes it to checker-judgment.
 
+Those two are the whole list, and `check-job-spec.py` holds you to it before an auditor ever reads the file. A shell one-liner is not a third form: hand it to `.agent-guild/scripts/check-build.sh '<cmd>'` and it stays the first. The same script compares a clause's counts against its lists and cannot compare one against prose, so when a clause names N things, list them instead of spreading them across a sentence—#117 spent an audit round on a check that read "five files" above six of them. Run `python3 .agent-guild/scripts/check-job-spec.py --audit-id CON-audit` before you dispatch the auditor, since `dispatch-guard` refuses that dispatch until it passes.
+
 State each clause so a violation is recognizable. "Every page's `<h1>` matches the nav label linking to it" is a clause. "The site feels welcoming" is not.
 
 When a clause changes a shared contract—a schema under `.agent-guild/schemas/`, a template shape, a hook-visible file format—its check must run the full consumer suites, not just the contract's own: today that means `python3 .agent-guild/hooks/test_hooks.py` alongside the contract's own tests. Falsify it in step 3 by asking "who else parses this shape?"—the #43 job scoped a schema's own tests but missed `test_hooks.py`'s verdict-fixture helper as a quiet consumer, shipping the hook suite red until the next job's worker hit the broken baseline.

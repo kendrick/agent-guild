@@ -49,6 +49,8 @@ were deterministic, and anything the numbers flatten.
 
 **`cost`** is the price of the opinion, since #34 is a cost/benefit ruling and an opinion with no price attached cannot be weighed. `tokens_cached` comes from `cached_input_tokens` on the codex lane's `turn.completed` event and is deliberately not folded into `tokens_in`. Null means the vendor did not report it, never zero.
 
+Expect that null most of the time, and know why before you read a run's costs as complete. Nothing on the path persists the figure: `_usage()` in `codex-courier.py` reads `input_tokens` and `output_tokens` and drops the rest, and `vendor-call.schema.json` has no `tokens_cached` field for the ledger to carry. The number survives only inside a retained raw stream, and retention defaults to `onissue`, so a crossing that goes cleanly leaves nothing behind. In the #141 run three of six crossings retained raw; the one that recorded `cached_input_tokens: 15104` is a crossing that blocked. So the field is reliably fillable for the crossings that went wrong and reliably empty for the ones that went right, which is backwards for costing a lane. Fill it when the raw is there and leave it null otherwise, but do not read a corpus of nulls as a lane that reports no cache.
+
 ## Filling It In
 
 Read the two verdicts directly. Do not take either agent's summary of its own findings, and do not read the worker's notes—the whole point is that the comparison is derived from artifacts rather than self-reports.
@@ -70,3 +72,5 @@ The two access fields arrived on 2026-08-10, after a re-read of every archived c
 The `unknown` and `null` values were forced by the #100 archive: no brief survived those crossings, and a blocked crossing has no outcome to agree with. They were being improvised in place before they were written down here.
 
 `tokens_cached` was recorded as unfillable, on the belief that the lane reported no cached-token figure. It does, on `turn.completed`. That note was stale rather than wrong at the time.
+
+Correcting that correction, from the #141 run: the lane reports the figure, and nothing keeps it. Both earlier notes were half right, and the half each one missed is the half that decides whether you can actually fill the field. Persisting it needs a `tokens_cached` in `vendor-call.schema.json` and a `_usage()` that reads it, neither of which exists yet.

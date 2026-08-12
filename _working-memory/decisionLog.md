@@ -14,6 +14,22 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-12: Bound The Constitution, Not The Audit Loop
+
+**Source:** #120 and #123 built together on `feat/audit-budget-job-weight`; three adversarial review rounds; PR #159
+
+**Context:** Audits are 44-48% of a guild job's wall clock across three measured runs. #120 proposed a round budget and #123 a job weight that sizes ceremony. Both landed as contract prose, and the round budget was cut before merge.
+
+**Decision:** Ship the weight and the clause ceiling; do not cap audit rounds. Weight is derived at Phase 0 from one discriminator (does verification need an instrument built, or one that already exists invoked?), adjusted upward for unattended blast radius, announced to the user in one line and overridable in a word. It sets a clause ceiling and nothing else. The ceiling is a budget the orchestrator may knowingly overrun with a reason recorded, not a gate.
+
+**Why the round budget died:** measurement, not taste. Counting CON-audit stems on the three post-#132 runs, two of three exceed a deep budget of 3, and the round a cap would remove from the most recent run is where the auditor caught a constitution whose C-9 and C-2 made every worker fail by construction. [[antipatterns]] already said this and its precondition had been met; the numbers agreed with it anyway.
+
+**What three review rounds cost and bought:** round 1 found the ship-with-minors exit deadlocked the job, because it produced no CON-audit PASS and `dispatch-guard` requires one. Round 2 found the fix for that was worse: a `## Carried minors` section landed after `## Clauses`, and `check-job-spec.parse_constitution` ends a clause block at the next `### C-N:` rather than at `##`, so a carried minor citing `path:line` failed R1 and hard-blocked every auditor dispatch. Round 3 found the surviving hand-off deadlocked Phase 1 instead of Phase 0, since no DEC-audit gate exists and `stop-gate` will not let the turn end while tasks are pending. Every critical finding across all three landed in the same feature. The rule that fell out: when two rounds find a blocker in one mechanism, cut the mechanism rather than patch it a third time.
+
+**Not enforced by anything.** No script computes a weight, counts clauses against the ceiling, or reads the weight line. That is #160, deliberately deferred: the weight table was designed from two runs, so fixtures pinning it today would only confirm the design reproduces its own inputs.
+
+**Alternatives considered:** re-deriving the budget numbers against the corpus (deep would need 5+, light 2+) and fixing the DEC hand-off with a PAUSED instruction—rejected because it keeps a feature the repo backed out of once, on a sample of eleven runs; patching ship-with-minors a third time—rejected on the two-rounds rule above.
+
 ## 2026-08-12: A Deterministic Clause Never Crosses, And The Brief Is What Limits A Second Opinion
 
 **Source:** the courier-lane cleanup run (#106, #128, #47, #116), nine tasks, PR #155

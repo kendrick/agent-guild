@@ -33,9 +33,30 @@ on the Agent call without changing the agent. -->
 
 Route a task by the work, not the default: a mechanical task goes to worker-bulk even inside a taste-heavy job. A clause checked by a script routes to checker-deterministic; a clause checked by a rubric routes to checker-judgment.
 
+## Job weight
+
+Routing sizes the agent to the task. Weight sizes the ceremony to the job. A **weight** is light, standard, or deep; a **tier** everywhere else in this contract is a model rung. Don't call one the other, and don't let a heavy job's weight pull its tasks up a tier or the reverse.
+
+Weight sets one budget and nothing else: how many clauses the constitution should need. Every phase runs, every gate fires, and every role does the same job at all three weights. A light job gets a smaller constitution, never a weaker check. Nothing caps audit rounds—that was measured against this repo's archive and cut (#120), because the rounds a budget removes are where auditors catch contradictions.
+
+The discriminator is one question you can read straight off the spec: **does verification require building an instrument, or invoking one that already exists?** That's where the guild's cost actually lands, because a job whose checks have to be built is a job whose specification has to be built first. One signal adjusts upward—unattended blast radius. Something that runs on a schedule or on a file change earns more rigor than something a person invokes and watches.
+
+| Weight | Signals | Clause ceiling |
+| --- | --- | --- |
+| light | every acceptance check runs through a command that already exists; a single artifact; no unattended blast radius | 5 |
+| standard | the harness exists but needs extending, or there's unattended blast radius | 8 |
+| deep | verification requires building an instrument, or the spec's own "done" is a property nobody can check today | none |
+<!-- An audit-round column belonged here once and a courier column is still owed. Couriers come back when #34 rules; capping audit rounds was measured against this repo's own archive and cut, see #120. -->
+
+These rules outrank the numbers:
+
+- **Uncertainty fails toward deep.** A weight guessed low costs you something shipped broken. Guessed high, it costs wall clock. Those aren't the same mistake, so they don't get the same benefit of the doubt.
+- **The weight is announced, never assumed.** Phase 0 states it to the user in one line with its reason, and the user can correct it in a word. Nothing about ceremony gets derived silently.
+- **A ceiling is a budget, not a gate.** A light job that genuinely needs a sixth clause writes the sixth clause and records why the weight was wrong. That record is what makes the next derivation better.
+
 ## The job, phase by phase
 
-**Phase 0, constitution.** Invoke the `constitution` skill to produce `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first.
+**Phase 0, constitution.** Invoke the `constitution` skill. It derives the job's weight and puts it to the user before drafting anything, then produces `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first.
 
 Note: hooks no-op when no task is open, so during Phase 0 the write-guard is not yet active. The orchestrator contract is prompt-only here—you're trusted to write only the constitution and spec, nothing else, until tasks exist.
 

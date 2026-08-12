@@ -1373,6 +1373,70 @@ check("so: a truncated/non-JSON authorization record owes rather than crashing",
       rc_truncated == 2 and "HOOK ERROR" not in err_truncated and "T-055" in err_truncated,
       f"rc={rc_truncated} err={err_truncated!r}")
 
+# 21. Discharge route 5 (#128): the orchestrator's `.skipped` marker, filed
+# when a stem cites only script-checked clauses and compose-brief's exit 3
+# wrote no brief for a courier to cross with. Same shape as case 7's `.denied`
+# waiver: clearing the marker on the identical fixture flips the same debt
+# straight back to owing, pinning the discharge to the marker and not to some
+# accidental absence of debt elsewhere in the fixture.
+proj = fresh_proj()
+write_task(proj, "T-056", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-056-sonnet-r0.json", task_id="T-056")
+skip_marker = os.path.join(verdicts_dir, "T-056-sonnet-r0-codex.skipped")
+open(skip_marker, "w").close()
+rc1, _, err1 = run_hook("stop-gate.py", {}, proj)
+os.remove(skip_marker)
+rc2, _, err2 = run_hook("stop-gate.py", {}, proj)
+check("so: a .skipped marker discharges the debt (#128)",
+      rc1 == 0 and rc2 == 2, f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 22. dispatch-guard.py: a checker-courier dispatch is refused on a stem
+# already carrying a `.skipped` marker—a recorded skip is not then crossable.
+# Clearing the marker on the identical fixture flips the same dispatch back
+# to legal, pinning the refusal to the marker rather than to the fixture
+# generally.
+proj = fresh_proj()
+write_task(proj, "T-057", status="checking", executor_model="sonnet", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+skip_marker = os.path.join(verdicts_dir, "T-057-sonnet-r0-codex.skipped")
+open(skip_marker, "w").close()
+rc1, _, err1 = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-057"}}, proj)
+os.remove(skip_marker)
+rc2, _, err2 = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-057"}}, proj)
+check("dispatch-guard: checker-courier denied on a skipped stem, and allowed once the marker clears",
+      rc1 == 2 and "skipped" in err1 and "T-057" in err1 and rc2 == 0,
+      f"rc1={rc1} err1={err1!r} rc2={rc2} err2={err2!r}")
+
+# 23. C-7's lane trap for `.skipped`, the same trap `.denied` already carries
+# (cases 6/7b above): the marker only discharges when filed under the SAME
+# lane second_opinion_debts() computed for this host, never any lane. Driven
+# with hook_host: codex, so the far side is claude—a marker filed under
+# claude discharges, and one filed under codex (the WRONG lane for a Codex
+# host) discharges nothing. A predicate that checked either lane's marker,
+# rather than the single computed one, would pass the first half here and
+# fail only on the second.
+proj = fresh_proj()
+write_task(proj, "T-058", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-058-sonnet-r0.json", task_id="T-058")
+claude_skip = os.path.join(verdicts_dir, "T-058-sonnet-r0-claude.skipped")
+codex_skip = os.path.join(verdicts_dir, "T-058-sonnet-r0-codex.skipped")
+open(claude_skip, "w").close()
+rc_right_lane, _, err_right = run_hook("stop-gate.py", {"hook_host": "codex"}, proj)
+os.remove(claude_skip)
+open(codex_skip, "w").close()
+rc_wrong_lane, _, err_wrong = run_hook("stop-gate.py", {"hook_host": "codex"}, proj)
+os.remove(codex_skip)
+check("so: a .skipped marker filed under the far lane discharges nothing (#128)",
+      rc_right_lane == 0 and rc_wrong_lane == 2,
+      f"claude marker+hook_host=codex → rc={rc_right_lane} err={err_right!r}; "
+      f"codex marker+hook_host=codex → rc={rc_wrong_lane} err={err_wrong!r}")
+
 # --------------------------------------------------------- subagent-return
 print("subagent-return.py")
 proj = fresh_proj()

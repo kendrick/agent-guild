@@ -379,5 +379,78 @@ check(
     _job_property,
 )
 
+# ------------------------------------------------ attempts and discarded (#116)
+print("attempts and discarded")
+
+with tempfile.TemporaryDirectory() as d:
+    ledger = os.path.join(d, "vendor-calls.jsonl")
+    discarded_entry = {
+        "reason": "malformed JSON",
+        "duration_ms": 900,
+        "exit_code": 1,
+        "tokens_in": 50,
+        "tokens_out": None,
+    }
+    rc, out, err = run(
+        *BASE_ARGS,
+        "--artifacts",
+        "--attempts", "2",
+        "--discarded", json.dumps(discarded_entry),
+        "--ledger", ledger,
+    )
+    check("attempts+discarded: exit 0", rc == 0, f"rc={rc} err={err}")
+    record = first_record(ledger) if rc == 0 and os.path.exists(ledger) else None
+    check(
+        "attempts+discarded: attempts read back intact",
+        record is not None and record.get("attempts") == 2,
+        record,
+    )
+    check(
+        "attempts+discarded: discarded entry reads back intact",
+        record is not None and record.get("discarded") == [discarded_entry],
+        record,
+    )
+
+with tempfile.TemporaryDirectory() as d:
+    ledger = os.path.join(d, "vendor-calls.jsonl")
+    discarded_no_usage = {
+        "reason": "vendor reported no usage",
+        "duration_ms": 500,
+        "exit_code": 1,
+        "tokens_in": None,
+        "tokens_out": None,
+    }
+    rc, out, err = run(
+        *BASE_ARGS,
+        "--artifacts",
+        "--discarded", json.dumps(discarded_no_usage),
+        "--ledger", ledger,
+    )
+    check("discarded with unreported usage: exit 0", rc == 0, f"rc={rc} err={err}")
+    record = first_record(ledger) if rc == 0 and os.path.exists(ledger) else None
+    check(
+        "discarded with unreported usage: tokens_in is null, not 0",
+        record is not None and record["discarded"][0]["tokens_in"] is None,
+        record,
+    )
+    check(
+        "discarded with unreported usage: tokens_out is null, not 0",
+        record is not None and record["discarded"][0]["tokens_out"] is None,
+        record,
+    )
+
+# Direct schema check, not assumed: a row written before #116 carries neither
+# key, and the archived-row guarantee is that it still validates against the
+# amended schema. Reuses LEGACY_ROW/_amended_schema from the job check above
+# for the same reason that check does — this catches the case where
+# "attempts" or "discarded" is mistakenly added to `required`, which no row
+# written before this change would satisfy.
+_no_new_fields_violation = _ledger_append.schema_violation(LEGACY_ROW, _amended_schema)
+check(
+    "attempts/discarded: row carrying neither key still validates",
+    _no_new_fields_violation is None,
+    _no_new_fields_violation,
+)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

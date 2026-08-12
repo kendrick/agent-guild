@@ -18,6 +18,17 @@ as that file's byte size divided by 4 and records `tokenizer` as
 "heuristic-bytes/4" (a stdlib stand-in — no tiktoken, per the kit's
 stdlib-only rule); without `--brief`, both stay null.
 
+`--attempts N` records how many times a retried crossing was attempted
+before this row's own result. `--discarded JSON` is repeatable, one JSON
+object per discarded attempt (`{"reason": ..., "duration_ms": ..., "exit_code":
+..., "tokens_in": ..., "tokens_out": ...}`), oldest attempt first. Both are
+optional and, unlike the nullable fields above, are left out of the line
+entirely when omitted — the same spelling `job` uses — because a retry does
+not turn one crossing into two rows, and every row written before #116
+carries neither key. A discarded attempt whose own token figures the vendor
+never reported writes `null` for them, the same rule the top-level fields
+follow, never a fabricated `0`.
+
 Every `--artifacts` value that resolves under the repo root (`os.getcwd()`,
 same base as `DEFAULT_LEDGER`) is rewritten to a repo-relative path before
 the line is validated — an absolute path under the root is a path that
@@ -254,6 +265,15 @@ def build_line(args):
     if job is not None:
         line["job"] = job
 
+    # Same posture as job: a retry does not turn one crossing into two rows,
+    # so an omitted --attempts/--discarded leaves the key out entirely rather
+    # than writing a default — attempts is typed plain integer, not nullable,
+    # so a written-but-empty value has no valid spelling anyway.
+    if args.attempts is not None:
+        line["attempts"] = args.attempts
+    if args.discarded is not None:
+        line["discarded"] = args.discarded
+
     return line, None
 
 
@@ -291,6 +311,15 @@ def parse_args(argv=None):
         help="files verified on disk after the call; pass with no PATHs for an empty list",
     )
     ap.add_argument("--quota-event", action="store_true", default=False)
+    ap.add_argument("--attempts", type=int, default=None, help="how many times the crossing was attempted; omit for a single-attempt row")
+    ap.add_argument(
+        "--discarded",
+        action="append",
+        type=json.loads,
+        default=None,
+        metavar="JSON",
+        help="one JSON object per discarded attempt, repeatable, oldest first; omit for none",
+    )
     ap.add_argument(
         "--job",
         default=None,

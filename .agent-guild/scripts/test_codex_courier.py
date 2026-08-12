@@ -181,6 +181,23 @@ FAKE_CODEX = textwrap.dedent(
         if out_path:
             with open(out_path, "w", encoding="utf-8") as stream:
                 stream.write("NOT_JSON")
+    elif mode == "malformed_quotes":
+        # #106's own payload shape, and a different failure from `NOT_JSON`
+        # above: this one is well-formed right up to a string value carrying
+        # raw double quotes, so the decoder gets 242 characters in before it
+        # gives up. Truncating there and keeping what parsed is exactly the
+        # bug #106 reported.
+        emit(OK_EVENTS[:3] + [{"type": "turn.completed", "usage": {
+            "input_tokens": 7, "output_tokens": 3}}])
+        if out_path:
+            body = json.dumps(verdict(
+                verdict="fail",
+                findings=[{"clause_id": "C-1", "severity": "major",
+                           "description": "the brief quotes itself",
+                           "evidence": "EMBEDDED"}],
+            )).replace("EMBEDDED", 'the brief says "C-1 must pass" at line 2')
+            with open(out_path, "w", encoding="utf-8") as stream:
+                stream.write(body)
     elif mode == "echo_mismatch":
         emit(OK_EVENTS, verdict(model="gpt-5.6", verdict="fail",
                                 findings=FAIL_FINDINGS))
@@ -501,6 +518,66 @@ try:
         and outcome["attempts"] == 2
         and "NOT_JSON" in outcome["verdict"]["findings"][0]["evidence"],
         f"outcome={outcome!r}",
+    )
+finally:
+    temp.cleanup()
+
+# ------------------------------------------------------------------ #106
+# `NOT_JSON` above fails at character one. #106's report was the harder shape:
+# a payload that parses most of the way and then truncates mid-string, which is
+# the case where "caught" and "silently accepted a prefix" look alike.
+temp, process, outcome, calls, project = run_courier(
+    "malformed_quotes", persist=True
+)
+try:
+    persisted = outcome["persisted"] if outcome else {}
+    stem_path = os.path.join(project, persisted.get("verdict_path") or "x")
+    raw_path = os.path.join(project, persisted.get("raw_path") or "x")
+    try:
+        with open(stem_path, encoding="utf-8") as stream:
+            at_stem = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        at_stem = None
+    try:
+        with open(raw_path, encoding="utf-8") as stream:
+            raw_entries = [json.loads(line) for line in stream if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        raw_entries = []
+    validated = subprocess.run(
+        [sys.executable, os.path.join(SCRIPT_DIR, "validate-verdict.py"),
+         stem_path],
+        capture_output=True, text=True,
+    )
+    blocking = (outcome["verdict"]["findings"][0] if outcome else {})
+
+    check(
+        "#106: a value carrying raw double quotes is caught, not truncated",
+        outcome is not None
+        and outcome["verdict"]["verdict"] == "blocked"
+        and "was not JSON" in blocking["description"]
+        and "Expecting ',' delimiter" in blocking["description"],
+        f"outcome={outcome!r}",
+    )
+    check(
+        "#106: the embedded-quote payload is retried exactly once, then stops",
+        outcome is not None and outcome["attempts"] == 2 and len(calls) == 2,
+        f"attempts={outcome and outcome['attempts']} calls={len(calls)}",
+    )
+    check(
+        "#106: what reaches the lane stem passes the canonical validator",
+        validated.returncode == 0
+        and at_stem is not None
+        and at_stem["verdict"] == "blocked"
+        and at_stem["task_id"] == "T-054",
+        f"rc={validated.returncode} stderr={validated.stderr!r} stem={at_stem!r}",
+    )
+    check(
+        "#106: both discarded attempts are retained verbatim, quotes and all",
+        len(raw_entries) == 2
+        and all('"C-1 must pass"' in entry["output_file"]
+                for entry in raw_entries)
+        and '"C-1 must pass"' in blocking["evidence"],
+        f"raw_path={persisted.get('raw_path')!r} entries={len(raw_entries)}",
     )
 finally:
     temp.cleanup()

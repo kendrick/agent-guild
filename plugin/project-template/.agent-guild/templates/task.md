@@ -14,6 +14,11 @@ status: pending
 retries: 0
 max_retries: 2
 deps: []
+owns: []
+# Each entry is an exact file path, or a directory prefix ending in `/`
+# (covers everything under it). Tasks whose `owns` entries overlap must be
+# connected by a dep path—one transitively depending on the other—because
+# overlapping owners must never run concurrently.
 escalations: []
 artifacts: []
 ---

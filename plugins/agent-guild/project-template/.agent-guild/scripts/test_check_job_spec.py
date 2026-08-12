@@ -97,6 +97,46 @@ def copy_corpus_state(state_dir):
     )
 
 
+ARTIFACTS_LIST_ITEM_RE = re.compile(r"^\s*-\s+.*$")
+
+
+def add_owns(state_dir):
+    """Give every task in `state_dir/tasks/` an `owns:` frontmatter field
+    cloned from its own `artifacts:`—the #117 corpus predates #133, so
+    `owns` doesn't exist in it yet, and every declared artifact is already
+    a valid owns entry (an exact file path; T-003's three are directory
+    prefixes already ending in `/`). Mirrors `artifacts:`'s own two shapes
+    (flat `[a, b]` or a block `- path` sequence) rather than normalizing
+    to one, so the cloned `owns:` reads exactly like the field it copied.
+    Mutates the task files on disk."""
+    tasks_dir = os.path.join(state_dir, "tasks")
+    for name in sorted(os.listdir(tasks_dir)):
+        path = os.path.join(tasks_dir, name)
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        out = []
+        i = 0
+        inserted = False
+        while i < len(lines):
+            line = lines[i]
+            out.append(line)
+            if not inserted and re.match(r"^artifacts:\s*(.*)$", line):
+                block = [line]
+                i += 1
+                while i < len(lines) and ARTIFACTS_LIST_ITEM_RE.match(lines[i]):
+                    block.append(lines[i])
+                    out.append(lines[i])
+                    i += 1
+                owns_block = ["owns:" + block[0][len("artifacts:"):]] + block[1:]
+                out.extend(owns_block)
+                inserted = True
+                continue
+            i += 1
+        assert inserted, f"{name}: no artifacts: field found to derive owns from"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+
+
 # The matching-pair quote-strip line the corpus cites twice (T-001.md:57,
 # against compose-brief.py:64 and check-provenance.py:74). Built by
 # concatenation rather than an escaped literal so the quoting is legible;
@@ -540,6 +580,47 @@ else:
                 check("P4 wrong early count no longer hidden by a coincidental match: exit 1", rc == 1, f"rc={rc} err={err}")
                 check("P4: R10 named", rule_hit(err, "R10"), f"err={err!r}")
                 check("P4: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # -------------------------------------------------- R13: ownership overlap (#133)
+        # `owns` postdates this corpus, so add_owns() has to inject it before
+        # R13 has anything to check. Every real overlap in the corpus—T-001
+        # and T-006/T-007 sharing the schema, T-006 and T-007 sharing both
+        # the schema and docs/vendor-ledger.md, T-005 and T-007 sharing the
+        # retrospective skill, T-003 and T-007 sharing the generated-tree
+        # prefixes—already has a direct dep edge, so the corpus with owns
+        # added should pass cleanly on its own.
+        print("R13: ownership overlap (#133)")
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            add_owns(state)
+            rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+            check("corpus + owns: exit 0", rc == 0, f"rc={rc} err={err}")
+
+        # T-006 and T-007 both own the schema and docs/vendor-ledger.md.
+        # T-007's dep on T-006 is the only path connecting them—drop it and
+        # nothing else does, so R13 has to catch the gap.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            add_owns(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-007.md"),
+                "deps: [T-001, T-004, T-005, T-006]",
+                "deps: [T-001, T-004, T-005]",
+                "R13",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("T-007's dep on T-006 dropped: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("T-007 dep dropped: R13 named", rule_hit(err, "R13"), f"err={err!r}")
+                check(
+                    "T-007 dep dropped: both task ids named",
+                    "T-006" in err and "T-007" in err,
+                    err,
+                )
+                check("T-007 dep dropped: no traceback", "Traceback" not in err, f"err={err!r}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

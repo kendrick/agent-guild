@@ -16,16 +16,24 @@ corpus copy while citations still need to resolve against a real tree.
 Rules run in this order—proofs before heuristics, so a heuristic never
 masks something provable—and only the FIRST violation found is reported:
 
-    R6 clause wiring        R1 citation resolves     R9 verdict contradiction
-    R7 dependency DAG       R3 citation shape         R10 count vs list
-    R4 check form           R8 build ordering         R12' cross-artifact count
-    R5 check runnable       R2 citation anchor
+    R6 clause wiring         R5 check runnable        R2 citation anchor
+    R7 dependency DAG        R1 citation resolves     R9 verdict contradiction
+    R13 ownership overlap    R3 citation shape        R10 count vs list
+    R4 check form             R8 build ordering        R12' cross-artifact count
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
-depend on, or order yet), so R6, R7, and R8 are skipped; every other rule
-runs over constitution.md alone. `--audit-id DEC-audit`: everything runs,
-and an empty `tasks/` is itself an R6 failure—a decomposition that
-produced no tasks decomposed nothing.
+depend on, order, or own yet), so R6, R7, R13, and R8 are skipped; every
+other rule runs over constitution.md alone. `--audit-id DEC-audit`:
+everything runs, and an empty `tasks/` is itself an R6 failure—a
+decomposition that produced no tasks decomposed nothing.
+
+R13 sits right after R7 because it needs R7's acyclic-DAG guarantee before
+it can walk a `deps` chain looking for a path between two owners—the same
+reason R8 (which walks the same chain) runs after R7 too. R13 is opt-in at
+the linter (#133): a task with no `owns:` field, or an empty one, is never
+an R13 violation—only a task this rule has nothing to check. The field
+postdates every archived corpus, so treating its absence as a violation
+would fail every one of them retroactively for a contract they predate.
 
 Every prose rule (R1 through R4, R9, R10, R12') reads only two kinds of
 text: a task's frontmatter (in practice, only `check_method` carries prose)
@@ -98,6 +106,18 @@ try:
 except Exception:
     DEFECT_SEVERITIES = ()
 
+# Same reasoning, same fallback shape, for R13's overlap predicate: loaded
+# from check-diff-scope.py rather than reimplemented, so the two scripts
+# can't drift on what "overlapping" means for an exact-path vs. a
+# directory-prefix owns entry. A load failure degrades R13 to a no-op here
+# (module-scope callers get a rule that finds nothing rather than a
+# crash); main()'s own load below still turns a real failure into exit 3
+# for the CLI path.
+try:
+    paths_overlap = _load_module("check_diff_scope_module_scope", "check-diff-scope.py").paths_overlap
+except Exception:
+    paths_overlap = None
+
 
 # ---------------------------------------------------------------------------
 # Frontmatter parsing: the base parser plus the two extensions the plan
@@ -141,7 +161,10 @@ def parse_artifacts(fm_lines, key_idx, flat_value):
     compose-brief.py's flat-only parser silently drops to an empty list—
     fine for compose-brief.py, which never reads `artifacts`, but fatal for
     R8 here, which needs every artifact path to classify a task as a build
-    input or a generated-tree write."""
+    input or a generated-tree write. `owns:` (#133) is the same two shapes
+    on the same kind of value—a path list—so load_task_file calls this
+    same function for it rather than writing a second copy of the same
+    flat-or-block logic."""
     flat_value = flat_value.strip()
     if flat_value.startswith("["):
         return parse_clause_list(flat_value)
@@ -201,11 +224,13 @@ class TaskFile:
     `spec_excerpt_start_line` describe the verbatim `## Spec excerpt`
     section and the physical line its first character sits on, so a rule
     that finds an offset within it can add a newline count to get a real
-    line number.
+    line number. `owns` is R13's input alone (#133)—parsed the same way as
+    `artifacts` (see load_task_file) but empty by default, since the field
+    is opt-in and predates every archived corpus.
     """
 
     def __init__(self, path, label, task_id, title, clauses, deps, artifacts,
-                 check_method_text, check_method_map,
+                 owns, check_method_text, check_method_map,
                  spec_excerpt_text, spec_excerpt_start_line):
         self.path = path
         self.label = label
@@ -214,6 +239,7 @@ class TaskFile:
         self.clauses = clauses
         self.deps = deps
         self.artifacts = artifacts
+        self.owns = owns
         self.check_method_text = check_method_text
         self.check_method_map = check_method_map
         self.spec_excerpt_text = spec_excerpt_text
@@ -251,6 +277,7 @@ def load_task_file(path, compose_brief):
     deps = parse_clause_list(fm.get("deps"))
 
     artifacts = []
+    owns = []
     check_method_text, check_method_map = "", []
     for i, line in enumerate(fm_lines):
         m = FM_KEY_RE.match(line)
@@ -259,6 +286,11 @@ def load_task_file(path, compose_brief):
         key, val = m.group(1), m.group(2)
         if key == "artifacts":
             artifacts = parse_artifacts(fm_lines, i, val)
+        elif key == "owns":
+            # Same flat-or-block shape as artifacts (see parse_artifacts'
+            # own docstring)—owns just documents a different thing about
+            # the same paths, so the same parser covers both fields.
+            owns = parse_artifacts(fm_lines, i, val)
         elif key == "check_method":
             check_method_text, check_method_map, _ = fold_check_method(fm_lines, i, 2)
 
@@ -273,7 +305,7 @@ def load_task_file(path, compose_brief):
     task = TaskFile(
         path=path, label=label,
         task_id=fm.get("id", "").strip(), title=fm.get("title", "").strip(),
-        clauses=clauses, deps=deps, artifacts=artifacts,
+        clauses=clauses, deps=deps, artifacts=artifacts, owns=owns,
         check_method_text=check_method_text, check_method_map=check_method_map,
         spec_excerpt_text=spec_excerpt or "", spec_excerpt_start_line=spec_excerpt_start_line,
     )
@@ -744,6 +776,49 @@ def rule_R7(ctx, audit_id):
     except graphlib.CycleError as e:
         involved = e.args[1] if len(e.args) > 1 else e.args
         return f"R7 dag: dependency cycle among {', '.join(str(x) for x in involved)}"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# R13: ownership overlap. Closes #133—two tasks dispatched concurrently can
+# silently lose one task's write to the other's if they touch the same
+# file, so any two tasks whose `owns` overlap have to be forced into
+# sequence by a dep edge. Placed right here, immediately after R7, because
+# walking a `deps` chain to look for that edge needs R7's acyclic-DAG
+# guarantee first—the same reason R8 (below) waits for R7 too.
+# ---------------------------------------------------------------------------
+
+def rule_R13(ctx, audit_id):
+    if audit_id == "CON-audit":
+        return None  # no tasks yet to own anything
+    if paths_overlap is None:
+        # check-diff-scope.py wasn't importable. main()'s own import guard
+        # already turns that into exit 3 for the CLI path; this branch is
+        # only reachable via a direct rule_R13(ctx, audit_id) call with no
+        # CLI import having run first, so silently finding nothing is the
+        # same graceful-degradation shape DEFECT_SEVERITIES uses above.
+        return None
+    by_id = {t.id: t for t in ctx.tasks}
+    owning = [t for t in ctx.tasks if t.owns]
+    for i, ta in enumerate(owning):
+        for tb in owning[i + 1:]:
+            hit = None
+            for pa in ta.owns:
+                for pb in tb.owns:
+                    if paths_overlap(pa, pb):
+                        hit = (pa, pb)
+                        break
+                if hit:
+                    break
+            if hit is None:
+                continue
+            pa, pb = hit
+            if tb.id in _transitive_deps(ta.id, by_id) or ta.id in _transitive_deps(tb.id, by_id):
+                continue  # a dep path connects them, so they can't run concurrently anyway
+            return (
+                f"R13 ownership-overlap: {ta.label} owns {pa!r} and {tb.label} owns "
+                f"{pb!r}, which overlap, with no dep path connecting {ta.id} and {tb.id}"
+            )
     return None
 
 
@@ -1291,6 +1366,7 @@ def run_rules(ctx, audit_id, repo_root):
     steps = (
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
+        lambda: rule_R13(ctx, audit_id),
         lambda: rule_R4(ctx, audit_id),
         lambda: rule_R5(ctx, repo_root),
         lambda: check_citation_rules(regions, repo_root, "R1"),
@@ -1586,12 +1662,14 @@ def main():
     try:
         compose_brief = _load_module("compose_brief_cjs", "compose-brief.py")
         validate_verdict = _load_module("validate_verdict_cjs", "validate-verdict.py")
+        diff_scope = _load_module("check_diff_scope_cjs", "check-diff-scope.py")
     except Exception as e:
         sys.stderr.write(f"job-spec: cannot import a kit script this linter depends on: {e}\n")
         return 3
 
-    global DEFECT_SEVERITIES
+    global DEFECT_SEVERITIES, paths_overlap
     DEFECT_SEVERITIES = validate_verdict.DEFECT_SEVERITIES
+    paths_overlap = diff_scope.paths_overlap
 
     ctx, err = load_context(args.state, compose_brief)
     if err:

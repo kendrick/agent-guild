@@ -117,11 +117,19 @@ def blocked_verdict(validator, task_id, checker, vendor, model, description,
 
 def ledger_record(task_id, vendor, model, started_at, duration_ms, exit_code,
                   tokens_in=None, tokens_out=None, cost_usd=None,
-                  quota_event=False):
+                  quota_event=False, discarded=None):
     """One crossing, one row. `vendor` is the LANE name here, not the
     provider; the verdict's own `vendor` field carries the provider. The two
-    disagreeing is what made the #100 archive's rows unreadable."""
-    return {
+    disagreeing is what made the #100 archive's rows unreadable.
+
+    `discarded` stays out of the dict entirely when the caller passes
+    nothing, rather than landing as `None` or `[]`: codex-courier.py never
+    passes it (it routes per-attempt figures straight to `_append_ledger`
+    instead, per #116), and the Codex-host parent that validates
+    claude-courier.py's returned payload checks this key set by exact
+    equality, so an always-present key would break that lane's callers
+    (T-009)."""
+    record = {
         "task_id": task_id,
         "vendor": vendor,
         "model": model,
@@ -133,6 +141,9 @@ def ledger_record(task_id, vendor, model, started_at, duration_ms, exit_code,
         "cost_usd": cost_usd,
         "quota_event": quota_event,
     }
+    if discarded is not None:
+        record["discarded"] = discarded
+    return record
 
 
 def validate_courier_args(script_name, task_id, timeout_seconds, prompt):

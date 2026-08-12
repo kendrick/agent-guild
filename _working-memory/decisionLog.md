@@ -14,6 +14,26 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-12: A Deterministic Clause Never Crosses, And The Brief Is What Limits A Second Opinion
+
+**Source:** the courier-lane cleanup run (#106, #128, #47, #116), nine tasks, PR #155
+
+**Context:** #128 held that a script-checked clause crosses to the courier lane as pre-run output the far side can only agree with, so the crossing costs a vendor call and returns nothing. The run shipped that, and in doing so produced six crossings of its own that say something sharper about what the lane can ever contribute.
+**Decision:** `compose-brief.py` keeps a cited clause only when its check value begins `checker-judgment:`, anchored so a script invoked with a flag containing the word is still dropped. A task citing only script-checked clauses has nothing to cross: exit 3, no brief written, and an orchestrator-written `.skipped` marker discharges the debt that would otherwise hold the turn open forever. The dual-check regime now reads "after every checker of record whose task cites a judgment clause."
+**What the run's own crossings showed:** six crossings, three `blocked` and three `fail`, no agreement with any checker of record, and zero defect findings. Every unique lane finding was about evidence or coverage, and two of them were manufactured by the brief rather than found in the work: `compose-brief.py` puts the constitution clause text in the brief and never the task's `check_method`, so the far side cannot tell a legitimately scoped check from an incomplete one (#151). Appending the `check_method` was tested on T-005 and is not sufficient; the vendor overrode an explicit note that a gap was deliberate. Meanwhile the in-family checkers produced four findings the lane structurally could not reach, all from running suites under mutation, which is the `unique_checker_access_derived` measure #137 asked for.
+**Cost, which #34 needs:** a crossing composed as complete evidence plus a question cost 21,283 input tokens; one composed as instructions the far side cannot execute cost 124,687 and returned nothing. Same lane, same day, same class of task. Any published cost for this lane is inflated by courier error unless the packets are known well formed.
+**Alternatives considered:** demoting script-checked clauses to context in the brief rather than dropping them (rejected in the issue — a clause the vendor is shown but cannot act on is what produced the blocked crossings in the first place).
+
+## 2026-08-12: The Decomposition Audit Is Where A Silent Contract Break Gets Caught
+
+**Source:** DEC-audit r0 against the courier-lane cleanup decomposition
+
+**Context:** T-008 as first scoped required #116's per-attempt figures in the payload `claude-courier.py` returns. `subagent-return.py` validates that payload by exact key set twice over, so every route to the deliverable tripped a comparison and the hook would have blocked the courier's return: crossing never promoted, debt never discharged, Codex-host lane dead in the field. Nothing in the constitution could see it — both consumer fixtures hand-build their payloads instead of calling the courier, so the full verification block stays green, and C-15's own check would have passed on precisely the artifact the hook rejects.
+**Decision:** Split on the courier boundary. T-008 takes `codex-courier.py` and is forbidden to touch `_courier_lib.ledger_record`, routing its per-attempt data to `_append_ledger` as a separate argument. T-009 takes `claude-courier.py`, widens `ledger_record` and `subagent-return.py`'s key set in the same commit, and adds the `test_codex_adapter.py` case that would have caught the gap. The validator now compares against a required set plus `optional_ledger_fields`, which is the seam the next optional key appends to.
+**Verified how:** T-009's checker built the payload by running the courier rather than constructing a dict, pushed it through the real hook process (exit 0 accepted, a poisoned payload exit 2), and ran a negative control against the pre-widening validator at `dcf6b04^` to confirm the refusal was real.
+**Also decided, and left standing:** C-10's typographic rules do not reach code comments, and three checkers said so independently while passing on the clause text. The clause enumerates commit messages, the #106 comment, and C-8's docs, which is narrower than the standing preference it claims to encode. Not widened mid-job — overturning would fail workers against a rule the constitution does not state. It is next Phase 0's input.
+**Evicted from activeContext here:** #127's block-scalar disagreement between `compose-brief.py`/`check-provenance.py` and `check-job-spec.py`. Nine tasks used folded `check_method` scalars throughout and it never bit; the disagreement stands, the urgency does not.
+
 ## 2026-08-11: A Model's Account Of Its Own Name Is Not Evidence Of Its Identity
 
 **Source:** #142, with four live probes against codex-cli 0.146.1

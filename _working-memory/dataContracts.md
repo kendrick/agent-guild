@@ -54,6 +54,8 @@ A read-only Codex courier returns `AGENT_GUILD_COURIER_OUTCOME\n<json>` rather t
 
 A Codex in-family checker (`checker-deterministic`, `checker-judgment`) runs `sandbox_mode: read-only` and cannot write its own verdict, so it returns `AGENT_GUILD_VERDICT\n<json>` as its last message. The object is the canonical schema verdict with no envelope around it, unlike the courier's outcome above, because an in-family checker produces no ledger and has no quota protocol. The return gate validates it against the schema and confirms `task_id` and `checker` match the return it belongs to, then the parent writes it unchanged to the standard stem and renders the `.md` sibling. The file stays the verdict of record wherever a checker can write one: the inline branch opens only when the file is missing or invalid and the host is Codex, so the Claude path never reaches it.
 
+`subagent-return.py` compares the returned `ledger` object against a required key set **plus** `optional_ledger_fields`, rather than against one exact set. `discarded` is the first member (#116/T-009); a future optional key appends there. Widening that set is the load-bearing half of adding any ledger field the claude lane emits — without it the hook blocks the return, the crossing is never promoted, and the debt rides to `STALLED.md` with every test still green, because both consumer fixtures hand-build their payloads instead of calling the courier.
+
 ## Lane Exhaustion
 
 `state/exhausted/<lane>` — a per-lane sentinel (directory form, so one `ls` shows every downed lane), created by a courier on a quota signal *after* its ledger line lands, so the ledger always explains the sentinel. While it exists, `dispatch-guard` denies dispatches on that lane; only the user clears it, the same contract as PAUSED.
@@ -63,6 +65,10 @@ A Codex in-family checker (`checker-deterministic`, `checker-judgment`) runs `sa
 `state/log/vendor-calls.jsonl`, one JSON line per external invocation, schema `.agent-guild/schemas/vendor-call.schema.json`, appended only through `ledger-append.py` (validate-before-append; append-only even over a malformed line). Null means the vendor didn't report it — never a fabricated zero. `brief_tokens` uses the `heuristic-bytes/4` estimator, named in the `tokenizer` field. Collector doc: `docs/vendor-ledger.md`, including the three courier obligations #8's constitution must enforce.
 
 `job` names the run a row came from, spelled as that run's provenance `ref` (`kendrick/skills#17`). It's the line's only optional key, and optional on purpose: it sits in `properties` and not in `required`, so rows written before #117 still validate. An absent key reads as unattributed rather than attributed to nothing; there is no null spelling. `ledger-append.py` resolves it in three steps and no others: `--job VALUE`, then `spec.md`'s provenance `ref` read from the working directory, then omission. Deriving from the spec is what makes it stick—`.agent-guild/state/` is wiped between jobs, and a courier that has to pass a flag is a courier that can forget to. (#117)
+
+`attempts` (integer) and `discarded` (array of objects carrying `reason`, `duration_ms`, `exit_code`, `tokens_in`, `tokens_out`) were added by #116. Both are optional, and optionality is the whole point: it is what keeps the 21 rows written before the change valid. Inside a `discarded` entry the types mirror the top-level fields of the same name, so `tokens_in`/`tokens_out` are `["number", "null"]` and an attempt whose usage the vendor never reported writes `null`.
+
+Two figures the ledger still does not carry, both visible in the same vendor `usage` block: `cached_input_tokens` and `reasoning_output_tokens`. `codex-courier.py:196` names the first and declines to read it, and whether it is a subset of `input_tokens` or disjoint from it is unresolved — the answer decides whether the ledger misprices or undercounts (#157).
 
 ## Briefs
 

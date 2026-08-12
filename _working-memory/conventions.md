@@ -24,6 +24,8 @@ How we do things here. Stable patterns, not decisions—those live in [[decision
 
 - A run's archive holds everything under `.agent-guild/state/` that the run produced, `log/` among them: tasks, verdicts, disputes, notes, briefs, and logs move into `archive/<date>/` together. The vendor ledger belongs to the record it documents, not to the directory the next job inherits. (`guild-core/workflows/retrospective/SKILL.md` step 3)
 - Leaving `log/` behind is how a ledger stops being attributable. Seven crossings the #17 run made stayed live in `.agent-guild/state/log/vendor-calls.jsonl` and got archived under #27, two jobs later, which is what #117's `job` field and its 18-row backfill exist to undo. The field makes the mistake recoverable; moving `log/` with the rest is what keeps it from happening.
+- A run's `## Courier comparison` block uses the #117/#141 schema, `disagreement_kind` and `unique_checker_access_derived` included. Write it that way during the run rather than retrofitting: the 2026-08-12 run shipped the thinner shape and needed a normalizing pass (`7dab98f`) to become comparable. `unique_checker_access_derived` is the field #137 turns on, so a run that omits it contributes nothing to that question.
+- `vendor_calls` is `unknown` unless the archive positively records more than one call. The ledger writes one line per crossing regardless of retries (#116), so absence of evidence is not evidence of a single call — four of the 2026-08-12 blocks had to be corrected from an inferred `1`.
 
 ## Hooks and Checks
 

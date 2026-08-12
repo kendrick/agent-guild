@@ -93,6 +93,8 @@ One fact in the 2026-07-28 courier-vendors entry below stopped being true with t
 **Why we backed out:** The lane is read-only by contract; execution was never the vendor's job. Arithmetic and comparison are judgment (fair game far-side); running commands is not.
 **Don't suggest:** composing a brief that expects the vendor to execute scripts, create files, or run suites. Run the check locally, inline the OUTPUT as evidence, and let the vendor judge results.
 
+**Recurred 2026-08-12**, 19 days after this entry was written, on the courier-lane cleanup run's T-004 crossing. The courier asked the far side to copy a working tree and run `compose-brief.py`; the vendor has no execution environment and returned `blocked` with an empty findings array, at 124,687 input tokens, the most expensive crossing of the run. The same run's later crossings, composed as evidence plus a question, cost about a sixth of that. The entry existed, was correct, and did not reach the agent that needed it — which says the remedy belongs in `guild-core/roles/checker-courier.md`, not only here.
+
 ## 2026-07-24: Don't ship optional properties in a schema bound for strict structured output
 
 **Tried:** `verdict.schema.json` with `duration_ms`/`cost_usd` as optional properties, checked for codex compatibility by feature-subset inspection (no conditionals, conservative keywords) because no CLI existed to probe.
@@ -172,3 +174,17 @@ One fact in the 2026-07-28 courier-vendors entry below stopped being true with t
 **What broke:** It would have been dead code. `check-job-spec.py` runs as a subprocess inside `dispatch-guard`, which reads the child's stderr to build its block message and discards stdout. A rule that only prints produces output no human or agent ever sees, while still carrying its full maintenance and false-positive-tuning cost.
 **Why we backed out:** In a hook-invoked script "warn" is not a middle setting between block and absent, it is a more expensive spelling of absent. The rule was cut instead, and the gap closed from the other end by making the paperwork decidable: the constitution template and skill now ask an author to list what a clause enumerates, so the mechanical rule that does gate can check it.
 **Don't suggest:** a warn-only, advisory, or `--strict`-gated tier for any check that runs inside a hook, unless the same change also gives the warning a path to a human. Either it gates, or it changes the input format so a gating rule can handle it, or it doesn't exist. (#139 revisits how a gating heuristic should *identify itself* — that is a different question from whether it gates.)
+
+## 2026-08-12: Don't patch a status-ownership bug with an orchestrator-side repair loop
+
+**Tried:** #148 rewinds a task's status from `checking` to `needs-check` when a worker returns, because `subagent-return.py:434` accepts only `needs-check` from a worker and re-reads the file at return time. Rather than wait for the fix, the orchestrator ran a watcher that reset the field every fifteen seconds.
+**What broke:** It converted a silent state bug into a visible fight between two agents that were each behaving correctly. T-007's worker grepped `subagent-return.py` and `_lib.py`, checked for symlinks and duplicate files, and reported that something outside its own tool calls was advancing the field between rounds. It was right, and it spent a meaningful share of its turn getting there.
+**Why we backed out:** The workaround is invisible to the agent it fights, so the cost lands on whoever is trying to behave correctly.
+**Don't suggest:** repairing task state on a timer, or any orchestrator-side loop that contests a field another agent is required to write. Fix the ownership conflict, or tell the worker its handoff already landed.
+
+## 2026-08-12: Don't guard the one crash site a task file happened to name
+
+**Tried:** `test_codex_courier.py` aborts under a `None` outcome, which makes C-5's mutation arm unreliable because cases below the abort never run. T-008 was told to guard line 403 and did. T-009 was told to guard 393 and did.
+**What broke:** The suite still aborts, now at 505, with 507, 795, 797 and 809 behind it. T-008's checker found the run dying identically with and without the fix; T-009's found it reaching 18 checks before dying anyway. Three checkers across three tasks have now lost time to the same file.
+**Why we backed out:** Naming a site treats a file-wide pattern as a point defect, and each fix looks complete until the next mutation finds the next one.
+**Don't suggest:** guarding a single named dereference. Sweep the file for the pattern, and say in the task that the guard is exempt from the mutation arm because it repairs the instrument rather than adding behavior.

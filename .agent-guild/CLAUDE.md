@@ -33,37 +33,34 @@ on the Agent call without changing the agent. -->
 
 Route a task by the work, not the default: a mechanical task goes to worker-bulk even inside a taste-heavy job. A clause checked by a script routes to checker-deterministic; a clause checked by a rubric routes to checker-judgment.
 
-## Job Weight
+## Job weight
 
 Routing sizes the agent to the task. Weight sizes the ceremony to the job. A **weight** is light, standard, or deep; a **tier** everywhere else in this contract is a model rung. Don't call one the other, and don't let a heavy job's weight pull its tasks up a tier or the reverse.
 
-Weight sets budgets and nothing else. Every phase runs, every gate fires, and every role does the same job at all three weights. A light job gets fewer clauses and fewer audit rounds, never an unchecked artifact.
+Weight sets one budget and nothing else: how many clauses the constitution should need. Every phase runs, every gate fires, and every role does the same job at all three weights. A light job gets a smaller constitution, never a weaker check. Nothing caps audit rounds—that was measured against this repo's archive and cut (#120), because the rounds a budget removes are where auditors catch contradictions.
 
 The discriminator is one question you can read straight off the spec: **does verification require building an instrument, or invoking one that already exists?** That's where the guild's cost actually lands, because a job whose checks have to be built is a job whose specification has to be built first. One signal adjusts upward—unattended blast radius. Something that runs on a schedule or on a file change earns more rigor than something a person invokes and watches.
 
-| Weight | Signals | Clause ceiling | Audit round budget |
-| --- | --- | --- | --- |
-| light | every acceptance check runs through a command that already exists; a single artifact; no unattended blast radius | ~5 | 1 |
-| standard | the harness exists but needs extending, or there's unattended blast radius | ~8 | 2 |
-| deep | verification requires building an instrument, or the spec's own "done" is a property nobody can check today | none | 3 |
-
-Deep removes the clause ceiling but still draws a round budget. Rounds are where the cost compounds, and the eight-round opening that motivated the budget was itself a deep job, so leaving deep's rounds unbounded would reproduce the exact failure the budget exists to stop.
-
-<!-- The courier column returns here when #34 rules. Courier dispatch is hook-enforced and weight-independent for now (#126). -->
+| Weight | Signals | Clause ceiling |
+| --- | --- | --- |
+| light | every acceptance check runs through a command that already exists; a single artifact; no unattended blast radius | 5 |
+| standard | the harness exists but needs extending, or there's unattended blast radius | 8 |
+| deep | verification requires building an instrument, or the spec's own "done" is a property nobody can check today | none |
+<!-- A courier column and an audit-round column both belonged here once. Couriers come back when #34 rules; capping audit rounds was measured against this repo's own archive and cut, see #120. -->
 
 These rules outrank the numbers:
 
-- **Uncertainty fails toward deep.** A weight guessed low costs you something shipping broken. Guessed high, it costs wall clock. Those aren't the same mistake, so they don't get the same benefit of the doubt.
+- **Uncertainty fails toward deep.** A weight guessed low costs you something shipped broken. Guessed high, it costs wall clock. Those aren't the same mistake, so they don't get the same benefit of the doubt.
 - **The weight is announced, never assumed.** Phase 0 states it to the user in one line with its reason, and the user can correct it in a word. Nothing about ceremony gets derived silently.
 - **A ceiling is a budget, not a gate.** A light job that genuinely needs a sixth clause writes the sixth clause and records why the weight was wrong. That record is what makes the next derivation better.
 
 ## The job, phase by phase
 
-**Phase 0, constitution.** Invoke the `constitution` skill. It derives the job's weight and puts it to the user before drafting anything, then produces `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first. CON-audit's rounds come out of the audit round budget below.
+**Phase 0, constitution.** Invoke the `constitution` skill. It derives the job's weight and puts it to the user before drafting anything, then produces `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first.
 
 Note: hooks no-op when no task is open, so during Phase 0 the write-guard is not yet active. The orchestrator contract is prompt-only here—you're trusted to write only the constitution and spec, nothing else, until tasks exist.
 
-**Phase 1, decompose.** Invoke the `decompose` skill to turn the spec plus constitution into task files under `.agent-guild/state/tasks/`, each with an executor, a checker, and a `check_method` that cites constitution clauses. Then dispatch the auditor with `Audit-ID: DEC-audit` to confirm the decomposition covers the spec. DEC-audit gets its own budget of the same size.
+**Phase 1, decompose.** Invoke the `decompose` skill to turn the spec plus constitution into task files under `.agent-guild/state/tasks/`, each with an executor, a checker, and a `check_method` that cites constitution clauses. Then dispatch the auditor with `Audit-ID: DEC-audit` to confirm the decomposition covers the spec.
 
 **Phase 2, build and verify.** Drive each task through the lifecycle below. Dispatch, collect verdicts, rule on disputes, escalate when a tier is spent.
 
@@ -128,18 +125,6 @@ A FAIL is not "try again." It's "here is precisely what's wrong."
 4. Above `opus`, escalate to `fable` for one final dispatch. If fable's budget is also spent, stop dispatching: enrich the spec and re-decompose, or surface the task to the user. There is no rung above fable.
 
 The ladder is Claude-only for now. Those rungs are Claude model names, and a Codex host has no model to put behind them, so a task that escalates there records the bump and then can't dispatch at all: the gate refuses the stale tier, and the host refuses the new one. On Codex, treat a spent budget at the executor's own tier as step 4's ending—enrich the spec and re-decompose, or hand the task to the user—rather than climbing.
-
-## Audit Round Budget
-
-An audit spends rounds the way a task spends retries, and the resemblance ends there. Nothing escalates: the auditor is opus at round 0 and opus at the last round, because the fix for a document that failed audit is rewriting the document, not dispatching a stronger reader. The budget belongs to the document too, not to a task—CON-audit and DEC-audit each carry their own.
-
-The budget is the audit round number for the weight on the constitution's `**Job weight**:` line—**1 light, 2 standard, 3 deep**—and 3 when that line is missing. Each audit id draws its own, so a light job's two audits get one round each. A round is one `<Audit-ID>-r<N>.md` stem under `.agent-guild/state/verdicts/`, and the budget is spent when the stem count reaches it: a budget of 2 means `r0` and `r1`. The count is something you can go and look at rather than something you have to remember.
-
-A spent budget with no PASS is where your authority over the document ends. Stop dispatching and give it to the user with the outstanding findings, the same way step 4 of the retry ladder ends. They can grant further rounds, rewrite the document themselves, or drop the job. Log the hand-off as one line in `.agent-guild/state/log/escalations.log`.
-
-There is no exit you can take alone, and that is deliberate. `dispatch-guard` blocks every worker until a CON-audit PASS exists, and you may not write that verdict yourself: an audit you commissioned is not one you get to sign. A budget that let the orchestrator declare its own paperwork good enough would remove the single check that reaches your work.
-
-The auditor's own read on how close it is never buys another round. "One more should do it" is the estimate behind an eight-round opening that cost 107 minutes before a single deliverable existed. That run is what this budget exists to bound.
 
 ## Disputes
 

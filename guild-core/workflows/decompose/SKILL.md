@@ -34,4 +34,4 @@ Done when every task names an executor, a checker, a check method covering each 
 
 ## 4. Send it to audit
 
-Tell the orchestrator to dispatch the **auditor** with `Audit-ID: DEC-audit`. The auditor confirms the tasks cover the spec, the assignments follow the routing table, and `deps` form a DAG. Fix what it flags and re-submit before dispatching workers, up to the weight's audit round budget in `CLAUDE.md`.
+Tell the orchestrator to dispatch the **auditor** with `Audit-ID: DEC-audit`. The auditor confirms the tasks cover the spec, the assignments follow the routing table, and `deps` form a DAG. Fix what it flags and re-submit before dispatching workers.

@@ -21,7 +21,7 @@ Check every clause:
 - It is falsifiable. You can state a specific artifact that would violate it. If you cannot describe a failing example, the clause is unfalsifiable—fail it and say why.
 - No two clauses contradict each other.
 - Any protected content points at a real manifest that parses.
-- The clause count fits the ceiling for the weight on the constitution's `**Job weight**:` line: more than 5 for light or more than 8 for standard is over, and deep has no ceiling. A missing or unfilled weight line means Phase 0 skipped the derivation, which is itself worth reporting. An over-ceiling count never blocks on its own, because the ceiling is a budget the orchestrator may knowingly overrun. What you're checking is that the overrun was noticed and explained rather than drifted into.
+- The clause count fits the ceiling for the weight on the constitution's `**Job weight**:` line: more than 5 for light or more than 8 for standard is over, and deep has no ceiling. Report an over-ceiling count that nothing explains, and report a weight line that is missing or still holds the template placeholder, which means Phase 0 skipped the derivation. Neither blocks on its own: the ceiling is a budget the orchestrator may knowingly overrun, so what you're checking is that the overrun was noticed rather than drifted into.
 
 ## DEC-audit: audit the decomposition
 - Coverage: every section of the spec maps to at least one task. Name any spec requirement no task covers.
@@ -32,9 +32,7 @@ Check every clause:
 ## What you write
 Exactly one file: `.agent-guild/state/verdicts/<Audit-ID>-r<N>.md`, from `.agent-guild/templates/verdict.md`. N is the audit round: 0 if no prior `<Audit-ID>-r*.md` exists, otherwise one past the highest. Fill the per-clause or per-task table, and for any FAIL write a `## Diagnosis` naming exactly what's wrong and where. Set the `verdict` field.
 
-Give every FAIL finding a severity from the guild's usual vocabulary, so a reader can tell a defect that stops the document governing work from one that's merely worth naming. Nothing downstream computes on that grade; it's there to be read.
-
 PASS only if the document is genuinely sound. dispatch-guard blocks every worker until a CON-audit PASS exists, so a rubber stamp here disables the one check that verifies the orchestrator. A weak constitution that passes audit becomes every worker's excuse.
 
 ## What you must not do
-Do not rewrite the constitution, the spec, or the tasks. You have no Edit tool by design. You report; the orchestrator revises and re-submits for audit, up to the audit round budget in `CLAUDE.md`.
+Do not rewrite the constitution, the spec, or the tasks. You have no Edit tool by design. You report; the orchestrator revises and re-submits for audit.

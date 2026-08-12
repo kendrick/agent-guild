@@ -31,15 +31,37 @@ happened between the two firings. The digest alone can't tell that apart from
 a genuine second strike, so the state file also persists the main
 transcript's byte size. Two firings against an unchanged transcript are one
 real block, not two, and the counter holds rather than advancing.
+
+Presentation, separately from all of the above: this gate shells out to
+.agent-guild/scripts/ready-set.py to group ready tasks into one wave, fed
+`--running` from the fresh in-flight markers this gate already computes
+(#125)—that script is the single host-neutral source of the wave decision,
+so a Claude host and a Codex host announce the identical wave from the
+identical inputs. This changes only how the block message reads, never
+whether it blocks: the underlying open-tasks/debts computation is untouched,
+and if ready-set.py is missing, times out, or exits non-zero, the gate
+degrades straight back to _next_move's per-task advice for every open
+task—the same posture dispatch-guard.py's _job_spec_block takes toward a
+stale or slow check-job-spec.py.
 """
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
 
 STALL_LIMIT = 3
+
+# Short on purpose (#125): ready-set.py only parses a handful of small task
+# files, nothing like check-job-spec.py's full paperwork lint, so there's no
+# reason to hold the gate open anywhere near dispatch-guard's 20s budget.
+# AGENT_GUILD_READY_SET_TIMEOUT is the same test-only seam as
+# AGENT_GUILD_JOB_SPEC_TIMEOUT: it lets one test exercise a real
+# subprocess.run() timeout without a real 5s wait for every run of this
+# suite.
+READY_SET_TIMEOUT_S = float(os.environ.get("AGENT_GUILD_READY_SET_TIMEOUT", "5"))
 
 
 def _next_move(tid, status, retries, debts, marker_state=None, marker_ts=None):
@@ -110,6 +132,83 @@ def _next_move(tid, status, retries, debts, marker_state=None, marker_ts=None):
                     "append the ruling and set the task to complete or rework.",
     }
     return f"  {tid} [{status}] → {moves.get(status, 'resolve this task.')}"
+
+
+def _running_ids(fresh_markers):
+    """Task/Audit ids behind fresh in-flight markers, deduped and order-
+    preserved. A marker stem is `<ident>--<agent>`; ready-set.py wants only
+    the ids, since it's the caller's job (not ready-set.py's) to say what's
+    already dispatched."""
+    out = []
+    seen = set()
+    for m in fresh_markers:
+        ident = m.split("--", 1)[0]
+        if ident not in seen:
+            seen.add(ident)
+            out.append(ident)
+    return out
+
+
+def _compute_wave(fresh_markers):
+    """ready-set.py's parsed JSON result, or None on any failure to
+    produce one—missing script, timeout, non-zero exit, or unparseable
+    stdout. None means "degrade to _next_move for everything," never
+    "block less than before": every caller of this treats None exactly
+    like an empty wave, so a broken ready-set.py can only ever make the
+    message plainer, not the gate looser."""
+    script = os.path.join(
+        _lib.project_dir(), ".agent-guild", "scripts", "ready-set.py"
+    )
+    if not os.path.exists(script):
+        return None
+    cmd = [
+        sys.executable,
+        script,
+        _lib.state_path(),
+        "--running",
+        *_running_ids(fresh_markers),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=_lib.project_dir(),
+            capture_output=True,
+            text=True,
+            timeout=READY_SET_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(result, dict) or "wave" not in result:
+        return None
+    return result
+
+
+def _wave_block(wave):
+    """The unmissable header for a computed wave, or None if it's empty.
+    Two or more members is #125's headline case—independent tasks that
+    used to get dispatched one at a time purely because nothing said
+    otherwise—so that case gets an explicit, hard-to-miss instruction to
+    fire them together in a single message."""
+    if not wave:
+        return None
+    lines = []
+    if len(wave) >= 2:
+        lines.append(
+            f"READY WAVE: {len(wave)} tasks have no unmet dependency on each "
+            "other right now. Dispatch ALL of them in this ONE message, as "
+            "parallel Task tool calls, before doing anything else:"
+        )
+    else:
+        lines.append("Ready to dispatch now:")
+    for w in wave:
+        lines.append(f"  {w['id']} → dispatch {w['agent']} ({w['reason']}).")
+    return "\n".join(lines)
 
 
 def _state_file():
@@ -311,9 +410,21 @@ def main(data):
     _save_state(digest, count, transcript_size)
 
     all_markers = _lib.in_flight(ttl=float("inf"))
+
+    # Presentation only (#125): ready_result/wave_ids never change which
+    # tasks are open or which debts are outstanding—only which of them get
+    # folded into the wave announcement instead of an ordinary per-task
+    # line. wave_ids stays empty whenever ready-set.py degrades, which
+    # collapses this whole block straight back to the pre-#125 behavior:
+    # every task gets its _next_move line, nothing gets a wave header.
+    ready_result = _compute_wave(fresh_markers)
+    wave = ready_result["wave"] if ready_result else []
+    wave_ids = {w["id"] for w in wave}
+
     task_lines = [
         _next_move(*t, debts, *_marker_info(t[0], fresh_markers, all_markers))
         for t in tasks
+        if t[0] not in wave_ids
     ]
     # Named by the missing FILE, not the bare stem: a debt's `stem` is the
     # verdict-of-record's own name (T-001-sonnet-r0), and printing that alone
@@ -325,7 +436,11 @@ def main(data):
         f"write {d_stem}-{d_lane}.json."
         for d_tid, d_stem, d_lane in debts
     ]
-    body = "\n".join(task_lines + debt_lines)
+    wave_block = _wave_block(wave)
+    body_sections = ([wave_block] if wave_block else []) + [
+        "\n".join(task_lines + debt_lines)
+    ]
+    body = "\n".join(body_sections)
     return _lib.block(
         f"{len(tasks)} task(s) still open and {len(debts)} second opinion(s) "
         "outstanding—the turn can't end yet. Next move for each:\n"

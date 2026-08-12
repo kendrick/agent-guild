@@ -19,11 +19,12 @@ masks something provable—and only the FIRST violation found is reported:
     R6 clause wiring         R5 check runnable        R2 citation anchor
     R7 dependency DAG        R1 citation resolves     R9 verdict contradiction
     R13 ownership overlap    R3 citation shape        R10 count vs list
-    R4 check form             R8 build ordering        R12' cross-artifact count
+    R14 dep rationale        R8 build ordering        R12' cross-artifact count
+    R4 check form
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
-depend on, order, or own yet), so R6, R7, R13, and R8 are skipped; every
-other rule runs over constitution.md alone. `--audit-id DEC-audit`:
+depend on, order, or own yet), so R6, R7, R13, R14, and R8 are skipped;
+every other rule runs over constitution.md alone. `--audit-id DEC-audit`:
 everything runs, and an empty `tasks/` is itself an R6 failure—a
 decomposition that produced no tasks decomposed nothing.
 
@@ -34,6 +35,17 @@ the linter (#133): a task with no `owns:` field, or an empty one, is never
 an R13 violation—only a task this rule has nothing to check. The field
 postdates every archived corpus, so treating its absence as a violation
 would fail every one of them retroactively for a contract they predate.
+
+R14 sits right after R13 for the same reason it's opt-in the same way
+(#125): it only has something to check on a task that also declares
+`owns:`, since that's the field that makes a dep edge a serialization
+point worth justifying in the first place. A task with no `owns:` can
+still declare `deps:` with no `dep_rationale:` at all and R14 has nothing
+to say about it—every archived corpus predates `dep_rationale:`, same as
+it predates `owns:`. R14 checks only that a rationale exists for each dep
+and that the two lists correspond one to one; whether a given rationale is
+actually *true* is judgment, and stays the auditor's job under DEC-audit,
+not this linter's.
 
 Every prose rule (R1 through R4, R9, R10, R12') reads only two kinds of
 text: a task's frontmatter (in practice, only `check_method` carries prose)
@@ -180,6 +192,24 @@ def parse_artifacts(fm_lines, key_idx, flat_value):
     return items
 
 
+DEP_RATIONALE_ITEM_RE = re.compile(r"^(T-\d+):\s*(.+)$")
+
+
+def parse_dep_rationale(fm_lines, key_idx, flat_value):
+    """`dep_rationale:` is the same flat-or-block shape as `artifacts:` and
+    `owns:` (see parse_artifacts' docstring), except each item reads
+    `T-NNN: rationale text` rather than a bare path. The raw strings come
+    from parse_artifacts unchanged; this just splits each on its first
+    colon. An item that doesn't match `T-NNN: text` comes back as
+    `(None, item)` rather than being dropped, so R14 can report the exact
+    malformed entry instead of silently ignoring it."""
+    parsed = []
+    for item in parse_artifacts(fm_lines, key_idx, flat_value):
+        m = DEP_RATIONALE_ITEM_RE.match(item.strip())
+        parsed.append((m.group(1), m.group(2).strip()) if m else (None, item))
+    return parsed
+
+
 def fold_check_method(fm_lines, key_idx, file_start_line):
     """Fold the `check_method: >-` scalar's continuation lines into one
     prose string, the way YAML folding joins them for a real parser, and
@@ -226,11 +256,13 @@ class TaskFile:
     that finds an offset within it can add a newline count to get a real
     line number. `owns` is R13's input alone (#133)—parsed the same way as
     `artifacts` (see load_task_file) but empty by default, since the field
-    is opt-in and predates every archived corpus.
+    is opt-in and predates every archived corpus. `dep_rationale` is R14's
+    input the same way (#125): a list of `(task_id_or_None, text)` pairs,
+    empty by default for the same reason `owns` is.
     """
 
     def __init__(self, path, label, task_id, title, clauses, deps, artifacts,
-                 owns, check_method_text, check_method_map,
+                 owns, dep_rationale, check_method_text, check_method_map,
                  spec_excerpt_text, spec_excerpt_start_line):
         self.path = path
         self.label = label
@@ -240,6 +272,7 @@ class TaskFile:
         self.deps = deps
         self.artifacts = artifacts
         self.owns = owns
+        self.dep_rationale = dep_rationale
         self.check_method_text = check_method_text
         self.check_method_map = check_method_map
         self.spec_excerpt_text = spec_excerpt_text
@@ -278,6 +311,7 @@ def load_task_file(path, compose_brief):
 
     artifacts = []
     owns = []
+    dep_rationale = []
     check_method_text, check_method_map = "", []
     for i, line in enumerate(fm_lines):
         m = FM_KEY_RE.match(line)
@@ -291,6 +325,8 @@ def load_task_file(path, compose_brief):
             # own docstring)—owns just documents a different thing about
             # the same paths, so the same parser covers both fields.
             owns = parse_artifacts(fm_lines, i, val)
+        elif key == "dep_rationale":
+            dep_rationale = parse_dep_rationale(fm_lines, i, val)
         elif key == "check_method":
             check_method_text, check_method_map, _ = fold_check_method(fm_lines, i, 2)
 
@@ -306,6 +342,7 @@ def load_task_file(path, compose_brief):
         path=path, label=label,
         task_id=fm.get("id", "").strip(), title=fm.get("title", "").strip(),
         clauses=clauses, deps=deps, artifacts=artifacts, owns=owns,
+        dep_rationale=dep_rationale,
         check_method_text=check_method_text, check_method_map=check_method_map,
         spec_excerpt_text=spec_excerpt or "", spec_excerpt_start_line=spec_excerpt_start_line,
     )
@@ -819,6 +856,57 @@ def rule_R13(ctx, audit_id):
                 f"R13 ownership-overlap: {ta.label} owns {pa!r} and {tb.label} owns "
                 f"{pb!r}, which overlap, with no dep path connecting {ta.id} and {tb.id}"
             )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# R14: dep rationale. Closes #125's dependency-justification half—every
+# `deps` edge serializes a wave, so an edge nobody can name a reason for is
+# wall clock nobody agreed to pay. Placed right next to R13 because it's
+# opt-in the same way and for the same reason: scoped to owns-bearing tasks
+# only, so the archived corpus (which predates both fields) stays green.
+#
+# This is the MECHANICAL half only—that a rationale exists for each dep and
+# the two lists correspond one to one. Whether a rationale is actually
+# TRUE, once it exists, is judgment: that's the auditor's job under
+# DEC-audit, not this linter's.
+# ---------------------------------------------------------------------------
+
+def rule_R14(ctx, audit_id):
+    if audit_id == "CON-audit":
+        return None  # no tasks yet to depend on anything
+    for task in ctx.tasks:
+        if not task.owns:
+            continue  # opt-in: a task with nothing to own owes no rationale
+        for task_id, text in task.dep_rationale:
+            if task_id is None:
+                return (
+                    f"R14 dep-rationale: {task.label} dep_rationale entry {text!r} is not "
+                    "of the form 'T-NNN: rationale'"
+                )
+        rationale_ids = [task_id for task_id, _ in task.dep_rationale]
+        rationale_set = set(rationale_ids)
+        seen = set()
+        for task_id in rationale_ids:
+            if task_id in seen:
+                return (
+                    f"R14 dep-rationale: {task.label} names {task_id} more than once in "
+                    "dep_rationale"
+                )
+            seen.add(task_id)
+        for dep in task.deps:
+            if dep not in rationale_set:
+                return (
+                    f"R14 dep-rationale: {task.label} depends on {dep} but dep_rationale "
+                    "names no rationale for it"
+                )
+        deps_set = set(task.deps)
+        for task_id in rationale_ids:
+            if task_id not in deps_set:
+                return (
+                    f"R14 dep-rationale: {task.label} dep_rationale names {task_id}, which "
+                    "is not in this task's deps"
+                )
     return None
 
 
@@ -1367,6 +1455,7 @@ def run_rules(ctx, audit_id, repo_root):
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
         lambda: rule_R13(ctx, audit_id),
+        lambda: rule_R14(ctx, audit_id),
         lambda: rule_R4(ctx, audit_id),
         lambda: rule_R5(ctx, repo_root),
         lambda: check_citation_rules(regions, repo_root, "R1"),

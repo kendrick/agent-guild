@@ -148,6 +148,36 @@ def seed_verdict_toolchain(proj):
                 os.path.join(dst_schemas, "verdict.schema.json"))
 
 
+def seed_ready_set(proj):
+    """Copies the real ready-set.py, plus check-diff-scope.py (its
+    paths_overlap import), into proj's own .agent-guild/scripts/—the same
+    copy-in-kit posture seed_verdict_toolchain takes for
+    validate-verdict.py. stop-gate.py's wave section has to be driven by
+    the real script's real output, not a stand-in that could drift from
+    what it actually decides (#125)."""
+    dst = os.path.join(proj, ".agent-guild", "scripts")
+    os.makedirs(dst, exist_ok=True)
+    for name in ("ready-set.py", "check-diff-scope.py"):
+        shutil.copy(os.path.join(KIT_ROOT, "scripts", name), os.path.join(dst, name))
+
+
+def write_fake_ready_set(proj, sleep_seconds):
+    """A stand-in for scripts/ready-set.py that outlives stop-gate's own
+    subprocess timeout instead of returning—the fixture for the timeout
+    branch, which needs a script that genuinely never answers in time."""
+    d = os.path.join(proj, ".agent-guild", "scripts")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "ready-set.py")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(
+            "#!/usr/bin/env python3\n"
+            "import time\n"
+            f"time.sleep({sleep_seconds})\n"
+        )
+    os.chmod(path, 0o755)
+    return path
+
+
 def seed_ledger_line(proj, task_id, quota_event=True):
     """Append one real vendor-ledger line for task_id via the actual
     ledger-append.py (not hand-formatted JSON)—the quota fixture needs a
@@ -699,6 +729,73 @@ with open(state_file, "rb") as f:
     state_after = f.read()
 check("subagent Stop → stop-gate.state byte-identical",
       state_before == state_after, f"before={state_before!r} after={state_after!r}")
+
+# --------------------------- stop-gate: ready-set wave presentation (#125)
+# ready-set.py changes only how the block message reads, never whether it
+# blocks—these fixtures prove both the presentation (the wave section, with
+# its unmissable parallel-dispatch instruction) and the degrade path (any
+# reason ready-set.py can't produce a result falls straight back to the
+# pre-#125 per-task advice).
+print("stop-gate.py: ready-set wave presentation (#125)")
+
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[file-a.py]")
+write_task(proj, "T-002", status="pending", deps="[]", owns="[file-b.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("wave: two dep-free tasks still block the turn", rc == 2, f"rc={rc}")
+check("wave: unmissable one-message parallel-dispatch instruction",
+      "ONE message" in err and "parallel" in err, err)
+check("wave: both ready tasks named in the wave section",
+      "T-001" in err and "T-002" in err, err)
+check("wave: each entry names its executor agent",
+      err.count("worker-standard") >= 2, err)
+
+# a single-member wave gets no "in ONE message" fanout instruction—there's
+# nothing to fan out.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[file-a.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("wave: a lone ready task names it without the fanout instruction",
+      rc == 2 and "T-001" in err and "ONE message" not in err, err)
+
+# degrade path 1: ready-set.py never copied in at all (today's ordinary
+# case for a repo that hasn't picked up #125's payload yet)—the gate must
+# still block and still name the next move per task.
+proj = fresh_proj()
+write_task(proj, "T-003", status="pending", deps="[]", owns="[file-c.py]")
+write_task(proj, "T-004", status="pending", deps="[]", owns="[file-d.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("degrade (missing script): still blocks", rc == 2, f"rc={rc}")
+check("degrade (missing script): no wave header",
+      "READY WAVE" not in err, err)
+check("degrade (missing script): per-task advice for both tasks",
+      err.count("assign it and dispatch its executor") == 2, err)
+
+# degrade path 2: ready-set.py is present but exits non-zero against this
+# project's data (here, task files missing the deps/owns fields it
+# requires)—still not a weaker block, just a plainer message.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-005", status="pending")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("degrade (script errors): still blocks", rc == 2, f"rc={rc}")
+check("degrade (script errors): falls back to per-task advice, no wave header",
+      "READY WAVE" not in err and "assign it and dispatch its executor" in err,
+      err)
+
+# degrade path 3: ready-set.py hangs past the gate's own short timeout.
+proj = fresh_proj()
+write_fake_ready_set(proj, sleep_seconds=2)
+write_task(proj, "T-006", status="pending", deps="[]", owns="[file-f.py]")
+rc, out, err = run_hook(
+    "stop-gate.py", {}, proj,
+    extra_env={"AGENT_GUILD_READY_SET_TIMEOUT": "0.2"})
+check("degrade (script times out): still blocks", rc == 2, f"rc={rc}")
+check("degrade (script times out): falls back to per-task advice, no wave header",
+      "READY WAVE" not in err and "assign it and dispatch its executor" in err,
+      err)
 
 # ------------------------------------------------------------ dispatch-guard
 print("dispatch-guard.py")

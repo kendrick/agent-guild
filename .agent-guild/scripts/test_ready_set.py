@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Fixture-based tests for ready-set.py. Every fixture is a scratch
+`state/tasks/` directory in a fresh temp dir, and the script runs as a
+subprocess so these tests exercise the real CLI contract (exit codes,
+stdout JSON)—matching test_check_diff_scope.py's approach for its sibling
+script.
+
+Run: python3 .agent-guild/scripts/test_ready_set.py
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT = os.path.join(SCRIPTS_DIR, "ready-set.py")
+
+passed = failed = 0
+
+
+def check(label, cond, detail=""):
+    global passed, failed
+    if cond:
+        passed += 1
+        print(f"  ok   {label}")
+    else:
+        failed += 1
+        print(f"  FAIL {label}  {detail}")
+
+
+def write_task(
+    state_dir,
+    tid,
+    status="pending",
+    deps=(),
+    owns=(),
+    executor="worker-standard",
+    checker="checker-deterministic",
+    retries=0,
+    max_retries=2,
+):
+    """A minimal but complete task fixture—every field ready-set.py
+    requires, in the flat `--- ... ---` frontmatter shape real task files
+    use."""
+    deps_str = "[" + ", ".join(deps) + "]"
+    owns_str = "[" + ", ".join(owns) + "]"
+    content = (
+        "---\n"
+        f"id: {tid}\n"
+        f"status: {status}\n"
+        f"retries: {retries}\n"
+        f"deps: {deps_str}\n"
+        f"owns: {owns_str}\n"
+        f"executor: {executor}\n"
+        f"checker: {checker}\n"
+        f"max_retries: {max_retries}\n"
+        "---\n\n## Spec excerpt\n\nFixture body.\n"
+    )
+    tasks_dir = os.path.join(state_dir, "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    path = os.path.join(tasks_dir, f"{tid}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
+
+
+def run_script(state_dir, *extra_argv):
+    proc = subprocess.run(
+        [sys.executable, SCRIPT, state_dir, *extra_argv],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def run_and_parse(state_dir, *extra_argv):
+    rc, out, err = run_script(state_dir, *extra_argv)
+    try:
+        return rc, json.loads(out), err
+    except json.JSONDecodeError:
+        return rc, None, err
+
+
+def ids(entries):
+    return [e["id"] for e in entries]
+
+
+# --------------------------------------- 1. two dep-free disjoint tasks (headline)
+print("two dep-free disjoint tasks land in ONE wave")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["file-a.py"])
+    write_task(d, "T-002", owns=["file-b.py"])
+    rc, result, err = run_and_parse(d)
+    check("headline: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "headline: both land in the SAME wave call",
+        ids(result["wave"]) == ["T-001", "T-002"],
+        result,
+    )
+    check("headline: nothing deferred", result["deferred"] == [], result)
+    check("headline: nothing needs attention", result["attention"] == [], result)
+
+# --------------------------------------------------- 2. owns overlap defers
+print("owns overlap defers the higher-numbered task, naming the collision")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-002", owns=["shared/"])
+    write_task(d, "T-010", owns=["shared/file.py"])
+    rc, result, err = run_and_parse(d)
+    check("overlap: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("overlap: lower id wins the wave", ids(result["wave"]) == ["T-002"], result)
+    check(
+        "overlap: higher id defers",
+        ids(result["deferred"]) == ["T-010"],
+        result,
+    )
+    check(
+        "overlap: reason names the colliding task",
+        "T-002" in result["deferred"][0]["reason"],
+        result["deferred"],
+    )
+
+# ------------------------------------------------- 3. --running excludes a task
+print("--running excludes a task from the wave")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["file-a.py"])
+    write_task(d, "T-002", owns=["file-b.py"])
+    rc, result, err = run_and_parse(d, "--running", "T-001")
+    check("running: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "running: only the non-running task waves",
+        ids(result["wave"]) == ["T-002"],
+        result,
+    )
+    check(
+        "running: excluded task isn't dumped into deferred either",
+        result["deferred"] == [],
+        result,
+    )
+
+# ------------------------------------------- 4. dep on an abandoned task
+print("a task whose dep is abandoned lands in attention")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="abandoned")
+    write_task(d, "T-002", deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("abandoned-dep: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("abandoned-dep: not in wave", result["wave"] == [], result)
+    check("abandoned-dep: not in deferred", result["deferred"] == [], result)
+    check(
+        "abandoned-dep: lands in attention naming T-001",
+        len(result["attention"]) == 1
+        and result["attention"][0]["id"] == "T-002"
+        and "T-001" in result["attention"][0]["reason"],
+        result["attention"],
+    )
+
+# ------------------------------------------------- 5. malformed task file
+print("a malformed task file exits 3")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    with open(os.path.join(tasks_dir, "T-001.md"), "w", encoding="utf-8") as f:
+        f.write("not frontmatter at all\n")
+    rc, out, err = run_script(d)
+    check("malformed: exit 3", rc == 3, f"rc={rc} out={out}")
+    check("malformed: names the offending file", "T-001.md" in err, err)
+    check("malformed: uses the ready-set: prefix", "ready-set:" in err, err)
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    # Missing required fields (status, deps, executor, checker): frontmatter
+    # parses fine, but the task can't be trusted to compute a ready set from.
+    with open(os.path.join(tasks_dir, "T-002.md"), "w", encoding="utf-8") as f:
+        f.write("---\nid: T-002\nretries: 0\n---\n")
+    rc, out, err = run_script(d)
+    check("missing-fields: exit 3", rc == 3, f"rc={rc} out={out}")
+    check("missing-fields: names T-002.md", "T-002.md" in err, err)
+
+# ------------------------------------------------------------ 6. determinism
+print("determinism: same input, byte-identical output across repeated runs")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["file-a.py"])
+    write_task(d, "T-002", owns=["file-b.py"], deps=["T-001"], status="rework", retries=1)
+    write_task(d, "T-003", status="needs-check")
+    write_task(d, "T-004", status="disputed")
+    outputs = set()
+    for _ in range(5):
+        rc, out, err = run_script(d)
+        check("determinism: each run exits 0", rc == 0, f"rc={rc} err={err}")
+        outputs.add(out)
+    check(
+        "determinism: every run produced byte-identical stdout",
+        len(outputs) == 1,
+        outputs,
+    )
+
+# --------------------------------------------------------- bonus: needs-check
+print("a needs-check task owes its checker")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="needs-check", checker="checker-judgment")
+    rc, result, err = run_and_parse(d)
+    check("needs-check: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "needs-check: shows up in checks naming its checker",
+        result["checks"] == [
+            {
+                "id": "T-001",
+                "agent": "checker-judgment",
+                "reason": "worker finished; checker of record is owed",
+            }
+        ],
+        result["checks"],
+    )
+
+# --------------------------------------------------- bonus: spent retry budget
+print("a task with a spent retry budget defers instead of waving")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="rework", retries=2, max_retries=2)
+    rc, result, err = run_and_parse(d)
+    check("spent-budget: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("spent-budget: not in wave", result["wave"] == [], result)
+    check(
+        "spent-budget: deferred naming the budget",
+        len(result["deferred"]) == 1
+        and result["deferred"][0]["id"] == "T-001"
+        and "retries=2" in result["deferred"][0]["reason"],
+        result["deferred"],
+    )
+
+# --------------------------------------------------------- bonus: unmet deps
+print("a task with an unmet (incomplete) dep defers, naming it")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="assigned")
+    write_task(d, "T-002", deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("unmet-deps: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("unmet-deps: not in wave", result["wave"] == [], result)
+    check(
+        "unmet-deps: deferred naming T-001 and its status",
+        len(result["deferred"]) == 1
+        and result["deferred"][0]["id"] == "T-002"
+        and "T-001" in result["deferred"][0]["reason"]
+        and "assigned" in result["deferred"][0]["reason"],
+        result["deferred"],
+    )
+
+# ------------------------------------------------------ bonus: no job active
+print("an absent tasks/ directory is a clean empty result, not an error")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    rc, result, err = run_and_parse(d)
+    check("no-job: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "no-job: every bucket empty",
+        result == {"wave": [], "checks": [], "deferred": [], "attention": []},
+        result,
+    )
+
+# A state dir that ISN'T THERE is a different animal from one holding no
+# tasks/. Both would print the same empty wave, and a caller reading that
+# JSON could not tell "nothing is ready" from "I was pointed at the wrong
+# path"—the same silent-drop failure the per-file exit 3 exists to stop,
+# one directory up. The workflow driver in #134 reads this JSON to decide a
+# job is finished, so the two must not look alike.
+print("a state dir that does not exist exits 3, unlike one with no tasks/")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    missing = os.path.join(d, "no-such-state")
+    rc, out, err = run_script(missing)
+    check("missing-state-dir: exit 3", rc == 3, f"rc={rc} out={out}")
+    check("missing-state-dir: names the path", missing in err, err)
+    check("missing-state-dir: prints no JSON", out.strip() == "", out)
+
+# --------------------------------------------------------- bonus: disputed
+print("a disputed task lands in attention, not deferred or wave")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="disputed")
+    rc, result, err = run_and_parse(d)
+    check("disputed: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("disputed: not in wave", result["wave"] == [], result)
+    check("disputed: not in deferred", result["deferred"] == [], result)
+    check(
+        "disputed: lands in attention",
+        ids(result["attention"]) == ["T-001"],
+        result["attention"],
+    )
+
+print(f"\n{passed} passed, {failed} failed")
+sys.exit(1 if failed else 0)

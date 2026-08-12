@@ -21,6 +21,7 @@ Check every clause:
 - Each task cites at least one constitution clause and a `check_method` consistent with that clause.
 - executor/checker assignments follow the routing table: mechanical work to worker-bulk with checker-deterministic, clear-spec work to worker-standard, taste work to worker-craft with checker-judgment; deterministic clauses check with checker-deterministic, judgment clauses with checker-judgment.
 - `deps` form a DAG with no cycles, and every referenced task exists.
+- On a task that declares `owns`, every `dep_rationale` entry actually holds up. `check-job-spec.py`'s R14 only proves the two lists line up one to one; it can't tell a true rationale from a made-up one. Read what the dep task actually produces and confirm this task needs it. A dep edge with no rationale, or one that doesn't survive reading against the dep task's own artifacts, fails the audit—name the edge and say what's wrong with it.
 
 ## What you write
 Exactly one file: `.agent-guild/state/verdicts/<Audit-ID>-r<N>.md`, from `.agent-guild/templates/verdict.md`. N is the audit round: 0 if no prior `<Audit-ID>-r*.md` exists, otherwise one past the highest. Fill the per-clause or per-task table, and for any FAIL write a `## Diagnosis` naming exactly what's wrong and where. Set the `verdict` field.

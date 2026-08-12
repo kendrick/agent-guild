@@ -137,6 +137,42 @@ def add_owns(state_dir):
             f.write("\n".join(out) + "\n")
 
 
+DEPS_LINE_RE = re.compile(r"^deps:\s*(\[.*\])\s*$")
+
+
+def add_dep_rationale(state_dir):
+    """Give every task in `state_dir/tasks/` a `dep_rationale:` entry for
+    each id in its own `deps:`—the #117 corpus predates #125, so
+    `dep_rationale` doesn't exist in it yet. Every corpus `deps:` is the
+    flat `[T-001, ...]` shape (unlike `artifacts:`, which mixes flat and
+    block), so this only needs to parse that one form. A task whose `deps`
+    is empty still gets an explicit `dep_rationale: []`, mirroring how
+    add_owns() always inserts a field rather than leaving it absent.
+    Mutates the task files on disk."""
+    tasks_dir = os.path.join(state_dir, "tasks")
+    for name in sorted(os.listdir(tasks_dir)):
+        path = os.path.join(tasks_dir, name)
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        out = []
+        inserted = False
+        for line in lines:
+            out.append(line)
+            if not inserted:
+                m = DEPS_LINE_RE.match(line)
+                if m:
+                    dep_ids = [d.strip() for d in m.group(1)[1:-1].split(",") if d.strip()]
+                    if dep_ids:
+                        out.append("dep_rationale:")
+                        out.extend(f"  - {dep_id}: fixture rationale for R14 tests" for dep_id in dep_ids)
+                    else:
+                        out.append("dep_rationale: []")
+                    inserted = True
+        assert inserted, f"{name}: no deps: field found to derive dep_rationale from"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+
+
 # The matching-pair quote-strip line the corpus cites twice (T-001.md:57,
 # against compose-brief.py:64 and check-provenance.py:74). Built by
 # concatenation rather than an escaped literal so the quoting is legible;
@@ -588,23 +624,30 @@ else:
         # the schema and docs/vendor-ledger.md, T-005 and T-007 sharing the
         # retrospective skill, T-003 and T-007 sharing the generated-tree
         # prefixes—already has a direct dep edge, so the corpus with owns
-        # added should pass cleanly on its own.
+        # added should pass cleanly on its own. add_dep_rationale() also
+        # runs here (#125): every task add_owns() gives an `owns` list now
+        # owes R14 a rationale for each of its own `deps`, so an exit-0
+        # baseline needs both fields injected, not just `owns`.
         print("R13: ownership overlap (#133)")
 
         with tempfile.TemporaryDirectory() as d:
             state = os.path.join(d, "state")
             copy_corpus_state(state)
             add_owns(state)
+            add_dep_rationale(state)
             rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
             check("corpus + owns: exit 0", rc == 0, f"rc={rc} err={err}")
 
         # T-006 and T-007 both own the schema and docs/vendor-ledger.md.
         # T-007's dep on T-006 is the only path connecting them—drop it and
-        # nothing else does, so R13 has to catch the gap.
+        # nothing else does, so R13 has to catch the gap. R13 runs before
+        # R14 in rule order, so this fires regardless of dep_rationale;
+        # added anyway to keep this fixture's shape matching the baseline.
         with tempfile.TemporaryDirectory() as d:
             state = os.path.join(d, "state")
             copy_corpus_state(state)
             add_owns(state)
+            add_dep_rationale(state)
             ok = mutate(
                 os.path.join(state, "tasks", "T-007.md"),
                 "deps: [T-001, T-004, T-005, T-006]",
@@ -621,6 +664,138 @@ else:
                     err,
                 )
                 check("T-007 dep dropped: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # -------------------------------------------------- R14: dep rationale (#125)
+        # `dep_rationale` postdates this corpus too, so add_dep_rationale()
+        # injects it the same way add_owns() injects `owns`. Every task that
+        # add_owns() gives an `owns` list also picks up a rationale for each
+        # of its own `deps` here, so the corpus with both added should pass
+        # cleanly on its own—the mechanical half R14 checks (the two lists
+        # line up one to one) is true by construction.
+        print("R14: dep rationale (#125)")
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            add_owns(state)
+            add_dep_rationale(state)
+            rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+            check("corpus + owns + dep_rationale: exit 0", rc == 0, f"rc={rc} err={err}")
+
+        # T-002 depends on T-001 but its rationale is retargeted at T-999—a
+        # dep with no matching rationale at all now.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            add_owns(state)
+            add_dep_rationale(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-002.md"),
+                "  - T-001: fixture rationale for R14 tests",
+                "  - T-999: fixture rationale for R14 tests",
+                "R14-missing",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("T-002's rationale for T-001 removed: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("T-002 rationale removed: R14 named", rule_hit(err, "R14"), f"err={err!r}")
+                check(
+                    "T-002 rationale removed: both task and dep named",
+                    "T-002" in err and "T-001" in err,
+                    err,
+                )
+                check("T-002 rationale removed: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # T-002's real dep (T-001) keeps its rationale; a second entry is
+        # added naming T-006, which T-002 never declares as a dep at all.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            add_owns(state)
+            add_dep_rationale(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-002.md"),
+                "  - T-001: fixture rationale for R14 tests",
+                "  - T-001: fixture rationale for R14 tests\n"
+                "  - T-006: rationale for a dep this task never declares",
+                "R14-extra",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("T-002's rationale names an undeclared dep: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("T-002 undeclared dep: R14 named", rule_hit(err, "R14"), f"err={err!r}")
+                check(
+                    "T-002 undeclared dep: both task and dep named",
+                    "T-002" in err and "T-006" in err,
+                    err,
+                )
+                check("T-002 undeclared dep: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # A task with no `owns` at all owes R14 nothing, even with a `deps`
+        # id and no `dep_rationale` field in sight—the opt-in scoping (#125,
+        # same shape as R13's #133). A minimal two-task fixture, not the
+        # corpus, since every corpus task already carries `owns` once
+        # add_owns() runs and this case needs one that deliberately doesn't.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+            write_lines(
+                os.path.join(state, "tasks", "T-001.md"),
+                """---
+id: T-001
+title: Upstream task
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: []
+escalations: []
+artifacts:
+  - out.txt
+owns:
+  - out.txt
+---
+
+## Spec excerpt
+
+Produces out.txt.
+""".splitlines(),
+            )
+            write_lines(
+                os.path.join(state, "tasks", "T-002.md"),
+                """---
+id: T-002
+title: Downstream task with no owns
+spec: .agent-guild/state/spec.md#two
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: [T-001]
+escalations: []
+artifacts: []
+---
+
+## Spec excerpt
+
+Reads out.txt but writes nothing, so it declares no owns and no
+dep_rationale.
+""".splitlines(),
+            )
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("owns-less task with a dep and no rationale: exit 0", rc == 0, f"rc={rc} err={err}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

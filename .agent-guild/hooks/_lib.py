@@ -771,13 +771,39 @@ def con_audit_passed():
 _DISPATCH_TOOLS = {"Task", "Agent", "spawn_agent"}
 
 
-def _id_in(text):
-    """First Task-ID / Audit-ID / Audition-ID in a blob of text, or None."""
+_LABELED_ID_PATTERNS = (
+    ("task", TASK_ID_RE),
+    ("audit", AUDIT_ID_RE),
+    ("audition", AUDITION_ID_RE),
+)
+
+
+def labeled_ids(text):
+    """Every labeled Task-ID / Audit-ID / Audition-ID in a blob of text, as
+    (kind, id, position) tuples sorted by match start—`kind` one of "task",
+    "audit", "audition". Finds every match of every pattern rather than
+    stopping at the first regex to hit, so a caller can reason about ALL the
+    ids a blob carries, not just whichever one a fixed regex order surfaces
+    first."""
     if not isinstance(text, str):
-        return None
-    m = (TASK_ID_RE.search(text) or AUDIT_ID_RE.search(text)
-         or AUDITION_ID_RE.search(text))
-    return m.group(1) if m else None
+        return []
+    found = []
+    for kind, pattern in _LABELED_ID_PATTERNS:
+        for m in pattern.finditer(text):
+            found.append((kind, m.group(1), m.start()))
+    found.sort(key=lambda t: t[2])
+    return found
+
+
+def _id_in(text):
+    """Earliest labeled Task-ID / Audit-ID / Audition-ID in a blob of text, or
+    None. Earliest BY POSITION, not by which regex is declared first: a
+    dispatch prompt commonly carries context beyond its own id (e.g. an
+    auditor's prompt noting an unrelated task still in flight), and the id
+    that labels THIS dispatch is whichever one actually comes first in the
+    text, regardless of which of the three patterns happens to match it."""
+    found = labeled_ids(text)
+    return found[0][1] if found else None
 
 
 def id_from_transcript(transcript_path):

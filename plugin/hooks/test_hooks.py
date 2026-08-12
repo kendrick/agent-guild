@@ -333,6 +333,49 @@ check("a single clause written as a bare scalar still counts",
       lib_mod.unverifiable("T-001", {"clauses": "C-1", "check_method": " "})
       is not None)
 
+# --------------------------------------- _lib.labeled_ids / _id_in (#108)
+# _id_in used to short-circuit TASK_ID_RE, AUDIT_ID_RE, AUDITION_ID_RE in
+# DECLARATION order, so a Task-ID anywhere in a blob beat an Audit-ID that
+# appeared earlier in the same text. The fix picks the earliest match BY
+# POSITION; these two blobs are identical apart from which label comes first,
+# which is exactly what the old code got wrong.
+print("_lib.py labeled_ids() / _id_in() (#108)")
+
+task_first = "Task-ID: T-001\nsome context in between\nAudit-ID: CON-audit"
+audit_first = "Audit-ID: CON-audit\nsome context in between\nTask-ID: T-001"
+
+check("Task-ID before Audit-ID → resolves to the task",
+      lib_mod._id_in(task_first) == "T-001", f"got={lib_mod._id_in(task_first)!r}")
+check("Audit-ID before Task-ID → resolves to the audit",
+      lib_mod._id_in(audit_first) == "CON-audit",
+      f"got={lib_mod._id_in(audit_first)!r}")
+
+# Single-id blobs: unaffected by the rewrite, true by construction (only one
+# candidate exists to be "earliest"), pinned anyway so a regression shows here
+# rather than only in the hook-level fixtures below.
+check("single Task-ID blob unchanged",
+      lib_mod._id_in("Task-ID: T-042") == "T-042")
+check("single Audit-ID blob unchanged",
+      lib_mod._id_in("Audit-ID: DEC-audit") == "DEC-audit")
+check("single Audition-ID blob unchanged",
+      lib_mod._id_in("Audition-ID: A-007") == "A-007")
+check("no labeled id anywhere → None",
+      lib_mod._id_in("just some chatter, no ids") is None)
+
+# labeled_ids() itself: every match, sorted by position, kind + id + position.
+got = lib_mod.labeled_ids(audit_first)
+check("labeled_ids finds both ids in the blob", len(got) == 2, f"got={got!r}")
+check("labeled_ids sorts earliest-first",
+      got[0][:2] == ("audit", "CON-audit") and got[1][:2] == ("task", "T-001"),
+      f"got={got!r}")
+check("labeled_ids positions are in document order",
+      got[0][2] < got[1][2], f"got={got!r}")
+check("labeled_ids on a single-id blob returns one tuple",
+      lib_mod.labeled_ids("Audition-ID: A-003") == [("audition", "A-003", 0)],
+      f"got={lib_mod.labeled_ids('Audition-ID: A-003')!r}")
+check("labeled_ids on text with no ids returns []",
+      lib_mod.labeled_ids("nothing to see here") == [])
+
 # ---------------------------------------------------------------- stop-gate
 print("stop-gate.py")
 proj = fresh_proj()
@@ -622,6 +665,30 @@ check("audition dispatch → logged", audlog)
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-bulk", "prompt": "just sort the lines"}}, proj_aud)
 check("no Task-ID and no Audition-ID → exit 2", rc == 2 and "no id line" in err, err)
+
+# ------------------------- dispatch-guard: two distinct labeled ids (#108)
+# A prompt carrying labeled ids of two distinct kinds is ambiguous on its
+# face—block outright rather than silently pick the earliest, since a
+# dispatch-time block is something the dispatcher can still act on. Position
+# within the prompt shouldn't matter to whether this blocks (only to WHICH
+# single-kind blob resolves cleanly, covered in the _id_in tests above).
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                         "prompt": "Audit-ID: CON-audit\ncontext: Task-ID: T-005 is still open"}},
+                        proj_aud)
+check("prompt with Audit-ID and Task-ID → exit 2 (ambiguous)",
+      rc == 2 and "more than one" in err, err)
+check("ambiguous-id block names both candidate ids",
+      "CON-audit" in err and "T-005" in err, err)
+check("ambiguous-id block instructs keeping exactly one",
+      "exactly one labeled id per dispatch" in err, err)
+
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                         "prompt": "Task-ID: T-005\ncontext: Audition-ID: A-009 ran earlier"}},
+                        proj_aud)
+check("prompt with Task-ID and Audition-ID → exit 2 (ambiguous), order reversed from above",
+      rc == 2 and "more than one" in err and "T-005" in err and "A-009" in err, err)
 
 # ------------------------------- dispatch-guard: a task with no checks (#109)
 # Both halves of #109 in one place. A block-scalar check_method now reads, so
@@ -1560,6 +1627,25 @@ tx = transcript(proj, "Audit-ID: CON-audit")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "auditor", "transcript_path": tx}, proj)
 check("auditor wrote CON-audit verdict → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# regression (#108): an auditor's OWN dispatch prompt often carries context
+# about other work in flight—here, a note about T-005, still open, labeled
+# with its own Task-ID. The old _id_in short-circuited TASK_ID_RE before
+# AUDIT_ID_RE regardless of which label actually came first in the text, so
+# this transcript used to resolve to T-005 and the auditor got told to write
+# a verdict at a task stem it should never touch.
+tx = dispatch_transcript(
+    proj,
+    "Audit-ID: CON-audit\n\nFor context, T-005 is still open "
+    "(Task-ID: T-005), assigned to worker-standard. Audit the "
+    "constitution regardless.",
+)
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj)
+check("auditor prompt also carrying a Task-ID → still resolves to the audit",
+      rc == 0, f"rc={rc} err={err}")
+check("auditor never asked for a task-stem verdict",
+      "T-005" not in err, err)
 
 # audition return: an A-NNN ident finishes without a task file or verdict, since
 # the battery scorer judges the output, not this gate.

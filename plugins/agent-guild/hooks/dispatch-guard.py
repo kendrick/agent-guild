@@ -212,13 +212,33 @@ def main(data):
     # where both exist—it's the one the dispatcher set deliberately.
     kind, ident = _lib.bare_id(ti.get("dispatch_id"))
     if kind is None:
-        aud = _lib.AUDITION_ID_RE.search(prompt)
-        tm = _lib.TASK_ID_RE.search(prompt)
-        am = _lib.AUDIT_ID_RE.search(prompt)
-        match = aud or tm or am
-        if match:
-            kind = "audition" if aud else ("task" if tm else "audit")
-            ident = match.group(1)
+        found = _lib.labeled_ids(prompt)
+        # Earliest-position match wins (matches _lib._id_in), rather than a
+        # fixed regex-declaration order that let a Task-ID anywhere in the
+        # prompt beat an Audit-ID appearing earlier in it. But a prompt
+        # carrying two DISTINCT kinds of labeled id is ambiguous on its
+        # face—positional tie-breaking would silently pick one and hide the
+        # authoring mistake from the dispatcher who could still fix it. This
+        # is the one place in the id-resolution path where that's true: a
+        # human (or the orchestrator) is about to send the dispatch, so a
+        # block here is actionable in a way the same ambiguity is NOT at
+        # return time (see id_from_transcript / subagent-return.py, which
+        # deliberately never blocks on it).
+        kinds_present = {k for k, _id, _pos in found}
+        if len(kinds_present) > 1:
+            label = {"task": "Task-ID", "audit": "Audit-ID", "audition": "Audition-ID"}
+            seen = []
+            for k, i, _pos in found:
+                if k not in {sk for sk, _ in seen}:
+                    seen.append((k, i))
+            named = " and ".join(f"{label[k]} {i}" for k, i in seen)
+            return _lib.block(
+                f"Dispatch to {agent} carries labeled ids of more than one "
+                f"kind in its prompt: {named}. Keep exactly one labeled id "
+                "per dispatch."
+            )
+        if found:
+            kind, ident, _pos = found[0]
 
     # Audition path: a tryout runs outside the lifecycle—no task file, no tier,
     # no CON-audit precondition. An Audition-ID is enough to log and pass; the

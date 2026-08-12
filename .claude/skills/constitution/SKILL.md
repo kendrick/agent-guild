@@ -57,4 +57,4 @@ Point every clause that guards protected content at `.agent-guild/scripts/check-
 
 ## 5. Send it to audit
 
-Tell the orchestrator to dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker, so the constitution is verified before anything is built against it. If the audit fails, revise the flagged clauses and re-submit; do not route around it. Re-submission runs up to the weight's audit round budget. When that runs out with no blocker left standing, the ship-with-minors rule in `CLAUDE.md` is the exit, and it is the only one.
+Tell the orchestrator to dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker, so the constitution is verified before anything is built against it. If the audit fails, revise the flagged clauses and re-submit; do not route around it. Re-submission runs up to the weight's audit round budget in `CLAUDE.md`. If that runs out and no PASS has landed, the constitution goes to the user with the outstanding findings; there is no exit the orchestrator can take on its own.

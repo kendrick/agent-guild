@@ -26,7 +26,7 @@ Write `.agent-guild/state/retrospective.md` covering:
 - **Check-infra debt**: ERROR verdicts mean a check couldn't run. Those checks need fixing before the next job leans on them.
 - **What the constitution missed**: defects that slipped through, or clauses that turned out unfalsifiable in practice. This is the most valuable output—it's next job's Phase 0 input.
 - **Weight against outcome**: the weight Phase 0 derived, the weight the job actually ran at if the user corrected it, the clause count the constitution reached, and the audit rounds each id spent. Recorded every job, those numbers are what let the derivation be checked against what actually happened instead of re-argued from memory next time. A correction matters most of all, since it's the derivation being wrong where someone caught it.
-- **Shipped with minors**: any document accepted at the end of its audit round budget with minor findings still outstanding, and any round taken past budget to clear a blocker. Every carried minor becomes a clause or an interview question next time, or gets dropped on purpose—what it can't do is ride silently into the next job.
+- **Budgets that ran out**: any audit that spent its rounds without a PASS and went to the user, what the outstanding findings were, and what the user did about it. A document that needed more rounds than its weight allowed is either a weight derived too light or a document that was too hard to specify, and the two want different fixes next time.
 
 ## 3. Offer to archive
 

@@ -203,6 +203,99 @@ def lane_exhausted(lane):
         return False
 
 
+IN_FLIGHT_TTL_S_DEFAULT = 3600.0
+
+
+def _in_flight_dir():
+    return state_path("log", "in-flight")
+
+
+def mark_in_flight(ident, agent):
+    """Record that `agent` was just legally dispatched for `ident` (a
+    Task-ID, Audit-ID, or Audition-ID)—called from dispatch-guard.py at
+    every allowed dispatch. stop-gate.py reads these to tell a genuinely
+    stuck loop apart from a subagent that's still working (#111): the task
+    tuple, the verdict set, and the debt list all stay put while a worker or
+    checker is mid-flight, which is exactly what used to make a long-running
+    dispatch look identical to a livelock. Waves made that the common case
+    instead of a rare one.
+
+    Best-effort, same posture as dispatch-guard's own _log(): a write
+    failure here must never turn a legal dispatch into a block. Losing a
+    marker silently degrades back to the pre-#111 blindness, not to
+    anything worse.
+    """
+    try:
+        d = _in_flight_dir()
+        os.makedirs(d, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        path = os.path.join(d, f"{ident}--{agent}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"dispatched_at": ts}, f)
+    except Exception:
+        pass
+
+
+def clear_in_flight(ident, agent):
+    """Remove the marker mark_in_flight wrote for (ident, agent). Called
+    from subagent-return.py once a subagent's return is fully resolved. A
+    missing file is not an error: the marker can legitimately already be
+    gone (aged out under the TTL, or never written because the dispatch
+    predates this feature)."""
+    try:
+        path = os.path.join(_in_flight_dir(), f"{ident}--{agent}.json")
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def in_flight(ttl=None):
+    """Sorted list of in-flight marker stems (`<ident>--<bare-agent>`, the
+    filename minus `.json`) whose dispatch is still FRESH: within `ttl`
+    seconds of now. `ttl=None` (the default) reads
+    AGENT_GUILD_INFLIGHT_STALE_S if set, else IN_FLIGHT_TTL_S_DEFAULT
+    (3600s)—the env var is the test seam, letting a test zero out every
+    marker's freshness instantly instead of waiting out a real hour to prove
+    a dead agent's marker ages out.
+
+    Staleness matters on purpose: nothing here suppresses stall detection
+    permanently. A marker that can't be read or parsed is treated as absent
+    rather than crashing the gate—the same fail-open posture
+    second_opinion_debts() holds for a malformed record, because a wedged
+    marker file must never be able to jam the very livelock backstop it
+    exists to unblock.
+    """
+    if ttl is None:
+        try:
+            ttl = float(os.environ.get(
+                "AGENT_GUILD_INFLIGHT_STALE_S", str(IN_FLIGHT_TTL_S_DEFAULT)))
+        except ValueError:
+            ttl = IN_FLIGHT_TTL_S_DEFAULT
+    d = _in_flight_dir()
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return []
+    now = datetime.now(timezone.utc)
+    fresh = []
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                record = json.load(f)
+            dispatched_at = datetime.strptime(
+                record["dispatched_at"], "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue  # malformed/unreadable marker: not fresh, not fatal
+        if (now - dispatched_at).total_seconds() <= ttl:
+            fresh.append(name[: -len(".json")])
+    return sorted(fresh)
+
+
 def courier_lane(data=None):
     """Return the far-side lane for this host.
 

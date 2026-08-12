@@ -31,7 +31,11 @@ A Codex followup, which re-tasks a running agent rather than spawning one, is
 refused outright when it targets a guild agent: it carries nothing left to
 check (#77).
 
-Every passing dispatch appends one line to .agent-guild/state/log/dispatches.log.
+Every passing dispatch appends one line to .agent-guild/state/log/dispatches.log
+and drops an in-flight marker (_lib.mark_in_flight) under
+.agent-guild/state/log/in-flight/—stop-gate.py's #111 fix, so a subagent
+that's genuinely still working reads differently from a stalled loop.
+subagent-return.py clears the marker once the subagent's return resolves.
 """
 import os
 import subprocess
@@ -245,6 +249,7 @@ def main(data):
     # battery's score.py judges the output, not this gate.
     if kind == "audition":
         _log(raw, ident, override or _lib.DEFAULT_MODEL[agent])
+        _lib.mark_in_flight(ident, agent)
         return 0
 
     # 1. The dispatch must name what it's working on.
@@ -279,6 +284,7 @@ def main(data):
         if job_spec_msg:
             return _lib.block(job_spec_msg)
         _log(raw, ident, override or _lib.DEFAULT_MODEL[agent])
+        _lib.mark_in_flight(ident, agent)
         return 0
 
     tid = ident if kind == "task" else None
@@ -391,6 +397,7 @@ def main(data):
             # never happened.
             _lib.reserve_crossing(tid, stem, lane)
         _log(raw, tid, effective_model)
+        _lib.mark_in_flight(tid, agent)
         return 0
 
     # Worker path.
@@ -446,6 +453,7 @@ def main(data):
         )
 
     _log(raw, tid, effective_model)
+    _lib.mark_in_flight(tid, agent)
     return 0
 
 

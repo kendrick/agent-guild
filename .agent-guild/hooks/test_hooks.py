@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
 
@@ -187,6 +188,23 @@ def write_verdict_json(proj, name, **overrides):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f)
     return path
+
+
+def _fresh_ts():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_in_flight_marker(proj, tid, agent, dispatched_at=None):
+    """A stand-in for what dispatch-guard.py's mark_in_flight() writes, so
+    stop-gate/subagent-return fixtures can set up a marker directly without
+    routing through a full dispatch. Fresh by default (dispatched "now");
+    callers driving staleness use the AGENT_GUILD_INFLIGHT_STALE_S env seam
+    instead of backdating the timestamp, since a TTL of 0 makes ANY
+    dispatched_at instantly stale."""
+    d = os.path.join(proj, ".agent-guild", "state", "log", "in-flight")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, f"{tid}--{agent}.json"), "w") as f:
+        json.dump({"dispatched_at": dispatched_at or _fresh_ts()}, f)
 
 
 def transcript(proj, text, role="user", content_list=False):
@@ -376,6 +394,60 @@ check("labeled_ids on a single-id blob returns one tuple",
 check("labeled_ids on text with no ids returns []",
       lib_mod.labeled_ids("nothing to see here") == [])
 
+# --------------------------------- _lib.py in-flight markers (#111)
+# mark_in_flight/clear_in_flight/in_flight() exercised directly, in-process,
+# ahead of the hook-level fixtures below—cheaper to pin the freshness math
+# here than to prove it only through a full subprocess round-trip.
+print("_lib.py mark_in_flight / clear_in_flight / in_flight() (#111)")
+proj_lib = fresh_proj()
+_prev_project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+os.environ["CLAUDE_PROJECT_DIR"] = proj_lib
+try:
+    lib_mod.mark_in_flight("T-900", "worker-standard")
+    fresh = lib_mod.in_flight()
+    check("mark_in_flight → shows up as fresh immediately",
+          "T-900--worker-standard" in fresh, f"fresh={fresh!r}")
+
+    lib_mod.clear_in_flight("T-900", "worker-standard")
+    fresh = lib_mod.in_flight()
+    check("clear_in_flight → no longer listed",
+          "T-900--worker-standard" not in fresh, f"fresh={fresh!r}")
+    check("clear_in_flight on an already-missing marker → no error raised",
+          lib_mod.clear_in_flight("T-900", "worker-standard") is None)
+
+    lib_mod.mark_in_flight("T-901", "checker-deterministic")
+    _prev_ttl_env = os.environ.get("AGENT_GUILD_INFLIGHT_STALE_S")
+    os.environ["AGENT_GUILD_INFLIGHT_STALE_S"] = "0"
+    try:
+        fresh = lib_mod.in_flight()
+    finally:
+        if _prev_ttl_env is None:
+            os.environ.pop("AGENT_GUILD_INFLIGHT_STALE_S", None)
+        else:
+            os.environ["AGENT_GUILD_INFLIGHT_STALE_S"] = _prev_ttl_env
+    check("AGENT_GUILD_INFLIGHT_STALE_S=0 → an existing marker reads as stale",
+          "T-901--checker-deterministic" not in fresh, f"fresh={fresh!r}")
+    check("an explicit large ttl overrides the env seam (ttl=None is the only "
+          "thing that reads it)",
+          "T-901--checker-deterministic" in lib_mod.in_flight(ttl=999999))
+
+    bad_dir = os.path.join(proj_lib, ".agent-guild", "state", "log", "in-flight")
+    with open(os.path.join(bad_dir, "T-902--worker-bulk.json"), "w") as f:
+        f.write("{not valid json")
+    fresh = lib_mod.in_flight()
+    check("a malformed marker is dropped, not fatal", isinstance(fresh, list),
+          f"{fresh!r}")
+
+    empty_proj = fresh_proj()
+    os.environ["CLAUDE_PROJECT_DIR"] = empty_proj
+    check("no in-flight/ directory at all → in_flight() returns []",
+          lib_mod.in_flight() == [])
+finally:
+    if _prev_project_dir is None:
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+    else:
+        os.environ["CLAUDE_PROJECT_DIR"] = _prev_project_dir
+
 # ---------------------------------------------------------------- stop-gate
 print("stop-gate.py")
 proj = fresh_proj()
@@ -452,29 +524,151 @@ check("a checker owing a verdict still stalls after three strikes",
           os.path.join(proj, ".agent-guild", "state", "STALLED.md")),
       f"rc={rc_last}")
 
-# double-registration proof (issue #41): with both the plugin's hooks.json and
-# a copy-in settings.json active, the SAME real main-session Stop event fires
-# stop-gate.py twice before the orchestrator resolves anything—so one real
-# blocked state costs two counts, not one, and STALLED.md fires after two
-# real blocks instead of three. Simulate that by invoking the hook twice on
-# an unchanged task state and asserting the counter lands on 2, not 1.
+# ------------------------------------------ stop-gate: in-flight markers (#111)
+# A subagent that's genuinely still working looks identical to a stuck loop
+# from the task tuple alone—waves made that the common case, not a rare one.
+print("stop-gate.py: in-flight markers (#111)")
+STALE_ENV = {"AGENT_GUILD_INFLIGHT_STALE_S": "0"}
+
+# test: a fresh marker holds the stall counter. Three blocked stops in a row
+# write no STALLED.md, because the whole time a worker is legitimately
+# mid-flight—dispatching another would duplicate it, and declaring the loop
+# stuck would be just as wrong.
+proj = fresh_proj()
+write_task(proj, "T-001", status="assigned", retries=0)
+write_in_flight_marker(proj, "T-001", "worker-standard")
+state_file = os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")
+rc1, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+rc2, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+stalled_inflight = os.path.exists(os.path.join(proj, ".agent-guild", "state", "STALLED.md"))
+with open(state_file, encoding="utf-8") as f:
+    count_inflight = json.load(f)["count"]
+check("fresh marker on an open task → three blocked stops write no STALLED.md",
+      not stalled_inflight, f"count={count_inflight}")
+check("fresh marker → the stall count is held, not advanced",
+      count_inflight == 1, f"count={count_inflight}")
+check("still blocks the turn each time (mid-flight isn't done)",
+      rc1 == 2 and rc2 == 2 and rc3 == 2, f"{rc1},{rc2},{rc3}")
+
+# test: stale still stalls. A marker whose TTL has lapsed (simulated via the
+# AGENT_GUILD_INFLIGHT_STALE_S=0 test seam) is worth nothing—a dead agent
+# must not permanently suppress the backstop.
+proj = fresh_proj()
+write_task(proj, "T-001", status="assigned", retries=0)
+write_in_flight_marker(proj, "T-001", "worker-standard")
+run_hook("stop-gate.py", {"stop_hook_active": False}, proj, extra_env=STALE_ENV)
+run_hook("stop-gate.py", {"stop_hook_active": True}, proj, extra_env=STALE_ENV)
+rc_stale3, _, _ = run_hook(
+    "stop-gate.py", {"stop_hook_active": True}, proj, extra_env=STALE_ENV)
+check("stale marker (TTL=0) → the backstop still fires after three strikes",
+      rc_stale3 == 0 and os.path.exists(
+          os.path.join(proj, ".agent-guild", "state", "STALLED.md")),
+      f"rc={rc_stale3}")
+
+# test: _next_move wording disambiguates fresh / absent / stale, for both
+# `assigned` and `checking`.
+for status, verb in (("assigned", "executor"), ("checking", "checker")):
+    proj_w = fresh_proj()
+    write_task(proj_w, "T-001", status=status, retries=0)
+    rc, out, err = run_hook("stop-gate.py", {}, proj_w)
+    check(f"{status}, no marker → names 'dispatch the {verb}'",
+          rc == 2 and f"dispatch the {verb}" in err, err)
+
+    proj_w = fresh_proj()
+    write_task(proj_w, "T-001", status=status, retries=0)
+    write_in_flight_marker(proj_w, "T-001", "worker-standard")
+    rc, out, err = run_hook("stop-gate.py", {}, proj_w)
+    check(f"{status}, fresh marker → 'mid-flight ... do not dispatch another'",
+          rc == 2 and "mid-flight" in err and "do not dispatch another" in err,
+          err)
+
+    proj_w = fresh_proj()
+    write_task(proj_w, "T-001", status=status, retries=0)
+    write_in_flight_marker(proj_w, "T-001", "worker-standard")
+    rc, out, err = run_hook("stop-gate.py", {}, proj_w, extra_env=STALE_ENV)
+    check(f"{status}, stale marker → 'never returned; investigate, then re-dispatch'",
+          rc == 2 and "never returned" in err
+          and "investigate, then re-dispatch" in err,
+          err)
+
+# An absent marker at `checking` is ambiguous in a way `assigned` is not:
+# subagent-return clears the marker on the way out, so a checker that already
+# landed its verdict leaves the same absence as one nobody dispatched. The
+# checker writes the verdict but the ORCHESTRATOR moves the status, so
+# verdict-landed-and-still-`checking` is the ordinary state of every checked
+# task. Telling the orchestrator to dispatch there would run a second checker
+# over work that already passed.
+proj_w = fresh_proj()
+write_task(proj_w, "T-001", status="checking", retries=0)
+write_verdict(proj_w, "T-001-sonnet-r0.md")
+rc, out, err = run_hook("stop-gate.py", {}, proj_w)
+check("checking, no marker, verdict landed → 'act on it', not 'dispatch'",
+      rc == 2 and "act on it" in err and "dispatch the checker" not in err, err)
+
+# Round-scoped, matching the courier-debt branch: an older round's verdict
+# survives a rework cycle and must not be mistaken for this round's.
+proj_w = fresh_proj()
+write_task(proj_w, "T-001", status="checking", retries=1)
+write_verdict(proj_w, "T-001-sonnet-r0.md")
+rc, out, err = run_hook("stop-gate.py", {}, proj_w)
+check("checking, only a PRIOR round's verdict → still 'dispatch the checker'",
+      rc == 2 and "dispatch the checker" in err, err)
+
+# A lane-suffixed file is a second opinion, never the verdict of record.
+proj_w = fresh_proj()
+write_task(proj_w, "T-001", status="checking", retries=0)
+write_verdict(proj_w, "T-001-sonnet-r0-codex.md")
+rc, out, err = run_hook("stop-gate.py", {}, proj_w)
+check("checking, only a LANE verdict → still 'dispatch the checker'",
+      rc == 2 and "dispatch the checker" in err, err)
+
+# ------------------------------- stop-gate: at-most-once per real block (#111)
+# Issue #41: with both the plugin's hooks.json and a copy-in settings.json
+# active, the SAME real main-session Stop event fires stop-gate.py twice
+# before the orchestrator resolves anything. Neither the task/verdict/debt
+# state nor the marker set changes between the two firings, because nothing
+# actually happened in between—but that's also true of a genuine second
+# blocked turn where the orchestrator's own output didn't touch any of that
+# state. The main transcript's own byte size is what tells them apart: two
+# firings against the SAME transcript are one real block, and the counter
+# holds rather than advancing. This supersedes the old double-advance
+# expectation (a same-digest repeat used to always cost a full strike).
+print("stop-gate.py: at-most-once per real block (#111)")
 proj = fresh_proj()
 write_task(proj, "T-001", status="rework", retries=1)
 state_file = os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")
+tx_path = os.path.join(proj, ".agent-guild", "state", "log", "tx-dup.jsonl")
+with open(tx_path, "w") as f:
+    f.write('{"type":"system"}\n')
 
-rc_a, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+rc_a, _, _ = run_hook(
+    "stop-gate.py", {"stop_hook_active": False, "transcript_path": tx_path}, proj)
 with open(state_file, encoding="utf-8") as f:
     count_after_one_fire = json.load(f)["count"]
-check("stall-counter double-invocation: one fire → count 1",
+check("at-most-once: one fire → count 1",
       count_after_one_fire == 1, f"count={count_after_one_fire}")
 
-rc_b, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+rc_b, _, _ = run_hook(
+    "stop-gate.py", {"stop_hook_active": False, "transcript_path": tx_path}, proj)
 with open(state_file, encoding="utf-8") as f:
     count_after_two_fires = json.load(f)["count"]
-check("stall-counter double-invocation: same blocked state fired twice → counter advances by two total",
-      count_after_two_fires == 2, f"count={count_after_two_fires}")
-check("both fires individually blocked the turn (rc==2 each)",
+check("at-most-once: same digest AND same transcript size → held at 1, not "
+      "advanced",
+      count_after_two_fires == 1, f"count={count_after_two_fires}")
+check("both fires individually still blocked the turn (rc==2 each)",
       rc_a == 2 and rc_b == 2, f"{rc_a},{rc_b}")
+
+# ...but a genuinely new blocked turn—the transcript grew, meaning the
+# orchestrator actually did something—still advances normally.
+with open(tx_path, "a") as f:
+    f.write('{"type":"assistant"}\n')
+rc_c, _, _ = run_hook(
+    "stop-gate.py", {"stop_hook_active": False, "transcript_path": tx_path}, proj)
+with open(state_file, encoding="utf-8") as f:
+    count_after_grown_transcript = json.load(f)["count"]
+check("same digest, DIFFERENT transcript size → advances (a real repeated block)",
+      count_after_grown_transcript == 2, f"count={count_after_grown_transcript}")
 
 # malformed task file → treated as open (fail closed)
 proj = fresh_proj()
@@ -929,6 +1123,47 @@ os.remove(os.path.join(proj_courier, ".agent-guild", "state", "exhausted", "code
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-courier", "prompt": "Task-ID: T-020"}}, proj_courier)
 check("checker-courier dispatch once sentinel is cleared → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# --------------------------------- dispatch-guard: in-flight markers (#111)
+# Every allowed dispatch drops a marker under state/log/in-flight/ so
+# stop-gate.py can tell a genuinely running subagent apart from a stuck loop.
+print("dispatch-guard.py: in-flight markers (#111)")
+proj_dm = fresh_proj()
+con_pass(proj_dm)
+write_task(proj_dm, "T-040", status="assigned")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                        "prompt": "Task-ID: T-040"}}, proj_dm)
+check("legal worker dispatch → exit 0", rc == 0, f"rc={rc} err={err}")
+worker_marker = os.path.join(proj_dm, ".agent-guild", "state", "log",
+                             "in-flight", "T-040--worker-standard.json")
+check("legal worker dispatch → writes an in-flight marker",
+      os.path.exists(worker_marker), worker_marker)
+with open(worker_marker, encoding="utf-8") as f:
+    marker_body = json.load(f)
+check("in-flight marker → dispatched_at looks like UTC ISO8601 with a Z",
+      isinstance(marker_body.get("dispatched_at"), str)
+      and marker_body["dispatched_at"].endswith("Z"),
+      marker_body)
+
+write_task(proj_dm, "T-041", status="checking")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-courier",
+                                        "prompt": "Task-ID: T-041"}}, proj_dm)
+check("legal checker-courier dispatch → exit 0", rc == 0, f"rc={rc} err={err}")
+check("legal checker-courier dispatch → writes an in-flight marker",
+      os.path.exists(os.path.join(proj_dm, ".agent-guild", "state", "log",
+                                  "in-flight", "T-041--checker-courier.json")))
+
+# A BLOCKED dispatch must never write a marker: only allowed dispatches mark.
+proj_dm_block = fresh_proj()
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                        "prompt": "do it"}}, proj_dm_block)
+check("blocked dispatch (no id) → exit 2 (unchanged)", rc == 2, f"rc={rc}")
+check("blocked dispatch → no in-flight marker written",
+      not os.path.exists(os.path.join(proj_dm_block, ".agent-guild", "state",
+                                      "log", "in-flight")))
 
 # ------------------------------------------ second_opinion_debts(): the debt gate (#100)
 # second_opinion_debts() is what stop-gate.py and dispatch-guard.py both read to
@@ -1675,6 +1910,65 @@ rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj_scope)
 check("checker valid return on T-001 while T-002 has no verdict → exit 0, no T-002 demand",
       rc == 0 and "T-002" not in out and "T-002" not in err, f"rc={rc} out={out!r} err={err!r}")
+
+# --------------------------------- subagent-return: in-flight markers (#111)
+print("subagent-return.py: in-flight markers (#111)")
+
+
+def _in_flight_path(proj, tid, agent):
+    return os.path.join(proj, ".agent-guild", "state", "log", "in-flight",
+                        f"{tid}--{agent}.json")
+
+
+proj_mark = fresh_proj()
+write_task(proj_mark, "T-030", status="needs-check", artifacts="[out.html]")
+write_in_flight_marker(proj_mark, "T-030", "worker-standard")
+marker_path = _in_flight_path(proj_mark, "T-030", "worker-standard")
+tx = transcript(proj_mark, "Task-ID: T-030\nGo build it.")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj_mark)
+check("worker clean return → exit 0", rc == 0, f"rc={rc} err={err}")
+check("worker clean return → its in-flight marker is cleared",
+      not os.path.exists(marker_path), marker_path)
+
+# A block leaves the marker alone: the agent hasn't finished, so nothing
+# should read it as no longer in flight.
+proj_block = fresh_proj()
+write_task(proj_block, "T-031", status="assigned", artifacts="[]")  # protocol incomplete
+write_in_flight_marker(proj_block, "T-031", "worker-standard")
+marker_path = _in_flight_path(proj_block, "T-031", "worker-standard")
+tx = transcript(proj_block, "Task-ID: T-031")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj_block)
+check("worker protocol incomplete → exit 2 (unchanged)", rc == 2, f"rc={rc}")
+check("blocked return → marker is left in place", os.path.exists(marker_path), marker_path)
+
+# An unidentifiable return also leaves the marker alone—staleness, not this
+# gate, is what eventually ages it out.
+proj_unid = fresh_proj()
+write_in_flight_marker(proj_unid, "T-032", "worker-standard")
+marker_path = _in_flight_path(proj_unid, "T-032", "worker-standard")
+tx = transcript(proj_unid, "chatter with no id anywhere")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": tx}, proj_unid)
+check("unidentifiable return → exit 0 loud (unchanged)",
+      rc == 0 and "could not identify" in err, err)
+check("unidentifiable return → marker is left in place",
+      os.path.exists(marker_path), marker_path)
+
+# A checker's clean return clears its own marker too.
+proj_check_mark = fresh_proj()
+seed_verdict_toolchain(proj_check_mark)
+write_task(proj_check_mark, "T-033", status="checking", executor_model="sonnet", retries=0)
+write_verdict_json(proj_check_mark, "T-033-sonnet-r0.json", task_id="T-033", verdict="pass")
+write_in_flight_marker(proj_check_mark, "T-033", "checker-deterministic")
+marker_path = _in_flight_path(proj_check_mark, "T-033", "checker-deterministic")
+tx = transcript(proj_check_mark, "Task-ID: T-033")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "checker-deterministic", "transcript_path": tx}, proj_check_mark)
+check("checker clean return → exit 0", rc == 0, f"rc={rc} err={err}")
+check("checker clean return → its in-flight marker is cleared",
+      not os.path.exists(marker_path), marker_path)
 
 # ------------------------------------------- subagent-return: checker-courier
 print("subagent-return.py: checker-courier (issue #8)")

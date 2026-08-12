@@ -40,6 +40,11 @@ subagent keeps working.
   reproducible from the one that matters would make this gate brittle for no
   safety gain.
 
+Every resolved return (worker, checker, courier, audition—never a block, and
+never a return whose id we couldn't identify) clears the in-flight marker
+dispatch-guard.py wrote (_lib.clear_in_flight). A block leaves it in place:
+the subagent hasn't finished, so nothing should read it as no longer working.
+
 Identifying which task finished means reading the host transcript for its
 Task-ID/Audit-ID. Claude Code and Codex both treat transcript representation as
 unstable. When identification fails we do NOT block: blocking a subagent over
@@ -462,6 +467,7 @@ def main(data):
     # Audition runs have no task file and no verdict; the battery scorer judges
     # them, not this gate. Nothing to validate, so let the subagent finish.
     if re.match(r"^A-\d+$", ident):
+        _lib.clear_in_flight(ident, agent)
         return 0
 
     if agent == "auditor":
@@ -475,6 +481,7 @@ def main(data):
         ok, reason = _verdict_ok(vpath)
         if not ok:
             return _lib.block(f"Auditor verdict for {ident} is not valid: {reason}.")
+        _lib.clear_in_flight(ident, agent)
         return 0
 
     task = _lib.read_task(ident)
@@ -497,6 +504,7 @@ def main(data):
                 "`artifacts` is empty. List the repo-relative paths you produced "
                 "so the checker knows what to verify."
             )
+        _lib.clear_in_flight(ident, agent)
         return 0
 
     # Checker. The verdict of record is JSON; validate-verdict.py is the one
@@ -523,6 +531,7 @@ def main(data):
                 # find an authorization record once the parent's file landed.
                 stem = _lib.crossing_stem(ident, tier, retries)
                 _lib.promote_crossing(ident, stem, lane)
+                _lib.clear_in_flight(ident, agent)
                 return 0
             return _lib.block(
                 f"checker-courier for {ident} returned an invalid read-only "
@@ -574,8 +583,10 @@ def main(data):
             # with and can't fix by retrying.
             for file_tid, _fstem, name in _lib.foreign_stem_writes(ident, lane):
                 _lib.surface_foreign_stem_write(ident, file_tid, name)
+            _lib.clear_in_flight(ident, agent)
             return 0
         if _quota_return_ok(ident, lane):
+            _lib.clear_in_flight(ident, agent)
             return 0
         return _lib.block(
             f"checker-courier for {ident} isn't done: no verdict JSON at {rel}, "
@@ -589,6 +600,7 @@ def main(data):
     vpath = _lib.state_path("verdicts", f"{ident}-{tier}-r{retries}.json")
     ok, reason = _validate_verdict_json(vpath)
     if ok:
+        _lib.clear_in_flight(ident, agent)
         return 0
 
     # The file is the verdict of record wherever the checker can write one.
@@ -599,6 +611,7 @@ def main(data):
             data.get("last_assistant_message"), ident, agent
         )
         if inline_ok:
+            _lib.clear_in_flight(ident, agent)
             return 0
         return _lib.block(
             f"Checker for {ident} isn't done: no valid verdict at {rel} "

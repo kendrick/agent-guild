@@ -506,6 +506,30 @@ try:
         ),
         f"persisted={outcome['persisted']!r}",
     )
+    row = ledger_lines(project)[0]
+    discarded = row.get("discarded") or []
+    entry = discarded[0] if discarded else {}
+    check(
+        "#116: a retried crossing's ledger row carries attempts and one discarded entry",
+        row.get("attempts") == 2 and len(discarded) == 1,
+        f"row={row!r}",
+    )
+    check(
+        "#116: the discarded entry names the first attempt's own validation "
+        "failure and that attempt's own token usage",
+        str(entry.get("reason", "")).startswith("codex output was not JSON")
+        and entry.get("tokens_in") == 7
+        and entry.get("tokens_out") == 3
+        and entry.get("exit_code") == 0,
+        f"discarded={discarded!r}",
+    )
+    check(
+        "#116: the discarded entry's duration is its own attempt's, not the "
+        "row's cumulative clock",
+        entry.get("duration_ms") != row.get("duration_ms"),
+        f"discarded_duration={entry.get('duration_ms')!r} "
+        f"row_duration={row.get('duration_ms')!r}",
+    )
 finally:
     temp.cleanup()
 
@@ -518,6 +542,17 @@ try:
         and outcome["attempts"] == 2
         and "NOT_JSON" in outcome["verdict"]["findings"][0]["evidence"],
         f"outcome={outcome!r}",
+    )
+    row = ledger_lines(project)[0]
+    discarded = row.get("discarded") or []
+    entry = discarded[0] if discarded else {}
+    check(
+        "#116: a blocked crossing still discloses the first attempt it discarded",
+        row.get("attempts") == 2
+        and len(discarded) == 1
+        and str(entry.get("reason", "")).startswith("codex output was not JSON")
+        and entry.get("duration_ms") != row.get("duration_ms"),
+        f"row={row!r}",
     )
 finally:
     temp.cleanup()
@@ -665,6 +700,12 @@ for mode, label in (
                 "T-054-sonnet-r0-codex.json")),
             "a verdict was written alongside the sentinel",
         )
+        check(
+            f"#116 {mode}: a quota abandonment still carries attempts but "
+            "invents no discarded entry",
+            lines[0].get("attempts") == 1 and "discarded" not in lines[0],
+            f"line={lines[0]!r}",
+        )
     finally:
         temp.cleanup()
 
@@ -733,6 +774,12 @@ try:
         "a clean crossing keeps no raw response under the default policy",
         persisted.get("raw_path") is None,
         f"raw_path={persisted.get('raw_path')!r}",
+    )
+    check(
+        "#116: a single-attempt crossing carries attempts but invents no "
+        "discarded entry",
+        lines[0].get("attempts") == 1 and "discarded" not in lines[0],
+        f"line={lines[0]!r}",
     )
 finally:
     temp.cleanup()

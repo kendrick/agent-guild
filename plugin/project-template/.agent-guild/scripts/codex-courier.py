@@ -414,6 +414,22 @@ def _raw_evidence(call):
     return "\n\n".join(parts) or "The codex CLI returned no output."
 
 
+def _discarded_entries(attempt_records):
+    """One `--discarded` object per non-final attempt, oldest first, built
+    from each attempt's own figures rather than the crossing's cumulative
+    ones (#116). Empty when nothing was retried."""
+    return [
+        {
+            "reason": record["reason"] or "no failure reason recorded",
+            "duration_ms": record["duration_ms"],
+            "exit_code": record["exit_code"],
+            "tokens_in": record["tokens_in"],
+            "tokens_out": record["tokens_out"],
+        }
+        for record in attempt_records[:-1]
+    ]
+
+
 def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
                 model=MODEL):
     started_at = _utc_now()
@@ -427,9 +443,11 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
     model_source = "requested"
     usage_totals = [None, None, None]
     raw_attempts = []
+    attempt_records = []
 
     for attempt in range(2):
         attempts = attempt + 1
+        attempt_clock = time.monotonic()
         call = _run_once(prompt, timeout_seconds, model)
         last_call = call
         events = _events(call)
@@ -438,7 +456,12 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
         if reported:
             resolved_model, model_source = reported, source
 
-        for index, value in enumerate(_usage(events)):
+        # Read before the fold below, or this attempt's own cost is gone the
+        # instant it merges into the crossing's cumulative totals (#116).
+        attempt_tokens_in, attempt_tokens_out, attempt_cost = _usage(events)
+        for index, value in enumerate(
+            (attempt_tokens_in, attempt_tokens_out, attempt_cost)
+        ):
             if value is None:
                 continue
             prior = usage_totals[index]
@@ -454,14 +477,25 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
             "output_file": call["out_text"],
         })
 
+        attempt_records.append({
+            "reason": None,
+            "duration_ms": max(0, int((time.monotonic() - attempt_clock) * 1000)),
+            "exit_code": call["returncode"],
+            "tokens_in": attempt_tokens_in,
+            "tokens_out": attempt_tokens_out,
+        })
+
         duration_ms = max(0, int((time.monotonic() - started_clock) * 1000))
 
         if _is_quota(call, events):
+            # A quota abandonment stays distinguishable from a retried
+            # crossing: no discarded entry is invented for whatever happened
+            # on an earlier attempt, quota or not (#116).
             return _outcome(
                 "quota", None, task_id, LANE, resolved_model, started_at,
                 duration_ms, call, usage_totals, attempts,
                 _raw_evidence(call), True,
-                echoed_model, model_source, None, raw_attempts,
+                echoed_model, model_source, None, raw_attempts, None,
             )
 
         if reported and reported != model:
@@ -511,8 +545,10 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
                 "verdict", verdict, task_id, LANE, resolved_model, started_at,
                 duration_ms, call, usage_totals, attempts, None, False,
                 echoed_model, model_source, matched, raw_attempts,
+                _discarded_entries(attempt_records),
             )
         if attempt == 0:
+            attempt_records[-1]["reason"] = malformed_reason
             continue
         description = (
             "codex structured output remained invalid after one retry: "
@@ -532,16 +568,22 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
         echoed_model, model_source,
         _model_matches(echoed_model, resolved_model) if echoed_model else None,
         raw_attempts,
+        _discarded_entries(attempt_records),
     )
 
 
 def _outcome(status, verdict, task_id, lane, model, started_at, duration_ms,
              call, usage_totals, attempts, diagnostic, quota_event,
-             echoed_model, model_source, echo_matched, raw_attempts):
+             echoed_model, model_source, echo_matched, raw_attempts,
+             discarded):
     tokens_in, tokens_out, cost_usd = usage_totals
     return {
         "status": status,
         "verdict": verdict,
+        # `ledger_record` builds the shape the Codex-host parent validates
+        # the claude courier's payload against key for key, so the per-
+        # attempt figures ride separately in `_discarded` instead of
+        # widening it (#116; T-009 owns widening it for the claude lane).
         "ledger": _courier_lib.ledger_record(
             task_id, lane, model, started_at, duration_ms,
             call["returncode"], tokens_in, tokens_out, cost_usd, quota_event,
@@ -555,6 +597,10 @@ def _outcome(status, verdict, task_id, lane, model, started_at, duration_ms,
             "echo_matched": echo_matched,
         },
         "raw_attempts": raw_attempts,
+        # Internal only, stripped in main() before the outcome reaches
+        # stdout: the return contract and the raw-attempts log are both
+        # published artifacts, and neither one's shape changes for this.
+        "_discarded": discarded,
     }
 
 
@@ -625,7 +671,10 @@ def _persist(outcome, task_id, tier, retries, project_root, brief, keep_raw):
         record["rendered_path"] = os.path.relpath(rendered_path, project_root)
         artifacts = [record["verdict_path"], record["rendered_path"]]
 
-    _append_ledger(outcome["ledger"], artifacts, project_root, brief)
+    _append_ledger(
+        outcome["ledger"], artifacts, project_root, brief,
+        outcome["attempts"], outcome["_discarded"],
+    )
     record["ledger_appended"] = True
 
     if outcome["status"] == "quota":
@@ -640,7 +689,7 @@ def _persist(outcome, task_id, tier, retries, project_root, brief, keep_raw):
     return record
 
 
-def _append_ledger(ledger, artifacts, project_root, brief):
+def _append_ledger(ledger, artifacts, project_root, brief, attempts, discarded):
     argv = [
         sys.executable, LEDGER_PATH,
         "--task-id", ledger["task_id"],
@@ -658,6 +707,9 @@ def _append_ledger(ledger, artifacts, project_root, brief):
         argv += ["--quota-event"]
     if brief:
         argv += ["--brief", brief]
+    argv += ["--attempts", str(attempts)]
+    for entry in discarded or []:
+        argv += ["--discarded", json.dumps(entry)]
     # Repo-relative and verified on disk. Ten rows in one archived ledger name
     # absolute paths under a home directory that does not exist here (#47).
     verified = [
@@ -738,7 +790,9 @@ def main(argv=None):
     except (CourierError, OSError, ValueError) as error:
         sys.stderr.write(f"codex-courier: {error}\n")
         return 2
-    published = {k: v for k, v in outcome.items() if k != "raw_attempts"}
+    published = {
+        k: v for k, v in outcome.items() if k not in ("raw_attempts", "_discarded")
+    }
     json.dump(published, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
     return 0

@@ -1,6 +1,6 @@
 # Constitution: <job name>
 
-**Job weight**: <light | standard | deep><, corrected from <weight> by the user>, <one-line reason>
+**Job weight**: <light | standard | deep>[, corrected from <derived weight> by the user], <one-line reason>
 
 <!--
 Phase 0 produces this ONCE. It is the single standard "done right" is measured

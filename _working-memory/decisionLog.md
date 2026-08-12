@@ -28,7 +28,7 @@ Each entry follows this shape:
 
 **Not enforced by anything.** No script computes a weight, counts clauses against the ceiling, or reads the weight line. That is #160, deliberately deferred: the weight table was designed from two runs, so fixtures pinning it today would only confirm the design reproduces its own inputs.
 
-**Alternatives considered:** re-deriving the budget numbers against the corpus (deep would need 5+, light 2+) and fixing the DEC hand-off with a PAUSED instruction — rejected because it keeps a feature the repo backed out of once, on a sample of eleven runs; patching ship-with-minors a third time — rejected on the two-rounds rule above.
+**Alternatives considered:** re-deriving the budget numbers against the corpus (deep would need 5+, light 2+) and fixing the DEC hand-off with a PAUSED instruction—rejected because it keeps a feature the repo backed out of once, on a sample of eleven runs; patching ship-with-minors a third time—rejected on the two-rounds rule above.
 
 ## 2026-08-12: A Deterministic Clause Never Crosses, And The Brief Is What Limits A Second Opinion
 

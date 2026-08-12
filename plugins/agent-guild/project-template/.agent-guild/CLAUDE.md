@@ -46,7 +46,7 @@ The discriminator is one question you can read straight off the spec: **does ver
 | light | every acceptance check runs through a command that already exists; a single artifact; no unattended blast radius | 5 |
 | standard | the harness exists but needs extending, or there's unattended blast radius | 8 |
 | deep | verification requires building an instrument, or the spec's own "done" is a property nobody can check today | none |
-<!-- A courier column and an audit-round column both belonged here once. Couriers come back when #34 rules; capping audit rounds was measured against this repo's own archive and cut, see #120. -->
+<!-- An audit-round column belonged here once and a courier column is still owed. Couriers come back when #34 rules; capping audit rounds was measured against this repo's own archive and cut, see #120. -->
 
 These rules outrank the numbers:
 

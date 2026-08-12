@@ -22,6 +22,12 @@ Codex agents whose generated `sandbox_mode` is `read-only` never persist verdict
 - `briefs/T-NNN.md` — self-contained vendor briefs from `compose-brief.py` (see Briefs below).
 - `log/` — dispatches, escalations, the stop-gate's livelock counter, and the vendor call ledger (see below).
 
+## Constitution Weight Line
+
+Source: `.agent-guild/templates/constitution.md`. A `**Job weight**: <light | standard | deep>[, corrected from <derived weight> by the user], <one-line reason>` line sits between the title and the template's comment block, written by the `constitution` skill in Phase 0 (#123). It sets one budget, the clause ceiling: 5 for light, 8 for standard, none for deep. The auditor reads it for that ceiling and reports an unexplained overrun or a missing line; nothing else reads it, and no script parses it at all. The optional middle segment keeps the derived weight when the user overrides it, because the correction is the most useful thing the retrospective can report back about the derivation.
+
+Nothing below `## Clauses` is safe to add to lightly: `check-job-spec.parse_constitution` ends a clause block at the next `### C-N:` heading rather than at `##`, so `## Protected content` and `## Non-goals` are scanned as the last clause's prose and a citation defect in them is reported against that clause. The weight line sits *above* `## Clauses` and is unaffected. Tracked in #160.
+
 ## Task Frontmatter
 
 Source: `.agent-guild/templates/task.md`. Fields: `id`, `title`, `spec` (anchor into `spec.md`), `clauses[]`, `executor`, `executor_model`, `checker`, `check_method`, `status`, `retries`, `max_retries`, `deps[]`, `escalations[]`, `artifacts[]`. Every clause in `clauses` must appear in `check_method`, named to a script invocation or a `checker-judgment` rubric.

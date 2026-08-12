@@ -14,6 +14,13 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-12: Don't give the orchestrator an exit from a failed audit it can take alone
+
+**Tried:** #120's "ship with minors" rule. When an audit's round budget ran out with no blocker outstanding, the orchestrator accepted the document, recorded the leftover minor findings, and carried on. Built twice, in two different shapes.
+**What broke:** Both shapes deadlocked the job they existed to unblock. `dispatch-guard` blocks every worker until `con_audit_passed()` finds a verdict whose frontmatter reads PASS, and shipping produced no such verdict, so the orchestrator accepted a constitution and then could dispatch nobody. The contract forbids it writing that verdict itself, which is the separation the org chart exists to keep. The second shape recorded the minors under a new `## Carried minors` heading in the constitution, and since `check-job-spec.parse_constitution` ends a clause block at the next `### C-N:` rather than at `##`, a carried minor citing `path:line` failed rule R1 and hard-blocked every later auditor dispatch, including the one meant to record the PASS.
+**Why we backed out:** The exit was trying to route around a gate that is load-bearing. Every path to "the document is good enough" that the orchestrator can walk by itself is a path to the orchestrator approving its own paperwork, and the CON-audit PASS is the single check that reaches its work. Three adversarial review rounds produced three defects and all three sat in this feature, while the surrounding budget prose came through untouched.
+**Don't suggest:** any orchestrator-side acceptance of a failed or unfinished audit — shipping with outstanding findings, a "good enough" threshold, a recording round that writes the PASS, or a waiver file for CON-audit modelled on the courier's `.denied`. A stuck audit ends by handing the document to the user, the same way step 4 of the retry ladder ends. And don't add a section to `.agent-guild/templates/constitution.md` after `## Clauses` without first fixing that parser: anything below the last clause is scanned as its prose.
+
 ## 2026-08-11: Don't treat a field a model writes about itself as identity evidence
 
 **Tried:** Verifying a courier verdict's `model` by comparing it against the lane's pinned string. The far side was told the exact value to echo (#113 added that instruction), so echoing something else was read as a signal worth acting on.

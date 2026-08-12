@@ -379,6 +379,7 @@ try:
     check(
         "#142: a mis-echoed model keeps the judgment instead of blocking it",
         process.returncode == 0
+        and outcome is not None
         and outcome["status"] == "verdict"
         and verdict.get("verdict") == "fail"
         and len(vendor_findings) == 4
@@ -387,10 +388,11 @@ try:
     )
     check(
         "#142: the verdict carries the model the lane ran, not the one echoed",
-        verdict.get("model") == MODEL
+        outcome is not None
+        and verdict.get("model") == MODEL
         and outcome["identity"]["echoed_model"] == "gpt-5.6"
         and outcome["identity"]["echo_matched"] is False,
-        f"model={verdict.get('model')!r} identity={outcome['identity']!r}",
+        f"model={verdict.get('model')!r} identity={outcome and outcome['identity']!r}",
     )
     check(
         "#142: the divergence is recorded as one info finding by the runner",

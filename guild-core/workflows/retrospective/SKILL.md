@@ -20,6 +20,7 @@ Write `.agent-guild/state/retrospective.md` covering:
 - **Disputes**: each one and how it was ruled. A checker overruled more than once points at a weak clause.
 - **Check-infra debt**: ERROR verdicts mean a check couldn't run. Those checks need fixing before the next job leans on them.
 - **What the constitution missed**: defects that slipped through, or clauses that turned out unfalsifiable in practice. This is the most valuable output—it's next job's Phase 0 input.
+- **Shipped with minors**: any document accepted at the end of its audit round budget with minor findings still outstanding, and any round taken past budget to clear a blocker. Every carried minor becomes a clause or an interview question next time, or gets dropped on purpose—what it can't do is ride silently into the next job.
 
 ## 3. Offer to archive
 

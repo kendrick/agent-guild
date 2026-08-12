@@ -35,11 +35,11 @@ Route a task by the work, not the default: a mechanical task goes to worker-bulk
 
 ## The job, phase by phase
 
-**Phase 0, constitution.** Invoke the `constitution` skill to produce `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first.
+**Phase 0, constitution.** Invoke the `constitution` skill to produce `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first. Those rounds come out of the audit round budget below.
 
 Note: hooks no-op when no task is open, so during Phase 0 the write-guard is not yet active. The orchestrator contract is prompt-only here—you're trusted to write only the constitution and spec, nothing else, until tasks exist.
 
-**Phase 1, decompose.** Invoke the `decompose` skill to turn the spec plus constitution into task files under `.agent-guild/state/tasks/`, each with an executor, a checker, and a `check_method` that cites constitution clauses. Then dispatch the auditor with `Audit-ID: DEC-audit` to confirm the decomposition covers the spec.
+**Phase 1, decompose.** Invoke the `decompose` skill to turn the spec plus constitution into task files under `.agent-guild/state/tasks/`, each with an executor, a checker, and a `check_method` that cites constitution clauses. Then dispatch the auditor with `Audit-ID: DEC-audit` to confirm the decomposition covers the spec. DEC-audit gets its own budget of the same size.
 
 **Phase 2, build and verify.** Drive each task through the lifecycle below. Dispatch, collect verdicts, rule on disputes, escalate when a tier is spent.
 
@@ -104,6 +104,19 @@ A FAIL is not "try again." It's "here is precisely what's wrong."
 4. Above `opus`, escalate to `fable` for one final dispatch. If fable's budget is also spent, stop dispatching: enrich the spec and re-decompose, or surface the task to the user. There is no rung above fable.
 
 The ladder is Claude-only for now. Those rungs are Claude model names, and a Codex host has no model to put behind them, so a task that escalates there records the bump and then can't dispatch at all: the gate refuses the stale tier, and the host refuses the new one. On Codex, treat a spent budget at the executor's own tier as step 4's ending—enrich the spec and re-decompose, or hand the task to the user—rather than climbing.
+
+## Audit Round Budget
+
+An audit spends rounds the way a task spends retries, and the resemblance ends there. Nothing escalates: the auditor is opus at round 0 and opus at the last round, because the fix for a document that failed audit is rewriting the document, not dispatching a stronger reader. The budget belongs to the document too, not to a task—CON-audit and DEC-audit each carry their own.
+
+The budget is **3 rounds per audit id**. A round is one `<Audit-ID>-r<N>.md` stem under `.agent-guild/state/verdicts/`, so the count is something you can go and look at rather than something you have to remember.
+
+When the budget is spent, the newest verdict decides what happens next:
+
+- **No blocker finding live** → ship it. Accept the document as it stands, write each outstanding minor into the document itself so the next reader inherits the list instead of rediscovering it, and carry them into the retrospective.
+- **A blocker is live** → the budget doesn't release it. Fix it and re-audit past budget, logging the overrun as one line in `.agent-guild/state/log/escalations.log`, or hand the document to the user. A blocker is the auditor saying this document can't govern work as written, and every task built on it would inherit that.
+
+The auditor's own read on how close it is never buys another round. "One more should do it" is the estimate behind an eight-round opening that cost 107 minutes before a single deliverable existed. That run is what this budget exists to bound.
 
 ## Disputes
 

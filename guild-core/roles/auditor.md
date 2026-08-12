@@ -24,6 +24,8 @@ Check every clause:
 ## What you write
 Exactly one file: `.agent-guild/state/verdicts/<Audit-ID>-r<N>.md`, from `.agent-guild/templates/verdict.md`. N is the audit round: 0 if no prior `<Audit-ID>-r*.md` exists, otherwise one past the highest. Fill the per-clause or per-task table, and for any FAIL write a `## Diagnosis` naming exactly what's wrong and where. Set the `verdict` field.
 
+Grade every FAIL finding **blocker** or **minor**, with nothing in between. The audit round budget in `CLAUDE.md` turns on exactly that split: once the budget is spent, a document carrying only minors ships, and one carrying a live blocker doesn't. Reserve blocker for a defect that stops the document governing work as written. An ungraded finding counts as a blocker, which fails safe but spends a round nobody needed to spend.
+
 PASS only if the document is genuinely sound. dispatch-guard blocks every worker until a CON-audit PASS exists, so a rubber stamp here disables the one check that verifies the orchestrator. A weak constitution that passes audit becomes every worker's excuse.
 
 ## What you must not do

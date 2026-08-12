@@ -47,7 +47,7 @@ The discriminator is one question you can read straight off the spec: **does ver
 | standard | the harness exists but needs extending, or there's unattended blast radius | ~8 | 2 |
 | deep | verification requires building an instrument, or the spec's own "done" is a property nobody can check today | none | 3 |
 
-Deep lifts the clause ceiling and not the round budget. Rounds are where the cost compounds, and the eight-round opening that motivated the budget was itself a deep job, so leaving deep unbounded would reproduce the exact failure the budget exists to stop.
+Deep removes the clause ceiling but still draws a round budget. Rounds are where the cost compounds, and the eight-round opening that motivated the budget was itself a deep job, so leaving deep's rounds unbounded would reproduce the exact failure the budget exists to stop.
 
 <!-- The courier column returns here when #34 rules. Courier dispatch is hook-enforced and weight-independent for now (#126). -->
 
@@ -59,7 +59,7 @@ Three rules outrank the numbers:
 
 ## The job, phase by phase
 
-**Phase 0, constitution.** Invoke the `constitution` skill. It derives the job's weight and puts it to the user before drafting anything, then produces `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first. Those rounds come out of the audit round budget below.
+**Phase 0, constitution.** Invoke the `constitution` skill. It derives the job's weight and puts it to the user before drafting anything, then produces `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first. CON-audit's rounds come out of the audit round budget below.
 
 Note: hooks no-op when no task is open, so during Phase 0 the write-guard is not yet active. The orchestrator contract is prompt-only here—you're trusted to write only the constitution and spec, nothing else, until tasks exist.
 
@@ -133,11 +133,11 @@ The ladder is Claude-only for now. Those rungs are Claude model names, and a Cod
 
 An audit spends rounds the way a task spends retries, and the resemblance ends there. Nothing escalates: the auditor is opus at round 0 and opus at the last round, because the fix for a document that failed audit is rewriting the document, not dispatching a stronger reader. The budget belongs to the document too, not to a task—CON-audit and DEC-audit each carry their own.
 
-The budget is the recorded job weight's audit round number—**1 light, 2 standard, 3 deep**—and 3 when no weight was recorded. Each audit id draws its own. A round is one `<Audit-ID>-r<N>.md` stem under `.agent-guild/state/verdicts/`, so the count is something you can go and look at rather than something you have to remember.
+The budget is the audit round number for the weight on the constitution's `**Job weight**:` line—**1 light, 2 standard, 3 deep**—and 3 when that line is missing. Each audit id draws its own, so a light job's two audits get one round each. A round is one `<Audit-ID>-r<N>.md` stem under `.agent-guild/state/verdicts/`, and the budget is spent when the stem count reaches it: a budget of 2 means `r0` and `r1`. The count is something you can go and look at rather than something you have to remember.
 
 When the budget is spent, the newest verdict decides what happens next:
 
-- **No blocker finding live** → ship it. Accept the document as it stands, write each outstanding minor into the document itself so the next reader inherits the list instead of rediscovering it, and carry them into the retrospective.
+- **No blocker or major finding live** → ship it. Record each outstanding minor under the document's `## Carried minors` heading so the next reader inherits the list instead of rediscovering it, and carry them into the retrospective. Shipping needs a PASS on disk, because `dispatch-guard` blocks every worker until a CON-audit PASS exists and you may not write that verdict yourself. An auditor holding to its own rule has already given you one, since a document whose findings are all minor is a PASS. If the budget ran out on a FAIL that carries no blocker, dispatch the auditor once more, outside the budget, to record the PASS and its minors.
 - **A blocker is live** → the budget doesn't release it. Fix it and re-audit past budget, logging the overrun as one line in `.agent-guild/state/log/escalations.log`, or hand the document to the user. A blocker is the auditor saying this document can't govern work as written, and every task built on it would inherit that.
 
 The auditor's own read on how close it is never buys another round. "One more should do it" is the estimate behind an eight-round opening that cost 107 minutes before a single deliverable existed. That run is what this budget exists to bound.

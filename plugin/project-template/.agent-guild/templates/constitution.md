@@ -57,6 +57,15 @@ compare one against prose, and #117 spent an audit round on a clause that read
 relevant clause's check at .agent-guild/scripts/check-protected.py. -->
 - manifest: .agent-guild/templates/protected-passages.md   <!-- or a job-local copy -->
 
+## Carried minors
+
+<!-- Appended by the ORCHESTRATOR when an audit's round budget runs out with
+only minor findings left, per CLAUDE.md's audit round budget. One line per
+carried minor. This is a record, not clause text: nothing here is checked
+against, and the retrospective picks the list up at the end of the job. Empty
+on a document that passed clean. -->
+-
+
 ## Non-goals
 
 <!-- What this job explicitly does NOT cover, so workers don't gold-plate and

@@ -213,6 +213,64 @@ with tempfile.TemporaryDirectory() as d:
     check("first line is T-101", rec1["task_id"] == "T-101", rec1)
     check("second line is T-102", rec2["task_id"] == "T-102", rec2)
 
+# --------------------------------------------------- artifact path relativizing
+print("artifacts: under-root absolute becomes relative, others untouched")
+
+with tempfile.TemporaryDirectory() as d:
+    # realpath: on macOS d starts under the /var symlink, but the subprocess's
+    # os.getcwd() (the root the rewrite relativizes against) reports the
+    # resolved /private/var path — comparing against the unresolved form
+    # would make an under-root path look like it resolves outside the root.
+    d = os.path.realpath(d)
+    ledger = os.path.join(d, "vendor-calls.jsonl")
+    under_root = os.path.join(d, "sub", "a.py")
+    rc, out, err = run(
+        *BASE_ARGS, "--artifacts", under_root, "--ledger", ledger, cwd=d
+    )
+    record = first_record(ledger) if rc == 0 and os.path.exists(ledger) else None
+    check(
+        "artifacts: under-root absolute becomes relative",
+        record is not None and record.get("artifacts") == [os.path.join("sub", "a.py")],
+        f"rc={rc} err={err} record={record}",
+    )
+
+with tempfile.TemporaryDirectory() as d:
+    ledger = os.path.join(d, "vendor-calls.jsonl")
+    # "./sub/a.py", not "sub/a.py": a normalize-then-relativize pass would
+    # collapse the leading "./" and still land on the right file, which
+    # would let this case pass even against code that dropped the
+    # already-relative guard and ran every value through the general path.
+    # The leading "./" only survives if relative values are truly skipped.
+    rc, out, err = run(
+        *BASE_ARGS, "--artifacts", "./sub/a.py", "--ledger", ledger, cwd=d
+    )
+    record = first_record(ledger) if rc == 0 and os.path.exists(ledger) else None
+    check(
+        "artifacts: already-relative path unchanged",
+        record is not None and record.get("artifacts") == ["./sub/a.py"],
+        f"rc={rc} err={err} record={record}",
+    )
+
+with tempfile.TemporaryDirectory() as d:
+    ledger = os.path.join(d, "vendor-calls.jsonl")
+    with tempfile.TemporaryDirectory() as outside:
+        outside_path = os.path.join(outside, "b.py")
+        rc, out, err = run(
+            *BASE_ARGS, "--artifacts", outside_path, "--ledger", ledger, cwd=d
+        )
+        record = first_record(ledger) if rc == 0 and os.path.exists(ledger) else None
+        artifacts = record.get("artifacts") if record else None
+        check(
+            "artifacts: outside-root absolute is byte-identical",
+            artifacts == [outside_path],
+            f"rc={rc} err={err} record={record}",
+        )
+        check(
+            "artifacts: outside-root absolute carries no ../ chain",
+            artifacts is not None and "../" not in artifacts[0],
+            artifacts,
+        )
+
 # ------------------------------------------------------------------- job field
 print("job: derivation, override, absence, legacy tolerance, distinguishability, schema")
 

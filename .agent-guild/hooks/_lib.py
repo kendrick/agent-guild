@@ -481,10 +481,15 @@ def second_opinion_debts(data=None):
             # Route 4: the orchestrator's hand-written record that no crossing
             # is coming—a host that refused the dispatch outright (#94), and
             # since #141 also a stem the gate never recorded as authorized.
-            # That second case has no other way out: reserve_crossing skips a
-            # stem that already carries a file (the anti-laundering rule), so
-            # no later dispatch can authorize this one, and without a waiver
-            # the debt rides to STALLED.md.
+            # That second case splits on whether a reservation was ever made.
+            # A courier that died after a legal dispatch left one behind, and
+            # promote_crossing keys on the record's task_id rather than on
+            # which dispatch reserved it, so a re-dispatch still discharges
+            # that stem the honest way—prefer that, since it yields real #34
+            # comparison data. Nothing rescues a stem with no reservation at
+            # all: reserve_crossing skips a stem that already carries a file
+            # (the anti-laundering rule), so the waiver is the only exit
+            # before the debt rides to STALLED.md.
             continue
 
         # Routes 1-4 settle before the file is ever opened, on purpose:

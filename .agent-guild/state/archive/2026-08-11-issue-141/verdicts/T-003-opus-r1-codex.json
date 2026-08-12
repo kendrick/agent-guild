@@ -1,0 +1,24 @@
+{
+  "task_id": "T-003",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "Both passages accurately distinguish a legal dispatch that left an unpromoted reservation, which a re-dispatch can promote, from a file-bearing stem with no reservation, which cannot be rescued by re-dispatch and requires a waiver.",
+      "evidence": ".agent-guild/CLAUDE.md:87; .agent-guild/hooks/_lib.py:480-492; reserve_crossing() and promote_crossing() supplied source"
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "Neither passage overstates re-dispatch as universally successful or universally futile; both consistently prefer re-dispatch when the earlier legal reservation exists and reserve the waiver for the no-reservation case.",
+      "evidence": ".agent-guild/CLAUDE.md:87; .agent-guild/hooks/_lib.py:480-492"
+    }
+  ],
+  "timestamp": "2026-08-11T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

@@ -1,0 +1,126 @@
+{
+  "task_id": "CON-audit",
+  "checker": "auditor",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "blocker",
+      "description": "C-1's check passes C-1's own failing example: the check is the existing test suite, which exits 0 on the unmodified tree where second_opinion_debts() already discharges an unattested hand-written lane verdict.",
+      "evidence": "`.agent-guild/scripts/check-build.sh 'python3 .agent-guild/hooks/test_hooks.py'` run on HEAD of fix/141-verdict-authority -> '169 passed, 0 failed', exit 0, while _lib.py:271 `if any(f\"{stem}-{l}.json\" in names ...): continue` is the unfixed discharge-by-filename the clause forbids."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "blocker",
+      "description": "Same defect: C-2's check is the same suite that already passes on the unmodified tree, so the #100 incident the failing example cites would not be rejected by the clause's own check.",
+      "evidence": "Identical command to C-1 (constitution.md:40 vs :34), exit 0 on HEAD; subagent-return.py:459-476 still computes one vpath from ident and validates only that path."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "blocker",
+      "description": "The predicate is a time window ('appeared during that agent's run') rather than authorship, which false-positives on concurrent subagents and blocks a returning agent over a file it cannot remove.",
+      "evidence": "Archived proof of overlapping runs in the very incident this job addresses: log/dispatches.log has '08:40:42 | checker-courier | T-001' then '08:41:28 | worker-standard | T-002', while log/vendor-calls.jsonl row 3 (T-001, real tokens 203289/5739, duration 99000) starts at 13:43:26Z = 08:43:26 local, i.e. the T-001 courier was still running when T-002's worker was dispatched."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "major",
+      "description": "C-2 does not say where authorship comes from, and the obvious source is unavailable: on a Claude host SubagentStop supplies the PARENT transcript, not the returning agent's own tool calls.",
+      "evidence": "_lib.py:558-568 id_from_transcript docstring: \"Claude's SubagentStop supplies the parent transcript\"; the kit's available attribution seam is instead the per-tool-call agent_id at _lib.py:316-324 in_subagent()."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "blocker",
+      "description": "C-3's check passes C-3's own failing example: the check succeeds iff repro-141.py exits 0, and the failing example is repro-141.py exiting 0 while printing [].",
+      "evidence": "constitution.md:46 check `check-build.sh 'python3 .agent-guild/scripts/repro-141.py'` vs constitution.md:48 failing example; check-build.sh:34-38 propagates the command's exit code and nothing else. The clause never requires the script to exit non-zero when the debt was discharged."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "Citing the not-yet-existing repro-141.py is sound, not a defect: the check fails closed on a missing deliverable.",
+      "evidence": "`.agent-guild/scripts/check-build.sh 'python3 .agent-guild/scripts/repro-141.py'` exits 2 today. Note check-job-spec.py's R5 script-existence rule (check-job-spec.py:669) only inspects the outer script token, so it does not lint the nested command."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "major",
+      "description": "The attestation as specified is unwritable on a Codex host, stranding every Codex-lane debt with no future dispatch able to clear it -- the exact failure mode second_opinion_debts' docstring says it was designed to avoid.",
+      "evidence": "C-1 requires the attestation be written by subagent-return.py 'at the moment it validated that verdict', but subagent-return.py:451-457 validates data['last_assistant_message'] via _codex_courier_outcome_ok() and returns 0 with no verdict file on disk; the parent writes it afterward (.agent-guild/CLAUDE.md: 'the parent will persist the validated verdict'). Cf. _lib.py:245-248."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "major",
+      "description": "The attestation attests validation, not authorship, so the next legitimately dispatched courier launders a forged file it never wrote.",
+      "evidence": "subagent-return.py:466-468: `if os.path.exists(vpath): ok, reason = _validate_verdict_json(vpath)` then return 0 -- the gate cannot distinguish a file this run produced from one it found already on disk."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "major",
+      "description": "C-4's check passes C-4's own failing example verbatim; this is the cleanest instance of the shared check defect, since the failing example is literally the current source.",
+      "evidence": "Failing example says \"dispatch-guard.py still calls time.strftime(...)\"; dispatch-guard.py:43 and :59 are `ts = time.strftime(\"%Y-%m-%dT%H:%M:%S\")` today, and the clause's check (test_hooks.py) exits 0 on that tree."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "minor",
+      "description": "Over-reach: the spec never asks for the clock fix, and the constitution's own non-goal rules out the dispatch-ordering approach C-4 exists to enable.",
+      "evidence": "spec.md 'Done when' (spec.md:85-90) has no clock requirement; constitution.md:102 rules out dispatch-log ordering while stating it 'requires the C-4 clock fix to be measurable at all'. At severity major, C-4 can fail a job that fully satisfies the spec."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "blocker",
+      "description": "C-5's check is again the pre-existing suite, which passes on the unmodified tree, so the clause cannot distinguish a job that preserved the escape hatches from one that never touched them.",
+      "evidence": "constitution.md:58, identical command to C-1/C-2/C-4/C-7; exit 0 on HEAD."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "minor",
+      "description": "C-5's count and its enumeration disagree, leaving a checker unable to tell which routes it must verify.",
+      "evidence": "constitution.md:57 says 'All four non-verdict discharge routes and the global stand-down' then lists four items with PAUSED inside the list; non-goals (constitution.md:103) say 'the other four discharge routes' and name three. second_opinion_debts has three non-verdict routes: sentinel (_lib.py:274), .denied (_lib.py:281), blocked-of-record (_lib.py:303)."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "minor",
+      "description": "The non-goal's stated reason does not hold for the case the incident actually exhibits: 'user- or orchestrator-authored by contract' describes who should write these files, not who can.",
+      "evidence": "The #100 agent wrote discharge-shaped state for a task it was not dispatched on (quarantine/T-002-sonnet-r0-codex.json). Nothing stops the same agent writing 'T-002-sonnet-r0-codex.denied' (one line, no schema, _lib.py:281) or 'state/exhausted/codex', which discharges every debt on the host (_lib.py:274). C-2's scope ('verdict file', .json example) catches neither."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "blocker",
+      "description": "C-7's check is the same pre-existing suite and its failing example concerns an attestation store that does not exist yet, so the clause is vacuous under its own check.",
+      "evidence": "constitution.md:70, identical command; exit 0 on HEAD; `ls .agent-guild/state/verdicts/` shows only .gitkeep, so no attestation store exists to malform."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "major",
+      "description": "'Every consumer suite' names six and omits seven that exist and pass today, including the two courier suites and the Codex hook-packaging suite that cover exactly the code this job changes.",
+      "evidence": "Omitted and green on HEAD: .agent-guild/scripts/test_claude_courier.py, test_codex_courier.py, test_check_job_spec.py, test_check_diff_scope.py, test_compose_brief.py, scripts/test_codex_hooks_packaging.py, scripts/test_make_changelog.py."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "major",
+      "description": "C-9 is the only mitigation for the shared check defect above, but it is judgment-only and names no specific behavior, so it cannot compel the tests C-1 through C-7 silently depend on.",
+      "evidence": "constitution.md:82 rubric says 'each new gate branch has a paired allow-case and refuse-case' without enumerating the branches; five blocker clauses meanwhile delegate their entire falsifiability to tests the audited worker writes."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "C-6 is sound and is the only clause whose check both runs today and would reject its own failing example.",
+      "evidence": "Ran verbatim: 27 files match .agent-guild/state/archive/*/verdicts/*.json, all pass validate-verdict.py, and `git status --porcelain .agent-guild/state/archive/` is empty. The failing example is doubly caught: verdict.schema.json sets additionalProperties: false, so an added 'attested' key fails validation as well as dirtying git."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "Design-decision evidence claim 1 re-derived and confirmed: ledger-backing would have passed the forgery, so ruling it out is correct.",
+      "evidence": "log/vendor-calls.jsonl line 4: task_id T-002, duration_ms 0, tokens_in/out null, artifacts ['/Users/k.arnett/repos/agent-guild/.agent-guild/state/verdicts/T-002-sonnet-r0-codex.json'] -- the row names the forged verdict's stem."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "Design-decision evidence claim 2 re-derived and confirmed: the two clocks are exactly five hours apart and nothing on disk records the offset.",
+      "evidence": "dispatch-guard.py:43 uses local time.strftime with no Z. Offset pinned at exactly UTC-5 by four independent dispatch/vendor-call pairs (T-001 08:40:42 vs 13:43:26Z; T-004 09:36:15 vs 14:38:14Z; T-005 09:49:20 vs 14:50:41Z). So 'checker-courier | T-002' at 08:54:56 is 13:54:56Z, 9m41s AFTER the forged write at 13:45:15Z; read as one clock it appears ~9h before it."
+    }
+  ],
+  "timestamp": "2026-08-11T21:17:15Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

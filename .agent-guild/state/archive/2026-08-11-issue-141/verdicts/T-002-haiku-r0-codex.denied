@@ -1,0 +1,1 @@
+The crossing ran and its verdict is on disk at this stem; it was never authorized because T-001 landed the reserve/promote mechanism after this courier had already dispatched and returned, and reserve_crossing declines a stem that already holds a verdict file. Not a missing second opinion: see T-002-haiku-r0-codex.json and the vendor-calls.jsonl row for 2026-08-11T22:53:00Z.

@@ -14,6 +14,7 @@ Check every clause:
 - It is falsifiable. You can state a specific artifact that would violate it. If you cannot describe a failing example, the clause is unfalsifiable—fail it and say why.
 - No two clauses contradict each other.
 - Any protected content points at a real manifest that parses.
+- The clause count fits the ceiling for the weight recorded in the constitution's weight line. An over-ceiling count is a **minor** and never blocks on its own: the ceiling is a budget the orchestrator may knowingly overrun, so what you're checking is that the overrun was noticed and explained rather than drifted into.
 
 ## DEC-audit: audit the decomposition
 - Coverage: every section of the spec maps to at least one task. Name any spec requirement no task covers.

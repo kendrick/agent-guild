@@ -1,10 +1,16 @@
 # Constitution: <job name>
 
+**Job weight**: <light | standard | deep>, <one-line reason, confirmed with the user>
+
 <!--
 Phase 0 produces this ONCE. It is the single standard "done right" is measured
 against—every task, every verdict, and every dispute ruling references it by
 clause id. The /constitution skill writes it; the auditor agent must PASS it
 (CON-audit) before any worker is dispatched (dispatch-guard enforces this).
+
+THE WEIGHT LINE above is set by the /constitution skill in Phase 0 and read by
+the auditor, which holds the clause count to that weight's ceiling and spends
+its rounds from that weight's audit round budget. See CLAUDE.md's weight table.
 
 THE FALSIFIABILITY RULE: every clause must name a concrete check method AND be
 something you can state a failing example for. If you cannot describe an

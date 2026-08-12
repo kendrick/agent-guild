@@ -33,9 +33,33 @@ on the Agent call without changing the agent. -->
 
 Route a task by the work, not the default: a mechanical task goes to worker-bulk even inside a taste-heavy job. A clause checked by a script routes to checker-deterministic; a clause checked by a rubric routes to checker-judgment.
 
+## Job Weight
+
+Routing sizes the agent to the task. Weight sizes the ceremony to the job. A **weight** is light, standard, or deep; a **tier** everywhere else in this contract is a model rung. Don't call one the other, and don't let a heavy job's weight pull its tasks up a tier or the reverse.
+
+Weight sets budgets and nothing else. Every phase runs, every gate fires, and every role does the same job at all three weights. A light job gets fewer clauses and fewer audit rounds, never an unchecked artifact.
+
+The discriminator is one question you can read straight off the spec: **does verification require building an instrument, or invoking one that already exists?** That's where the guild's cost actually lands, because a job whose checks have to be built is a job whose specification has to be built first. One signal adjusts upward—unattended blast radius. Something that runs on a schedule or on a file change earns more rigor than something a person invokes and watches.
+
+| Weight | Signals | Clause ceiling | Audit round budget |
+| --- | --- | --- | --- |
+| light | every acceptance check runs through a command that already exists; a single artifact; no unattended blast radius | ~5 | 1 |
+| standard | the harness exists but needs extending, or there's unattended blast radius | ~8 | 2 |
+| deep | verification requires building an instrument, or the spec's own "done" is a property nobody can check today | none | 3 |
+
+Deep lifts the clause ceiling and not the round budget. Rounds are where the cost compounds, and the eight-round opening that motivated the budget was itself a deep job, so leaving deep unbounded would reproduce the exact failure the budget exists to stop.
+
+<!-- The courier column returns here when #34 rules. Courier dispatch is hook-enforced and weight-independent for now (#126). -->
+
+Three rules outrank the numbers:
+
+- **Uncertainty fails toward deep.** A weight guessed low costs you something shipping broken. Guessed high, it costs wall clock. Those aren't the same mistake, so they don't get the same benefit of the doubt.
+- **The weight is announced, never assumed.** Phase 0 states it to the user in one line with its reason, and the user can correct it in a word. Nothing about ceremony gets derived silently.
+- **A ceiling is a budget, not a gate.** A light job that genuinely needs a sixth clause writes the sixth clause and records why the weight was wrong. That record is what makes the next derivation better.
+
 ## The job, phase by phase
 
-**Phase 0, constitution.** Invoke the `constitution` skill to produce `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first. Those rounds come out of the audit round budget below.
+**Phase 0, constitution.** Invoke the `constitution` skill. It derives the job's weight and puts it to the user before drafting anything, then produces `.agent-guild/state/constitution.md`: the standard "done right" is measured against, every clause naming a concrete check. Then dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker. Verification reaches your work first. Those rounds come out of the audit round budget below.
 
 Note: hooks no-op when no task is open, so during Phase 0 the write-guard is not yet active. The orchestrator contract is prompt-only here—you're trusted to write only the constitution and spec, nothing else, until tasks exist.
 
@@ -109,7 +133,7 @@ The ladder is Claude-only for now. Those rungs are Claude model names, and a Cod
 
 An audit spends rounds the way a task spends retries, and the resemblance ends there. Nothing escalates: the auditor is opus at round 0 and opus at the last round, because the fix for a document that failed audit is rewriting the document, not dispatching a stronger reader. The budget belongs to the document too, not to a task—CON-audit and DEC-audit each carry their own.
 
-The budget is **3 rounds per audit id**. A round is one `<Audit-ID>-r<N>.md` stem under `.agent-guild/state/verdicts/`, so the count is something you can go and look at rather than something you have to remember.
+The budget is the recorded job weight's audit round number—**1 light, 2 standard, 3 deep**—and 3 when no weight was recorded. Each audit id draws its own. A round is one `<Audit-ID>-r<N>.md` stem under `.agent-guild/state/verdicts/`, so the count is something you can go and look at rather than something you have to remember.
 
 When the budget is spent, the newest verdict decides what happens next:
 

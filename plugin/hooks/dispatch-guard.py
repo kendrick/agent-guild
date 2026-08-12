@@ -22,6 +22,11 @@ dispatch, this blocks unless:
     paperwork first—so an opus auditor is never spent on a defect a stdlib
     script could have proven in about two seconds (#132).
 
+A legal checker-courier dispatch also reserves its crossing (_lib.reserve_crossing)
+before returning—#141's fix for #100, where a courier dispatched for T-001 wrote
+T-002's verdict and nothing tied that file to any dispatch. subagent-return.py
+promotes the same reservation once the return validates.
+
 A Codex followup, which re-tasks a running agent rather than spawning one, is
 refused outright when it targets a guild agent: it carries nothing left to
 check (#77).
@@ -32,6 +37,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
@@ -40,7 +46,10 @@ import _lib  # noqa: E402
 def _log(agent, task, model):
     try:
         os.makedirs(_lib.state_path("log"), exist_ok=True)
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # Use UTC with a trailing Z to match verdict and ledger timestamps.
+        # dispatches.log is compared against those timestamps to establish
+        # ordering, and a local-time stamp is silently wrong by the machine's offset.
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with open(_lib.state_path("log", "dispatches.log"), "a", encoding="utf-8") as f:
             f.write(f"{ts} | {agent} | {task} | {model}\n")
     except Exception:
@@ -335,6 +344,18 @@ def main(data):
                     "retry budget moves. The sentinel is user-cleared, like "
                     "PAUSED."
                 )
+            # #141: reserve THIS dispatch's crossing before the courier ever
+            # runs, so subagent-return.py has something to promote a return
+            # against instead of trusting whatever filename shows up (#100,
+            # where a courier dispatched for T-001 wrote T-002's verdict and
+            # nothing tied that file to any dispatch). tier/retries are read
+            # from the task file now, at the moment authorization is legal to
+            # grant—not recomputed from a verdict filename later, which is
+            # exactly the trust #100 exploited.
+            courier_tier = str(task.get("executor_model", "")).strip().lower()
+            courier_retries = str(task.get("retries", "0")).strip() or "0"
+            stem = _lib.crossing_stem(tid, courier_tier, courier_retries)
+            _lib.reserve_crossing(tid, stem, lane)
         _log(raw, tid, effective_model)
         return 0
 

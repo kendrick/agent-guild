@@ -25,6 +25,14 @@ subagent keeps working.
   Quota uses the same ledger-first, lane-sentinel-second, no-verdict contract;
   Codex returns that outcome before the parent performs those writes.
 
+  A validated checker-courier return also PROMOTES the crossing dispatch-guard
+  reserved at dispatch (#141): second_opinion_debts() discharges a lane file
+  only once its gate-owned authorization record shows both a reservation and
+  a promotion, not merely because a file with the right name exists (#100,
+  where a courier dispatched for one task also wrote a sibling's verdict and
+  nothing caught it). The Codex branch promotes from the validated OUTCOME
+  rather than a file on disk, since that courier never writes one itself.
+
   We deliberately do NOT require the rendered `.md` sibling to exist here.
   The JSON is the record of record; the renderer is the checker's documented
   obligation, and the orchestrator can re-render it from the JSON at any
@@ -453,6 +461,15 @@ def main(data):
                 data.get("last_assistant_message"), ident
             )
             if ok:
+                # #141: this read-only courier never writes a file at all—
+                # the PARENT persists the verdict after this hook returns—so
+                # promotion happens from the validated OUTCOME, not from
+                # anything on disk. Skipping this would strand every
+                # Codex-lane crossing: dispatch-guard's reservation would sit
+                # forever unpromoted, and second_opinion_debts() would never
+                # find an authorization record once the parent's file landed.
+                stem = _lib.crossing_stem(ident, tier, retries)
+                _lib.promote_crossing(ident, stem, lane)
                 return 0
             return _lib.block(
                 f"checker-courier for {ident} returned an invalid read-only "
@@ -488,6 +505,22 @@ def main(data):
                     "field: a verdict you corrected is one you co-authored, and "
                     "you commissioned this check."
                 )
+            # #141: promote the reservation dispatch-guard made for THIS
+            # exact stem, so second_opinion_debts() reads this crossing as
+            # authorized rather than merely present. A courier that was
+            # never legally dispatched (no Task-ID line dispatch-guard could
+            # gate) has nothing here to promote—crossing_authorized() stays
+            # False for it, and its debt stays owed.
+            stem = _lib.crossing_stem(ident, tier, retries)
+            _lib.promote_crossing(ident, stem, lane)
+            # #100 verbatim: a courier dispatched for one task also wrote a
+            # SIBLING task's verdict, and nothing noticed. Surface any other
+            # lane-suffixed file sitting here with no dispatch of its own
+            # (C-2). A log row, not a non-zero exit: blocking this subagent's
+            # return would hang it over a file it may have had nothing to do
+            # with and can't fix by retrying.
+            for file_tid, _fstem, name in _lib.foreign_stem_writes(ident, lane):
+                _lib.surface_foreign_stem_write(ident, file_tid, name)
             return 0
         if _quota_return_ok(ident, lane):
             return 0

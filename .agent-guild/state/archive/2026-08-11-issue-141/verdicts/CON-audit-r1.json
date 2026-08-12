@@ -1,0 +1,138 @@
+{
+  "task_id": "CON-audit",
+  "checker": "auditor",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "blocker",
+      "description": "r0's central finding is not fixed, only relocated: C-1's check passes on a tree carrying no implementation at all, because the required label is satisfied by a bare comment, and on that same tree C-1's own failing example holds verbatim.",
+      "evidence": "Copied .agent-guild/ to a scratch tree, appended the single line `# unattested lane verdict leaves the debt outstanding` to test_hooks.py and `# codex-host courier return attests its crossing` to test_codex_adapter.py, and changed nothing else. C-1's check verbatim -> exit 0. On that same tree the spec's repro prints `before forge: [('T-900','T-900-sonnet-r0','codex')]` then `after forge: []`: the hand-written unattested lane verdict still discharges the debt, which is C-1's failing example word for word."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "blocker",
+      "description": "Same defect: both of C-2's labels are satisfied by comments, so the check exits 0 on a tree where subagent-return.py is untouched and the #100 incident it cites would still exit 0.",
+      "evidence": "Same scratch tree, comments `# courier writing another task's verdict is refused at return` and `# a concurrent agent's verdict does not block this return` appended to test_hooks.py; C-2's check verbatim -> exit 0. subagent-return.py:464-491 still computes one vpath from ident and validates only that path."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "blocker",
+      "description": "Same defect: one comment line satisfies C-5's check on an unimplemented tree, so the clause cannot distinguish a job that preserved the escape hatches from one that never touched them -- r0's finding restated.",
+      "evidence": "Same scratch tree, `# escape hatches survive the attestation requirement` appended to test_hooks.py; C-5's check verbatim -> exit 0."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "blocker",
+      "description": "Same defect: one comment line satisfies C-7's check, and on that tree no attestation store exists at all, so the clause remains vacuous under its own check.",
+      "evidence": "Same scratch tree, `# second_opinion_debts survives a corrupt attestation store` appended to test_hooks.py; C-7's check verbatim -> exit 0. `ls .agent-guild/state/verdicts/` on HEAD shows only CON-audit-r0.{json,md}: no attestation store exists to corrupt."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "blocker",
+      "description": "The grep-a-label pattern is theatre as a falsifiability mechanism, and C-9 -- the only clause that could compel the labels to name real tests -- is severity major and never names them. Four blocker clauses delegate their entire falsifiability to a string match a comment satisfies.",
+      "evidence": "Demonstrated above for C-1/C-2/C-5/C-7. The repo already supports a sound alternative: test_hooks.py:63-70 prints `  ok   {label}` only from a check() call that evaluated True, so `out=$(python3 .agent-guild/hooks/test_hooks.py) && printf '%s' \"$out\" | grep -q 'ok   <label>'` exits 1 on the comment-only tree and 0 on a real passing case (verified both ways). test_codex_adapter.py runs unittest at verbosity=2, which prints a test's docstring first line followed by ` ... ok`, so the same output-grep works there."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "blocker",
+      "description": "The authorship mechanism C-2 mandates cannot observe the write that produces every legitimate Claude-lane crossing, so C-1 would strand every real crossing on the kit's primary host -- the same failure r0 found on Codex, now on Claude.",
+      "evidence": "The Claude courier's pinned lane command is `python3 .agent-guild/scripts/codex-courier.py ...` (.claude/agents/checker-courier.md:70), run through Bash; that script writes the verdict itself at codex-courier.py:607-616 with plain `open(...,'w')`. No PreToolUse Write hook fires: the only write-observing registrations are `Write|Edit|MultiEdit` -> orchestrator-write-guard.py (.claude/settings.json, plugin/hooks/hooks.json) and `Edit|Write|apply_patch` (.codex/hooks.json); neither host registers anything on Bash/shell, and `grep -rn PostToolUse` over the repo returns nothing. So no agent_id-bearing payload ever names the verdict file, no authorship is recorded, no attestation is written, and under C-1 the debt never discharges."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "blocker",
+      "description": "C-1 contradicts itself on the Codex host, reintroducing r0's stranding by a different route: sentence two requires the attestation be written on Codex when the gate validates the returned outcome, sentence three forbids writing one unless the returning agent is recorded as the author of that verdict -- and on Codex the courier authors nothing, the parent persists the file.",
+      "evidence": "constitution.md:47. subagent-return.py:451-456 validates data['last_assistant_message'] and returns 0 with no file on disk; .agent-guild/CLAUDE.md: 'checkers run read-only and cannot write that JSON... you write it to the stem'. The parent is the main session, where _lib.in_subagent (_lib.py:316-324) is False by construction, so no authorship record can exist for a Codex-lane verdict under C-2's definition. A worker must guess which sentence governs and a checker can fail either choice."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "blocker",
+      "description": "r0's C-3 blocker is not fixed. The clause text now demands a non-zero exit, but the check is still `run repro-141.py`, which exits 0 exactly when the script says so -- so C-3's own failing example (the script prints [] and exits 0 anyway) passes C-3's check.",
+      "evidence": "constitution.md:60 check vs constitution.md:62 failing example; check-build.sh:31-38 propagates the command's exit code and asserts nothing else. Nothing else in the constitution constrains repro-141.py's exit code: C-9's rubric covers gate branches and test allow/refuse pairs, not this script. (The check does fail closed today: exit 2, file not found.)"
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "major",
+      "description": "C-1's second conjunct greps test_codex_adapter.py for a literal containing spaces and hyphens, which cannot be a Python test method name -- so in that file the label is satisfiable only by prose, by construction, not merely by accident.",
+      "evidence": "constitution.md:48 requires `codex-host courier return attests its crossing` in .agent-guild/hooks/test_codex_adapter.py, which is a unittest suite (`unittest.main(verbosity=2)`, last line) whose cases are identifiers like `test_codex_courier_dispatch_uses_the_claude_lane_sentinel`. The string can only land in a docstring, comment, or assertion message, and grep on source cannot tell those apart."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "major",
+      "description": "C-7's text enumerates five inputs the predicate must survive; its check greps one label naming one of them, so four fifths of the clause is deterministically unchecked.",
+      "evidence": "constitution.md:83 lists missing verdicts directory, malformed verdict of record, missing attestation store, truncated/non-JSON store, and an attestation naming a stem with no verdict file; constitution.md:84 greps only 'second_opinion_debts survives a corrupt attestation store'."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "major",
+      "description": "C-5 says the four things are 'each verified separately' but its check greps one label, so a single test covering one hatch satisfies a clause that claims four.",
+      "evidence": "constitution.md:71 ('The four things, each verified separately') vs constitution.md:72 (one grep for 'escape hatches survive the attestation requirement')."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "minor",
+      "description": "The constitution never says where the attestation store lives, which matters because second_opinion_debts() lists state/verdicts/ and an unlisted consumer globs the archived copy of that directory.",
+      "evidence": "C-1 says only 'an attestation naming that exact stem exists'; C-7 calls it 'the attestation store' (singular, parseable). _lib.py:255-265 lists state/verdicts/ and filters on `.json` plus _RECORD_STEM_RE (_lib.py:227); scripts/classify-crossings.py:118-124 globs `state/archive/*/verdicts/{tid}-*.json` and treats anything without a lane suffix as a verdict of record. A store placed in state/verdicts/ risks both."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "minor",
+      "description": "C-8 now names eleven suites and closes six of r0's seven omissions, but scripts/classify-crossings.py -- a live consumer of the verdict-directory shape this job changes, and the tool that reads #34's corpus -- has no suite and no mention anywhere in the constitution.",
+      "evidence": "classify-crossings.py:109-135. C-8's eleven suites plus `build-plugin.py --check` all pass today (ran the check verbatim: exit 0). The one r0 omission still absent, scripts/test_make_changelog.py, is defensible: `grep -n 'verdict|state/' scripts/make-changelog.py` returns nothing, so it is not a consumer of hook-visible state; the constitution just doesn't say so."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "minor",
+      "description": "C-2 does not say whether an agent refused at return over a foreign stem still gets an attestation for its own legitimate stem, which decides whether one bad write strands one debt or two.",
+      "evidence": "constitution.md:53 specifies exit 2 and the message contents but not the ordering against C-1's attestation write."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "minor",
+      "description": "C-4's scope claim is unverifiable as written -- it asserts an explicit decision without pointing at where that decision is recorded, so a checker cannot re-derive it; and the negated grep is evadable by an equivalent call spelled differently.",
+      "evidence": "constitution.md:65 ('Scoped into this job by explicit decision, not by the issue text') cites nothing. constitution.md:66's `! grep -q \"time.strftime\"` passes on `from time import strftime` or `datetime.now(timezone.utc).strftime(...)`."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "r0's over-reach finding is resolved and C-4 is now the only label-bearing clause whose check would actually reject its own failing example, because the negated source grep does real work independent of any test label.",
+      "evidence": "Ran C-4's check verbatim on the comment-only scratch tree (label present, strftime untouched) -> exit 1, caught by `! grep -q time.strftime` against dispatch-guard.py:43,59. Non-goal 2 (constitution.md:116) now states C-4 fixes the clock because the trap is real, not to enable dispatch-log ordering, which removes r0's circularity. Scoping in a declared, justified, independently checked clause is legitimate."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "r0's count mismatch is fixed and correct: three non-verdict discharge routes plus the global stand-down, and the non-goals now agree.",
+      "evidence": "Re-derived against second_opinion_debts: sentinel (_lib.py:274), .denied waiver (_lib.py:281), blocked verdict of record (_lib.py:303) -- three; the lane-suffixed json at _lib.py:271 is the verdict route, not a non-verdict one. constitution.md:71 and :117 both now say three."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "C-6 remains sound: its check runs today, exits 0, and would reject its own failing example twice over.",
+      "evidence": "Ran verbatim -> exit 0 across the archived verdicts; verdict.schema.json:78 sets additionalProperties:false, so an added `attested` key fails validate-verdict.py as well as dirtying `git status --porcelain .agent-guild/state/archive/`."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "C-8 is sound on its own terms: it passes today, which is correct for a don't-break clause, and its check rejects its own failing example.",
+      "evidence": "Ran the twelve-command check verbatim -> exit 0 (34/43/29/30/42/19/49/43 passed, 0 failed across the suites; `build-plugin.py --check` -> 'Validation passed'). The failing example is a stale generated tree, which `python3 scripts/build-plugin.py --check` exits non-zero on."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "C-10 is sound: a judgment rubric a checker can apply, with a failing example the rubric plainly rejects.",
+      "evidence": "constitution.md:100-104. Protected content is 'manifest: none' with no verbatim author words shipping, consistent with the spec being intake-written; check-job-spec.py --audit-id CON-audit passes (exit 0)."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "Spec coverage is complete: all four of the issue's Done-when items map to clauses, and the two approaches the issue proposes are ruled out on evidence that re-derives.",
+      "evidence": "Done-when 1 -> C-1/C-2; 2 -> C-3; 3 -> C-2; 4 -> C-6. Ledger-backing: archive/2026-08-11-issue-100/log/vendor-calls.jsonl carries a conforming row naming the forged verdict in `artifacts` with duration_ms 0, so it would have passed the forgery. Clock offset: dispatch-guard.py:43,59 stamp local time with no Z against utc_now() elsewhere."
+    }
+  ],
+  "timestamp": "2026-08-11T22:05:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

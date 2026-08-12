@@ -1,0 +1,54 @@
+{
+  "task_id": "T-003",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "The r0 defect is fixed and the fix is true of the delivered code: both edited locations now say a courier that died after a legal dispatch is recovered by a re-dispatch, and that the waiver is for a stem with no reservation behind it, which I re-derived by driving the real gates rather than reading the diagnosis.",
+      "evidence": "Own e2e replay through dispatch-guard.py/subagent-return.py/stop-gate.py on scratch projects (scratchpad/probe.py). CASE A (courier died after writing): 'A1 reservation after dispatch #1: {\"task_id\": \"T-050\", \"promoted\": false, ...}' / 'A2 debts with file on disk, unpromoted: [[\"T-050\", \"T-050-sonnet-r0\", \"codex\"]]' / 'A2 stop-gate rc=2 names the stem: True' / 'A3 re-dispatch rc=0' / 'A4 reservation after return: {..., \"promoted\": true, ...}' / 'A5 debts after re-dispatch: []'. CASE B (forged file, never reserved): 'B2 reservation after rescue dispatch: ABSENT' / 'B4 debts after rescue attempt: [[\"T-060\", \"T-060-sonnet-r0\", \"codex\"]]' / 'B5 debts after .denied waiver: []'. Mechanism read directly: _lib.py:270-272 (reserve_crossing returns False on an occupied stem, writing nothing), _lib.py:307-321 (promote_crossing keys only on the record's task_id, never on which dispatch reserved it), _lib.py:462-465 (route 1/2 requires crossing_authorized), _lib.py:480 (route 4 keys on the .denied path alone). Prose under test: .agent-guild/CLAUDE.md:87 and .agent-guild/hooks/_lib.py:480-493."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "The rework distinguishes the two cases rather than reversing the r0 error: neither location claims re-dispatch always recovers, and both keep the never-reserved stem stranded and waiver-bound, which matches the code.",
+      "evidence": ".agent-guild/CLAUDE.md:87: 'Try a re-dispatch before you reach for this: a courier that died after a legal dispatch left its reservation behind, and the next courier's return promotes it ... The waiver is for the stem with no reservation behind it at all ... which no re-dispatch can rescue, because a stem already carrying a file is never reserved again'. .agent-guild/hooks/_lib.py:484-492: 'That second case splits on whether a reservation was ever made ... Nothing rescues a stem with no reservation at all: reserve_crossing skips a stem that already carries a file (the anti-laundering rule), so the waiver is the only exit'. Both halves confirmed against probe CASE A (recovers) and CASE B (does not, waiver required)."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "The r0-passing prongs still hold: all three locations cover a stem carrying an unauthorized lane verdict, and the diff altered no other contract text.",
+      "evidence": "Location 1, .agent-guild/CLAUDE.md:87: 'and for a crossing the gate never recorded as authorized-a lane verdict can be sitting on disk and still owe, because what discharges the debt is the gate's record of the dispatch, not the file at the path'. Location 2, .agent-guild/CLAUDE.md:125: 'OR one whose crossing the gate never recorded as authorized (#141) ... stays unauthorized no matter what's sitting on disk at that path'. Location 3, .agent-guild/hooks/_lib.py:482-483: 'a host that refused the dispatch outright (#94), and since #141 also a stem the gate never recorded as authorized'. Scope: 'git diff --numstat a9a90a7~1..2e0223d' -> '1 1 .agent-guild/CLAUDE.md' and '13 1 .agent-guild/hooks/_lib.py', nothing else; filtering the _lib.py hunk to non-comment lines leaves only the removed trailing comment on the pre-existing 'continue', so no executable line changed; 'git status --porcelain' is empty."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "minor",
+      "description": "At CLAUDE.md:87 the clause 'which no re-dispatch can rescue, because a stem already carrying a file is never reserved again' is attached to two examples, and the stated reason only holds for one of them: 'a dispatch that failed before any hook saw it' leaves NO file at the stem, so a later dispatch does reserve it and the debt does clear. The #94 stem is unrescuable for its own reason (the agent was unregistered, so every re-dispatch failed at the host), not because of the anti-laundering rule.",
+      "evidence": "Probe CASE C, the #94 shape with nothing at the lane stem: 'C1 debts, nothing at the lane stem: [[\"T-070\", \"T-070-sonnet-r0\", \"codex\"]]' / 'C2 later dispatch rc=0; reservation: {\"task_id\": \"T-070\", \"promoted\": false, ...}  <- IS reserved (no file in the way)' / 'C3 return rc=0; debts after: []'. Contrast .agent-guild/CLAUDE.md:87. Kept minor rather than a violation: the paragraph's operative instruction ('Try a re-dispatch before you reach for this') already sends the orchestrator to the recovering move first, so the misattached reason cannot produce a premature waiver on its own, and for the #94 incident as the state map describes it the waiver genuinely is the exit."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "minor",
+      "description": "Assessing the out-of-scope item the worker flagged, independently: the state-map entry at CLAUDE.md:125 is factually true and does not overreach, but it still offers 'a courier that died after writing its verdict file' as the waiver's illustration, which is now the one case CLAUDE.md:87 says to re-dispatch instead. The three locations agree on the rule and diverge on the recommended action for that case; a reader who lands on the state map first gets no hint a re-dispatch would recover it.",
+      "evidence": ".agent-guild/CLAUDE.md:125: 'the waiver, for a lane that never got as far as a courier at all, OR one whose crossing the gate never recorded as authorized (#141) ... a stem left unpromoted-a courier that died after writing its verdict file, say-stays unauthorized no matter what's sitting on disk at that path.' That sentence claims only present-tense unauthorized status, which probe CASE A confirms ('A2 debts with file on disk, unpromoted: [[\"T-050\", ...]]'), so it does not contradict :87. Not scored as a C-1 violation for two reasons I checked rather than assumed: constitution C-1's own text assigns that case to the waiver ('A stem left unauthorized, including one poisoned by a courier that died after writing, stays clearable by a `...-<lane>.denied` waiver at that stem'), and the code agrees, since route 4 at _lib.py:480 keys on the .denied path alone regardless of any reservation (probe 'B5 debts after .denied waiver: []'). Flagged here for the orchestrator to rule on: a clause naming the illustration at :125 would remove the last divergence."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "Both commit subjects carry a conventional-commit type and scope, both bodies say why rather than what, and the added _lib.py comment explains a constraint a reader cannot recover from the code.",
+      "evidence": "git log a9a90a7~1..2e0223d subjects: 'docs(contract): scope the waiver's re-dispatch claim to a stem never reserved' and 'docs(contract): widen the .denied waiver to cover an unauthorized stem' (type 'docs', scope 'contract'). 2e0223d body names the constraint and the cost: 'promote_crossing keys on the record's task_id rather than on which dispatch reserved it. The next courier's return promotes that stale reservation and the debt clears.' / 'trading a real crossing for a recorded absence at exactly the moment #34 is trying to collect the crossings.' Comment at _lib.py:484-492 gives the reason a reader could not derive from the surrounding branch, which tests only os.path.exists on the .denied path: 'prefer that, since it yields real #34 comparison data'."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "minor",
+      "description": "The superseded commit a9a90a7's body still carries the claim the rework corrects, so anyone reading history alone gets the false version once. Recorded rather than scored as a defect: history is immutable and 2e0223d explicitly supersedes it, which is the correct way to carry a corrected claim in git.",
+      "evidence": "a9a90a7 body: 'No later dispatch repairs it, because reserve_crossing deliberately skips a stem that already carries a file, and that skip is the whole anti-laundering rule.' Refuted for the died-after-writing stem by probe CASE A ('A5 debts after re-dispatch: []'). 2e0223d body opens by naming and correcting it: 'The r0 wording said flatly that re-dispatching won't clear an unauthorized stem. That holds only where no reservation was ever made behind it'."
+    }
+  ],
+  "timestamp": "2026-08-12T00:28:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

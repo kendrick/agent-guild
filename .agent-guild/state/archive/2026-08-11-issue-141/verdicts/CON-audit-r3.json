@@ -1,0 +1,132 @@
+{
+  "task_id": "CON-audit",
+  "checker": "auditor",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "fail",
+  "timestamp": "2026-08-11T21:30:00Z",
+  "duration_ms": null,
+  "cost_usd": null,
+  "findings": [
+    {
+      "clause_id": "C-8",
+      "severity": "major",
+      "description": "C-8's 'revert the implementation and re-run' step cannot distinguish a vacuous refuse-case from a real one, so r2's kill shot survives the clause written to catch it. test_hooks.py is a flat script; a test file that touches any symbol new in this job aborts the entire suite on pre-change code, so every later check() -- including check(label, True, \"\") -- reads as 'did not pass against pre-change code', which is exactly what C-8 tells the checker to look for.",
+      "evidence": "Built a post-change tree: added `crossing_authorized(stem, lane)` to _lib.py (never wired into second_opinion_debts) plus `check(\"refuse: an unauthorized lane verdict does not discharge\", True, \"\")`. Post-change run prints `ok   refuse: an unauthorized lane verdict does not discharge`. Then `git worktree add --detach <pre> 92385bb`, copied the same test_hooks.py in, re-ran: `AttributeError: module '_lib' has no attribute 'crossing_authorized'` at test_hooks.py:227, suite aborts, grep -c for the refuse-case label = 0. A checker applying C-8's check literally concludes the refuse-case demonstrably fails against pre-change code. The abort is structural: test_hooks.py:227 is a module-level `import _lib as lib_mod` and the file is a flat script, not unittest."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "major",
+      "description": "C-8's remaining anti-vacuity conjunct -- 'no added test asserts a literal or leaves its condition unexercised' -- is evadable by asserting a trivially-true property of the code under change, which is neither a literal nor unexercised. The clause names the wrong property: what matters is that the assertion's truth depends on the gate's DECISION for the input under test, not merely that it touches new code.",
+      "evidence": "On the same attack tree, `check(\"allow: an authorized crossing discharges its debt\", _lm.crossing_authorized.__name__ == \"crossing_authorized\")` passes, is not a literal, and exercises the code under change. It asserts nothing about discharge. Both attack cases also satisfy C-8's other two conjuncts: the diff modifies gate code (_lib.py gains a function) and the branch has a paired allow/refuse case."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "major",
+      "description": "C-1's new closing sentence invents a use for the `.denied` waiver that the kit contract does not support, and that the contract positively asserts cannot arise. `.agent-guild/CLAUDE.md` scopes the waiver to a dispatch that never reached a courier at all, and separately guarantees that a courier which ran always leaves a verdict file behind.",
+      "evidence": ".agent-guild/state/constitution.md:55 ('A crossing that cannot be recorded, because its courier died before returning, leaves the debt outstanding and is cleared by the documented waiver in C-5'). Against .agent-guild/CLAUDE.md: the dual-check regime says of the json route 'Auth failure, timeout, a missing CLI, and vendor output malformed twice running all land here as a schema-conforming blocked verdict, so a courier that ran at all leaves this file behind whatever became of it'; and of the waiver, 'for a host that refused the dispatch outright'. The state map repeats it: 'the waiver, for a lane that never got as far as a courier at all... the dispatch failed at the host and no hook ever fired' (#94). A courier that died mid-flight both ran and, on the Claude lane, may already have written its file -- neither documented case."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "major",
+      "description": "C-1 and C-5 disagree about whether the `.denied` waiver must newly clear a stem whose lane verdict is present but unauthorized. C-1 assigns that case to the waiver; C-5 pins every existing route to behave 'exactly as .agent-guild/CLAUDE.md documents' and says 'none acquires C-1's requirement'. Whether the waiver is even reachable in that case is an ordering property of second_opinion_debts() that no clause states, so a worker must guess and a checker can fail either choice.",
+      "evidence": "constitution.md:55 vs constitution.md:79. In _lib.py the routes are ordered: lane-json presence (`if any(f\"{stem}-{l}.json\" in names for l in COURIER_LANES): continue`, _lib.py:271) is tested BEFORE lane_exhausted (:274) and BEFORE the `.denied` check (:281). If the job implements authorization by conjoining onto :271 the waiver becomes reachable for an unauthorized stem; if it implements a separate earlier 'unauthorized -> owes' branch the waiver is unreachable and C-1's stated recovery path does not exist. This is r1's C-1 self-contradiction in a new location (CON-audit-r1.md:56) and r2's unbounded stem-poisoning finding (CON-audit-r2.md:65) papered over rather than resolved."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "major",
+      "description": "C-2's disjunction 'refused or surfaced' leaves the surfaced branch unfalsifiable: the clause never says where the surfacing lands or who must be able to read it, so any print statement on any stream satisfies it and a checker has no way to reject one.",
+      "evidence": "constitution.md:61 ('the anomaly is surfaced rather than passing silently') and constitution.md:62 ('confirm the #100 case ... is refused or surfaced, that the message names both Task-IDs'). Nothing pins the channel. Contrast C-1, whose equivalent property is nailed down by an observable predicate result and by C-3's forge subcommand. The spec's own wording is soft here too ('accounts for', spec.md:89), so this is a fidelity gap the constitution could have closed and did not: name the channel (hook stderr with a non-zero exit, or a log row under state/log/) so the checker has something to look for."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "minor",
+      "description": "C-5 mis-attributes `state/PAUSED` as one of four 'discharge routes' that second_opinion_debts() 'already has'. PAUSED is not a route of that predicate at all; it is a hook-entry stand-down applied by the _lib.run() wrapper. This is a regression against a finding r0 raised and r1 fixed.",
+      "evidence": "constitution.md:79 lists PAUSED among 'the discharge routes it already has'. The body of second_opinion_debts (_lib.py:254-311) contains no paused() call -- its routes are the lane-json sibling (:271), lane_exhausted (:274), the `.denied` waiver (:281), and a blocked record (:303). PAUSED is handled at _lib.py:695-710 in the hook wrapper. CON-audit-r0.md:31 raised the identical mis-count; CON-audit-r1.md:36 recorded it fixed as 'three non-verdict routes plus the global stand-down'. r3 folds it back in."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "minor",
+      "description": "C-8 inherits C-5's PAUSED error by reference: its allow-case list requires 'each of C-5's four discharge behaviors', one of which is not a behavior of the predicate under change.",
+      "evidence": "constitution.md:97 references constitution.md:79. An allow-case demonstrating that PAUSED stands the hooks down exercises _lib.run(), not second_opinion_debts(), so it cannot be an allow-case for a gate branch this job adds."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "minor",
+      "description": "C-7's anti-regression force is illusory for the one file that decides this job: a correct implementation of C-1 necessarily inverts four existing assertions in test_hooks.py, so the worker must edit the suite C-7 requires to pass, and C-7 neither acknowledges that nor says which assertions may change.",
+      "evidence": "Neutralized the lane-json discharge branch (_lib.py:271) in a scratch clone; test_hooks.py went 165 passed / 4 failed, failing exactly `so: a codex lane sibling discharges the debt` (:928), `so: a claude lane sibling discharges the debt` (:944), `so: the debt is per retry round` (:1044), and `so: courier dispatch still refused on a complete task with no debt` (:1116). All four assert the pre-#141 behavior. Once the worker rewrites them, C-7 is satisfied by whatever was built."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "minor",
+      "description": "No clause states the positive end-to-end property in its own text as a first-class requirement: that a legitimately authorized crossing MUST discharge its debt. It survives only as an implication of C-1's 'only via' and as one item in C-8's allow-case list. The failure it guards against is total deadlock of the dual-check regime, which deserves to be stated rather than implied.",
+      "evidence": "constitution.md:55 says 'discharges a second-opinion debt only when the gate recorded that crossing as authorized' -- a necessary condition, not a sufficient one. C-3's forge subcommand checks only the refusal direction: it exits 0 whenever `after` is non-empty. Demonstrated by attack: replacing _lib.py:271 with `if False:` makes C-3 print `after  forge: [('T-900','T-900-sonnet-r0','codex')]` / `PASS` and exit 0 on a tree where no crossing can ever discharge. Only C-8's allow-case sentence (constitution.md:97) stands between that tree and a pass."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "minor",
+      "description": "If C-1's waiver sentence is meant literally, the kit's own contract text has to widen with it, and no clause requires that. The constitution cannot unilaterally extend what .agent-guild/CLAUDE.md documents.",
+      "evidence": "constitution.md:55 relies on 'the documented waiver in C-5'; .agent-guild/CLAUDE.md's state map documents a narrower scope. No clause in the constitution requires a change to .agent-guild/CLAUDE.md, and C-7's eleven suites do not cover its prose."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "The digest pin does real work and closes r2's fatal finding. Tampering the script alone is blocked, and git is blind to the tamper, so the digest is carrying the whole load by itself -- which is the correct instrument given where the file has to live.",
+      "evidence": "Attack A on a scratch clone: replaced the FAIL branch of forge() with the PASS text and `return 0`. `git status --porcelain .agent-guild/state/check-141-conformance.py` -> 0 bytes; `git check-ignore -v` -> `.gitignore:5:.agent-guild/state/*`. C-3's check verbatim -> exit 1 at the digest test, never reaching python. On the pristine repo the pinned digest matches: `shasum -a 256 <` -> 5877ccc2ccde87f9e2fe8cd272b8a34c594b0e41ab4211f2cffac2f820c7df84. Both C-3 and C-4 fail closed on today's unimplemented tree (exit 1 with the real defect printed)."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "Ruling on the residual hole the orchestrator asked about: ACCEPTABLE, not fatal. Tampering the script AND repinning the digest does pass, and nothing sees it -- but that attack is strictly harder than, and no more detectable than, rewriting the clause's check to `true`, which is available against every clause of every constitution this kit produces. The digest pin is therefore not the weak link; the constitution's own mutability is, and that is a kit-level trust boundary this job did not create and cannot close from inside a clause.",
+      "evidence": "Attack B: tampered the script, recomputed the digest (e3a2d47e...), substituted it in constitution.md. C-3's check as the constitution then reads -> exit 0, while printing `after  forge: []` -- the defect on the page. `git status --porcelain .agent-guild/state/constitution.md` -> empty; `check-job-spec.py --audit-id CON-audit` -> exit 0. Baseline for comparison: replacing both check lines with `check-build.sh 'true'` is equally invisible to git and to check-job-spec, and is one edit instead of three. Cause: orchestrator-write-guard.py:36-38 returns 0 for any subagent, so workers are not write-guarded under state/ at all. Recommended mitigation, available at zero cost: this verdict records the audited digest above, so post-audit drift is a two-file comparison the orchestrator can make by hand."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "C-4 is sound and r2's 'check stricter than the text' defect is genuinely fixed. The dispatch-clock subcommand calls dispatch-guard's own logger and reads the row back, so it exercises the production path exactly and cannot be satisfied by prose; and it correctly leaves _log_gate_gap out of scope, which the file-wide grep it replaced could not do.",
+      "evidence": "Ran C-4's check verbatim on HEAD -> `row: 2026-08-11T17:13:33 | checker-courier | T-900 | codex` / FAIL / exit 1. `_log` is the sole writer of dispatches.log (dispatch-guard.py:40-48, called at :218, :252, :338, :393); `_log_gate_gap` writes gate-gaps.log (:51-60). Fails closed under evasion: renaming `_log` raises AttributeError -> non-zero; `_log`'s bare `except Exception: pass` yields no row -> 'BROKEN CHECK' -> exit 2. CON-audit-r2.md:73 is resolved."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "Ruling on the judgment shift for C-1: SOUND, not abdication. The rubric names three specific files to read, four specific properties to confirm, and a failing example that is mechanically constructible and already runs. A deterministic check genuinely cannot verify 'the record was made by the gate rather than inferred from the file', because both produce the same file on disk; a checker who re-derives can.",
+      "evidence": "constitution.md:56-58. The failing example ('a file written by hand at T-900-sonnet-r0-codex.json ... and second_opinion_debts() returns []') is exactly what check-141-conformance.py forge builds and prints, so the checker has a runnable falsifier plus three named artifacts. Naming four properties under one label is a defect for a grep (CON-audit-r1.md:29-30) and not for a rubric, since a judgment checker reports on each."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "Ruling on the judgment shift for C-2: SOUND apart from the unbounded 'surfaced' branch recorded above. The rubric names a constructible scenario, a concrete false-positive it must not fire on, and a negative constraint on the mechanism, all of which a checker can re-derive.",
+      "evidence": "constitution.md:62. The failing example is the #100 incident verbatim and is reconstructible from archive/2026-08-11-issue-100/quarantine/T-002-sonnet-r0-codex.json. The concurrency guard is grounded in real overlapping runs (dispatches.log '08:40:42 | checker-courier | T-001' then '08:41:28 | worker-standard | T-002'). The 'may not depend on observing the write' constraint is re-derivable: the Claude courier writes via codex-courier.py through Bash, and no host registers a Bash matcher."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "Ruling on the judgment shift for C-5, and on the merge: the merge FIXES the N-things-one-label problem rather than compounding it, and this is now the strongest clause in the document. Eight enumerated conditions, each individually constructible, each exercised by the checker itself against a scratch project rather than read out of a test file -- which is precisely what r1 and r2 said a grep could never do.",
+      "evidence": "constitution.md:79-82. r1 and r2 flagged the old versions because one grep stood in for four claims (CON-audit-r1.md:30, CON-audit-r2.md:69); the merged clause's check says 'exercise each of the four discharge behaviors and each of the four malformed inputs named above against a scratch project', which admits no such collapse. Spot-checked two of the four malformed inputs against today's predicate: missing verdicts directory -> `[]` (no raise); a verdict of record containing `{not json` -> `[('T-901','T-901-sonnet-r0','codex')]` (no raise). The remaining two concern the authorization record this job builds and are correctly forward-looking."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "Coverage re-derived after the renumbering and the merge: all four of the spec's Done-when bullets still map to a clause. Nothing slipped.",
+      "evidence": "Done-when 1 (an unauthorized lane-suffixed verdict cannot silently discharge, spec.md:87) -> C-1, with C-3 as the deterministic floor. Done-when 2 (the reproduction fails at the forge step, spec.md:88) -> C-3, whose script replays the spec's repro faithfully (same T-900 task, sonnet tier, r0, codex lane, same two JSON bodies). Done-when 3 (subagent-return accounts for files outside its own stem, spec.md:89) -> C-2. Done-when 4 (archived runs stay readable, spec.md:90) -> C-6. C-4 remains scoped in beyond the issue text, declared and justified at constitution.md:73, which r1 accepted at info."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "C-6 is unchanged and remains sound: its check runs today, exits 0, and rejects its own failing example twice over. It is also the reason C-3's digest pin is the right instrument -- the same git guard works here only because archive/ is deliberately un-ignored.",
+      "evidence": "Ran verbatim -> exit 0 across the archived verdicts. .gitignore:5-6 is `.agent-guild/state/*` then `!.agent-guild/state/archive/`; verdict.schema.json sets additionalProperties:false, so an added authorization key fails validate-verdict.py as well as dirtying git status."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "C-7's eleven-suite check runs and passes on HEAD, which is the correct posture for a don't-break clause, and it did catch the feature-breaking attack on today's tree.",
+      "evidence": "`python3 .agent-guild/hooks/test_hooks.py` on HEAD -> 169 passed, 0 failed. On the attack tree with the lane-json discharge branch neutralized -> 165 passed, 4 failed. The catch is real but temporary, per the C-7 minor above."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "C-9 is sound and unchanged in substance: a rubric a checker can apply by reading, with a failing example the rubric plainly rejects, and one job-specific requirement (name the #100 incident, say why a time window was rejected) that is concrete enough to fail on.",
+      "evidence": "constitution.md:102-106. Protected content is honestly declared as `manifest: none` with a comment explaining that no deliverable quotes the issue text, consistent with state/spec.md being intake-written. `python3 .agent-guild/scripts/check-job-spec.py --audit-id CON-audit` -> exit 0."
+    }
+  ]
+}

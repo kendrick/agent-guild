@@ -1,0 +1,108 @@
+{
+  "task_id": "CON-audit",
+  "checker": "auditor",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "timestamp": "2026-08-11T23:40:00Z",
+  "duration_ms": null,
+  "cost_usd": null,
+  "findings": [
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "r3's kill shot is dead. Rebuilt the attack tree verbatim and applied C-8's new decisiveness step: the vacuous cases do not flip under any neutralization, while real cases on the same tree do. The AttributeError trap is gone too, because neutralizing DELIVERED code leaves every symbol defined and the flat script runs to completion in both directions.",
+      "evidence": "git clone --local at fix/141-verdict-authority; appended `crossing_authorized(stem, lane)` to _lib.py (never wired in) plus `check(\"refuse: an unauthorized lane verdict does not discharge\", True, \"\")` and `check(\"allow: an authorized crossing discharges its debt\", lib_mod.crossing_authorized.__name__ == \"crossing_authorized\")` before test_hooks.py:1543. As delivered: both `ok`, 171 passed / 0 failed. Neutralizing _lib.py:271 (`if False and any(...)`): both still `ok`, 167 passed / 4 failed -- the four flipped cases are the real ones (`so: a codex lane sibling discharges the debt`, `so: a claude lane sibling discharges the debt`, `so: the debt is per retry round`, `so: courier dispatch still refused on a complete task with no debt`). Neutralizing the new symbol instead (`return True` -> `return False`): both still `ok`, 171 passed / 0 failed. Under C-8 as written both cases read as not decisive, which is a FAIL. No suite abort in either direction."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "minor",
+      "description": "\"Neutralizing the branch it targets\" admits two operations that flip DIFFERENT cases, and the check never says which. Restoring the branch's pre-change decision flips the refuse-case; disabling the branch outright flips the allow-case. A checker who picks the second for a refuse-case reports \"not decisive\" against an honest implementation. The clause's own text disambiguates it -- \"each refuse-case demonstrably fails against the pre-change code\" selects the first operation -- but the check is where the checker is told what to do, and it says only \"neutralizing\".",
+      "evidence": "Built an honest minimal implementation on the clone (`if any(f\"{stem}-{l}.json\" in names and f\"{stem}-{l}.auth\" in names for l in COURIER_LANES)` at _lib.py:271) with genuine paired cases that call second_opinion_debts() against a scratch project. As delivered both print `ok`. Neutralization X, drop the new conjunct (== pre-change behavior for that branch): `FAIL refuse: an unauthorized lane verdict does not discharge` / `ok allow: ...`. Neutralization Y, `if False and any(...)`: `ok refuse: ...` / `FAIL allow: an authorized crossing discharges its debt`. Each flips exactly one case, and they are different cases. Note the anti-vacuity power is unaffected: on the r3 attack tree NEITHER X nor Y flips `check(label, True, \"\")`, so the false-negative direction is closed under both readings; only the false-FAIL direction is exposed. One sentence closes it: neutralize by restoring the branch's pre-change decision for the input under test, not by disabling the branch."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "The new anti-vacuity property is checkable rather than philosophical, and it names r3's second attack in the clause text verbatim so a checker cannot miss it. \"No added assertion's truth is independent of the gate's decision for the input under test\" has a mechanical procedure behind it: identify the input, reverse the gate's decision for it, see whether the assertion moves.",
+      "evidence": "constitution.md:118-119. The text quotes the exact evasion (`check(label, _lib.crossing_authorized.__name__ == \"crossing_authorized\")` \"names the new code, is not a literal, and still asserts nothing\"), which is CON-audit-r3.md:45 word for word. Re-derived that the procedure runs: in the honest tree above, reversing the gate's decision for the probe input flips both cases (X and Y results); in the attack tree it flips neither, because neither assertion ever calls the gate. checker-judgment carries `tools: Read, Bash, Write, Grep, Glob` (.claude/agents/checker-judgment.md:5), so it can build the scratch copy this step and C-5's step both require."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "The positive property is now first-class in C-1's text and in its check, and it is enough. A total-deadlock tree -- the one that makes check-141-conformance.py print PASS while no crossing can ever discharge -- fails three clauses independently, so C-3's inability to test the allow direction no longer decides anything.",
+      "evidence": "constitution.md:76 (\"An authorized crossing does discharge its debt: a predicate that discharges nothing satisfies this clause no better than one that discharges everything, and `check-141-conformance.py forge` cannot tell those apart\") and constitution.md:77 (\"that an authorized crossing does discharge\"). On the deadlock tree: C-1's rubric fails on its face; C-8 requires an allow-case \"a legitimately authorized crossing discharging its debt\" (constitution.md:118) which cannot pass there; and C-7's suite is not green -- measured directly, `if False and any(...)` at _lib.py:271 gives 4 failures in test_hooks.py, and any honest rewrite of those four asserts the discharge that deadlock forbids. Two blocker judgment clauses plus a blocker deterministic suite."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "The PAUSED regression is out and the count is right. All four listed behaviors are genuine routes of second_opinion_debts(), the list has four items, the text says four, and the clause now says in so many words that PAUSED is not among them and why.",
+      "evidence": "constitution.md:100 lists: exhausted sentinel, `.denied` waiver, `blocked` verdict of record, and the waiver still clearing a stem carrying an unauthorized lane verdict -- then \"`state/PAUSED` is not among them: it is handled by the `_lib.run()` wrapper, not by this predicate\". Re-derived against _lib.py:250-311: lane_exhausted at :274, `.denied` at :281, `record.get(\"verdict\") == \"blocked\"` at :303, and the `.denied` route sits below the lane-json route at :271 so behavior four is a property of their ordering. No `paused()` call anywhere in the predicate body; `paused()` is called by `run()` at _lib.py:696. C-8's by-reference inheritance of the error (CON-audit-r3.md:55) clears with it."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "The waiver collision is resolved rather than relocated, and C-1 and C-5 now say the same thing. C-1 stops claiming the contract already covers the case, states the requirement directly, and makes widening the contract part of the job; C-5's fourth behavior states the identical outcome. The ordering worry my predecessor raised is answered by pinning the OUTCOME instead of the ordering: whatever the implementation does internally, an unauthorized lane verdict plus a waiver at that stem must discharge, which forecloses an early unauthorized-owes branch and leaves the worker one buildable shape.",
+      "evidence": "constitution.md:76 (\"A stem left unauthorized, including one poisoned by a courier that died after writing, stays clearable by a `...-<lane>.denied` waiver at that stem; `.agent-guild/CLAUDE.md` currently describes that waiver as being for a lane that never reached a courier at all, so the job widens that description\") against constitution.md:100 (\"a `.denied` waiver still discharges at a stem carrying an unauthorized lane verdict\"). Same case, same outcome, no gap. Against the ordering in _lib.py:271/:281: conjoining authorization onto :271 satisfies both; a separate earlier owes-branch violates C-5's fourth behavior, so the choice CON-audit-r3.md:50 said a worker had to guess is now made for them. The widening is also enforced downstream at no extra cost: build-plugin.py:668 copies `.agent-guild/CLAUDE.md` into the packaged project-template and C-7 runs `build-plugin.py --check`, so an edit that is not rebuilt fails a deterministic blocker."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "minor",
+      "description": "The widening requirement names \"`.agent-guild/CLAUDE.md`'s waiver description\" in the singular, but the narrow description lives in two places in that file, and a third copy sits in the code comment on the route being widened. A checker could accept a job that widened one paragraph and left the other two contradicting it.",
+      "evidence": ".agent-guild/CLAUDE.md:87 (dual-check regime: \"your waiver, for a host that refused the dispatch outright\") and .agent-guild/CLAUDE.md:125 (state map: \"the waiver, for a lane that never got as far as a courier at all\"). The same claim is repeated at _lib.py:281 in the route's own comment: \"route 4: the orchestrator's record that a host refused the dispatch outright (e.g. #94)\". C-1's check says only \"Confirm `.agent-guild/CLAUDE.md`'s waiver description was widened to match\"; C-9 governs added comments, not stale ones. Naming both line ranges, or writing \"every description of the waiver in `.agent-guild/CLAUDE.md` and in the predicate's own comments\", closes it."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "\"Surfaced\" is falsifiable now. Two observable channels are named, the clause says outright that this is not a judgement call, and the check carries the naming requirement across both channels rather than only the stderr one.",
+      "evidence": "constitution.md:82 (\"Surfaced means one of two observable channels, not a judgement call: a non-zero hook exit whose stderr names both Task-IDs, or a row appended under `.agent-guild/state/log/`\") and constitution.md:83 (\"through one of the two named channels, that the record names both Task-IDs\"). Both are things a checker goes and looks at: a hook exit code plus captured stderr, or a file under a named directory. CON-audit-r3.md:51's objection -- \"any print statement on any stream satisfies it\" -- no longer holds, since stdout with a zero exit satisfies neither branch. The log branch does not name a file, which is the right looseness: `state/log/` already holds dispatches.log and gate-gaps.log and the choice belongs to the worker, while the directory is still somewhere a checker can enumerate."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "minor",
+      "description": "The header comment's inventory is wrong: it says \"Four things changed\" and lists four, but five did. C-2's two-channel sentence -- the fifth edit, and the one that answers r3's C-2 major -- appears in no bullet. A reader reconstructing what r4 did from the header would conclude C-2 was left alone.",
+      "evidence": "constitution.md:30-49 opens \"Four things changed\" and bullets C-8's revert step, C-3's refusal-only proof, C-5's PAUSED entry, and C-1's waiver sentence. C-2's clause text at constitution.md:82 now carries the channel sentence, which is absent from the text CON-audit-r3.md:52 quotes (\"the anomaly is surfaced rather than passing silently\" with nothing pinning the channel), and the check at constitution.md:83 gained \"through one of the two named channels\". The rest of the header re-derives clean: the renumbering map (old C-8 to C-7, old C-9 to C-8, old C-10 to C-9) matches r2's numbering against r4's; `_lib.run()` handles PAUSED at _lib.py:696 as claimed; dispatch-guard.py has `courier_lane(data)` (:327), `executor_model` (:364), and `retries` (:374) as the seam paragraph claims."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "Positive control no prior round ran: the constitution is satisfiable, not merely failable. A minimal honest implementation takes C-3 from exit 1 to exit 0, so the deterministic floor is a gate a real job can walk through rather than one nothing can. The digest is unchanged and matches, and both deterministic implementation clauses still fail closed on today's tree.",
+      "evidence": "`shasum -a 256 < .agent-guild/state/check-141-conformance.py` -> 5877ccc2ccde87f9e2fe8cd272b8a34c594b0e41ab4211f2cffac2f820c7df84, identical to the pin at constitution.md:89 and :95 and to the digest CON-audit-r3.md:30 recorded. C-3 verbatim on HEAD -> `after forge: []` / `FAIL: a file nobody authorized discharged the debt (#141)` / exit 1. C-4 verbatim -> `stamp: 2026-08-11T17:29:30` / exit 1. On the clone with the `.auth`-sibling implementation at _lib.py:271 -> `before forge: [('T-900', 'T-900-sonnet-r0', 'codex')]` / `after forge: [('T-900', 'T-900-sonnet-r0', 'codex')]` / `PASS` / exit 0."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "New attack route, and it lands on the deterministic floor rather than the document: the forge script exercises one lane, so an implementation that requires authorization for the codex lane only passes C-3 while a hand-written `-claude.json` still discharges. Not a defect in C-3, whose clause text scopes itself to the reproduction, and it is caught -- but by C-1's rubric and by the suite's paired lane cases, not by the floor. Worth knowing before someone reads a green C-3 as coverage.",
+      "evidence": "On the clone, `if any(f\"{stem}-{l}.json\" in names and (l != \"codex\" or f\"{stem}-{l}.auth\" in names) for l in COURIER_LANES)` -> C-3 prints PASS and exits 0, while forging `T-900-sonnet-r0-claude.json` in the same scratch shape takes second_opinion_debts() from `[('T-900', 'T-900-sonnet-r0', 'codex')]` to `[]`. Caught by C-1's text, which is lane-agnostic (\"A lane-suffixed verdict discharges a second-opinion debt only when the gate recorded that crossing as authorized\", constitution.md:76), and by test_hooks.py's existing paired cases `so: a codex lane sibling discharges the debt` / `so: a claude lane sibling discharges the debt`, which C-8 now forces to be decisive. Both are judgment clauses, which is the architecture r3 ruled sound working as designed."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "Second new attack route, and the answer is the same as r3's ruling on the digest: a kit-level trust boundary, not a defect this constitution can close. Every deterministic clause here routes through the shared runner `.agent-guild/scripts/check-build.sh`, which no clause pins and which workers are not write-guarded away from. One inserted line turns all five green at once -- cheaper than the digest attack r3 ruled acceptable. It is also strictly more visible than that attack: the runner is tracked by git, so the tamper dirties the tree and lands in the full diff C-8 makes a checker read.",
+      "evidence": "`git check-ignore -v .agent-guild/scripts/check-build.sh` -> exit 1 (not ignored); `git ls-files --error-unmatch` -> tracked. On a clone, inserting `exit 0` as line 2 of check-build.sh: C-3 goes exit 1 -> exit 0, C-4 exit 0, and the control command `'false; exit 1'` also exits 0. `git status --porcelain` -> ` M .agent-guild/scripts/check-build.sh`. Cause is the same one r2 named: orchestrator-write-guard.py returns 0 for any subagent (`if _lib.in_subagent(data): return 0`), so workers are unguarded, and no host registers a Bash matcher. Zero-cost mitigation, matching what r3 did for the script: this verdict records the audited runner digest, 12af07bc89d40b22f968afc7c2475ad6a08b22adaedd9113c8377d0f39a50ecf, so post-audit drift is a one-command comparison."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "r3's one surviving minor -- that a correct implementation forces the worker to rewrite four test_hooks.py assertions, hollowing out C-7's anti-regression force on the file that decides this job -- is now covered from the other side. C-8's decisiveness step applies to exactly those rewritten cases, so the worker cannot rewrite them into anything that passes without deciding on the gate's answer.",
+      "evidence": "CON-audit-r3.md:57. The four are `so: a codex lane sibling discharges the debt` (:928), `so: a claude lane sibling discharges the debt` (:944), `so: the debt is per retry round` (:1044), `so: courier dispatch still refused on a complete task with no debt` (:1116); confirmed still the exact four that flip, by neutralizing _lib.py:271 on the clone (167 passed / 4 failed). Rewritten honestly they become the allow-cases C-8 requires at constitution.md:118, and the X/Y runs above show a rewritten case that asserts nothing is detected. C-7 remains unchanged and correct for its own job, which is the other ten suites plus build-plugin and classify-crossings."
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "C-6 unchanged and still sound: runs today, exits 0, and rejects its own failing example twice over.",
+      "evidence": "Ran verbatim -> exit 0 across the archived verdicts, `git status --porcelain .agent-guild/state/archive/` empty. .gitignore:5-6 is `.agent-guild/state/*` then `!.agent-guild/state/archive/`, which is why the git guard works here and had to be replaced by a digest in C-3; verdict.schema.json sets `additionalProperties: false`, so an added authorization key fails validate-verdict.py as well as dirtying git."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "C-9 unchanged and still sound, and the paperwork lints clean. Its one job-specific requirement stays concrete enough to fail on, and it now has a second thing to bite: the widened waiver description gives the #100 rationale a natural home.",
+      "evidence": "constitution.md:123-127. `python3 .agent-guild/scripts/check-job-spec.py --audit-id CON-audit` -> `OK: .agent-guild/state passes check-job-spec (CON-audit)`, exit 0. Protected content is honestly declared `manifest: none` with the reason (no deliverable quotes the issue text; state/spec.md is intake-written)."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "Coverage, over-reach and contradiction re-derived across the whole document after r4's five edits. All four Done-when bullets still map to a clause, the two declared scope-ins are still declared and justified, and no two clauses disagree.",
+      "evidence": "Done-when 1 (spec.md:87) -> C-1 with C-3 as the floor; 2 (spec.md:88) -> C-3, whose script replays the repro faithfully (same T-900 task, sonnet tier, r0, codex lane, same two JSON bodies); 3 (spec.md:89) -> C-2; 4 (spec.md:90) -> C-6. Over-reach: C-4's clock fix, declared at constitution.md:94 and accepted since r1; and the `.agent-guild/CLAUDE.md` widening, declared inside C-1 with its reason and covered downstream by C-7's `build-plugin.py --check`. Contradiction sweep: C-1's waiver sentence vs C-5's fourth behavior (agree); C-5's \"none acquires C-1's requirement\" vs the non-goal on non-verdict routes (agree, and the widening is documentation rather than authorization); C-6's untouched-archive rule vs every other clause (no clause asks for an archive write); C-8's text vs its check (one loose seam, recorded as the C-8 minor above)."
+    }
+  ]
+}

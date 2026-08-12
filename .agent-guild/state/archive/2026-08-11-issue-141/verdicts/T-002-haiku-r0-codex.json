@@ -1,0 +1,18 @@
+{
+  "task_id": "T-002",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-9",
+      "severity": "minor",
+      "description": "The comment explains the offset but omits the #100 authorization risk: mixed clocks can make a forged verdict falsely appear to precede its authorizing dispatch.",
+      "evidence": ".agent-guild/hooks/dispatch-guard.py diff, added lines 44-46: it states that ordering is silently wrong, but does not identify the resulting false-authorization/forged-verdict failure."
+    }
+  ],
+  "timestamp": "2026-08-11T22:53:17Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

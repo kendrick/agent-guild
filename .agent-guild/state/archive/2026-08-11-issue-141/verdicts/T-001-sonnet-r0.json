@@ -1,0 +1,66 @@
+{
+  "task_id": "T-001",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-8",
+      "severity": "major",
+      "description": "C-8 requires the allow-cases to include each of C-5's four discharge behaviors; the fourth one, a `.denied` waiver still discharging at a stem carrying an unauthorized lane verdict, has no case in the shipped suite, and I built a predicate variant that passes all 178 cases while removing it.",
+      "evidence": "The only `.denied` reference in the whole 1356-line suite is test_hooks.py:1065 (`waiver = os.path.join(verdicts_dir, \"T-036-sonnet-r0-codex.denied\")`, case 7), whose fixture has NO lane verdict at the stem — so it exercises C-5 behavior 2, not behavior 4. Demonstration in a scratch copy of the delivered tree: I replaced _lib.py:459-466's conjoined condition with a plausible alternate ORDERING that settles the lane-file route first (`if any(f\"{stem}-{l}.json\" in names for l in COURIER_LANES): / if any(crossing_authorized(stem, l) ...): continue / debts.append((task_id, stem, lane)); continue`). Shipped suite against that mutant: `178 passed, 0 failed`. My own probe against the same mutant: `FAIL C-5d .denied discharges at a stem carrying an unauthorized lane verdict   before=[['T-104','T-104-sonnet-r0','codex']] after=[['T-104','T-104-sonnet-r0','codex']]`. The spec excerpt named this exact hazard ('_lib.py:271 is tested before :281, so where you conjoin authorization decides whether the waiver is reachable. Pin the outcome, not the ordering.'), and this run's own T-002 crossing needed that hatch today (state/verdicts/T-002-haiku-r0-codex.denied)."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "A lane-suffixed verdict discharges only via the gate's own reserve/promote record, on both hosts and both lanes; a pre-existing stem is never reserved; an authorized crossing does discharge; and a `.denied` waiver still clears an unauthorized stem.",
+      "evidence": "Re-derived against the delivered tree with my own harness (scratchpad/probe.py, probe2.py), driving the real hooks over scratch CLAUDE_PROJECT_DIRs. Allow-direction, which the forge check is blind to: 'ok C-1 claude-host/codex-lane: reserved+promoted crossing discharges' and 'ok C-1 codex-host/claude-lane: read-only return promotes; parent's file then discharges'. The Codex path was traced specifically: with hook_host=codex, dispatch-guard reserved T-121-sonnet-r0-claude.authorized, the read-only return carried only AGENT_GUILD_COURIER_OUTCOME (probe asserts `lane_file_before_parent == False`, i.e. no file on disk at return time), subagent-return.py:461-470 promoted from the validated outcome, and the debt cleared only once the PARENT wrote the file. Refuse-direction: 'ok C-1 R2: a forged file predating its dispatch is never laundered' (dispatch rc=0, return rc=0, debt still owed), 'ok C-1 R3: an undispatched courier's return promotes nothing', 'ok C-1 R4: reserved-but-unpromoted does not discharge' (record on disk reads `{'task_id': 'T-132', 'promoted': False, ...}`). Predicate at _lib.py:459-466 conjoins presence with crossing_authorized(); the record is computed from (tid, tier, retries) at dispatch-guard.py:344-356 and subagent-return.py:468-469 and :512-513, never from a filename. `.agent-guild/CLAUDE.md:126` already carries the widened waiver wording (T-003's deliverable, out of scope per dispatch)."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "minor",
+      "description": "Residual, and sanctioned by the clause rather than a violation: any stem that already holds a lane verdict when its courier is dispatched can never be authorized, so a re-dispatched courier for the same round strands its debt permanently and needs a hand-written waiver.",
+      "evidence": "_lib.py reserve_crossing(): `if os.path.exists(state_path(\"verdicts\", f\"{stem}-{lane}.json\")): return False`. This job produced the live instance: `.agent-guild/state/verdicts/T-002-haiku-r0-codex.json` exists with no `.authorized` sibling (`ls state/verdicts/` shows only the .json/.md/.denied trio), cleared by the hand-written T-002-haiku-r0-codex.denied. C-1 mandates this ('A stem already present when its courier was dispatched is not recorded as authorized') and mandates the escape ('stays clearable by a `…-<lane>.denied` waiver'), and I confirmed the escape works even with an unauthorized verdict sitting at the stem, so the path is sound. Recording it because the recurring case — a courier re-dispatched after a first one wrote an invalid verdict — strands with no gate telling the orchestrator why."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "The #100 shape is surfaced through the second named channel, a row under `.agent-guild/state/log/` naming both Task-IDs, without blocking the return; a concurrently dispatched agent's own crossing is not mistaken for it.",
+      "evidence": "probe2.py against the delivered tree: 'ok C-2: the #100 write is surfaced under state/log/ naming BOTH Task-IDs' — the row written to <proj>/.agent-guild/state/log/foreign-stem-writes.log reads `T-052-sonnet-r0-codex.json names T-052, but was found during a checker-courier return dispatched for T-051; no dispatch ever authorized T-052's crossing at this stem (#100).` with return rc=0. 'ok C-2: the foreign write does not discharge T-052's own debt'. Concurrency: 'ok C-2: a concurrent agent's OWN reserved crossing is not surfaced and does not block' (T-054 dispatched in parallel, T-053's return exits 0 and the log stays empty). 'ok C-2: the same foreign write is surfaced once, not on every return' (the `.flagged` sibling). No part of the mechanism hooks the write: foreign_stem_writes() is a directory scan on the return path (subagent-return.py:516-517), matching the constitution's constraint."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "minor",
+      "description": "Residual: because foreign_stem_writes() exempts any stem that carries a reservation, a courier that forges a sibling's lane file for a task whose own courier was concurrently dispatched but never wrote is neither surfaced nor blocked from discharging.",
+      "evidence": "probe2.py's last block, observed directly: T-061's courier is dispatched (reservation made), T-060's courier writes T-061-sonnet-r0-codex.json, a return resolving to T-061 promotes, and `[observed] rc=0 debts_after=[]`. Not judged a violation: C-2 itself requires the concurrency exemption ('A verdict written concurrently by a different agent for its own task never blocks an unrelated return'), the constitution forbids depending on observing the write, and the non-goals rule out dispatch-log ordering, so no implementation through the sanctioned seam can separate the two. Compounded by _lib.py:843 (`return tool_ids[-1]`), which identifies a return from the PARENT's most recent Task-ID rather than the returning agent's — but that source already governs every other decision this hook makes, so the promotion logic is no less safe under it than the validation it sits beside."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "The pinned conformance script's digest matches and its `forge` subcommand exits 0 against the delivered tree.",
+      "evidence": "Ran C-3's check verbatim. `shasum -a 256 < .agent-guild/state/check-141-conformance.py` = 5877ccc2ccde87f9e2fe8cd272b8a34c594b0e41ab4211f2cffac2f820c7df84, matching the pin. Script output: `before forge: [('T-900', 'T-900-sonnet-r0', 'codex')]` / `after  forge: [('T-900', 'T-900-sonnet-r0', 'codex')]` / `PASS: the forged crossing did not discharge the debt`; `check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260811T181306.log)`, EXIT=0."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "All four discharge behaviors and all four malformed inputs behave as C-5 states against a scratch project I built myself; second_opinion_debts() returned a list on every input and never raised.",
+      "evidence": "scratchpad/probe.py, exercising the predicate directly rather than reading the test file, each discharge behavior with its own positive control in the same project: 'ok C-5a exhausted/codex discharges (control: owed without it)', 'ok C-5a exhausted/codex does NOT discharge the claude lane's debt', 'ok C-5b hand-written .denied waiver discharges (control: owed without it)', 'ok C-5c a blocked verdict of record owes no crossing (control: pass owes)', 'ok C-5d .denied discharges at a stem carrying an unauthorized lane verdict'. Totality: 'ok C-5.1 missing verdicts dir returns a list', 'ok C-5.2 malformed verdict of record returns a list (still owing)', 'ok C-5.3 missing authorization record returns a list (still owing)', and 'ok C-5.4 …' for a truncated record, a non-JSON record, and valid JSON that isn't an object — all rc=0 with the debt intact. PAUSED is correctly absent from the predicate body (handled at _lib.run())."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "Everything else C-8 asks for holds: the diff changes gate code rather than tests alone, no added assertion is a tautology, and all thirteen added cases are decisive under branch neutralization in a scratch copy of the DELIVERED code.",
+      "evidence": "Diff touches _lib.py (+211), dispatch-guard.py (+23), subagent-return.py (+33) alongside test_hooks.py, so not tests alone. Scanned all 234 added test lines for `True`, `__name__`, `isinstance(`, `is not None`: no matches, and all 13 added check() calls assert on rc/stderr/log content. Mutation matrix (scratchpad/mutate.py; baseline `178 passed, 0 failed`): M1 restore the pre-change decision → 7 refuse-cases flip, including 'an unauthorized codex lane sibling does not discharge', 'a forged file that predates its dispatch is never laundered', and both malformed-authorization cases; M2 disable the discharge branch → 4 allow-cases flip; M3 drop reserve_crossing() → 5 flip; M4 drop the occupied-stem guard → the laundering case flips; M5 drop promotion on the CODEX read-only path → 'a claude lane sibling discharges the debt once the gate authorized it' flips, so that path is decisively covered; M6 drop promotion on the Claude path → 3 flip; M7 drop the surfacing loop → the #100 case flips; M8 drop the concurrent-reservation exemption → the concurrency case flips; M9 no-op promote_crossing → 4 flip. Every mutation flipped at least one case; every one of the 13 added cases flipped under at least one mutation."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "Every added comment explains a why the code cannot carry, and the commit subject has a conventional-commit type and scope.",
+      "evidence": "Subject: `fix(hooks): require the gate's own record before a lane verdict discharges (#141)` — type `fix`, scope `hooks`; the body says why (the #100 forgery, and why nothing hooks the write). Sampled every added comment: reserve_crossing()'s docstring explains why an occupied stem is deliberately left unreserved (anti-laundering) and why the write is best-effort; promote_crossing()'s explains why reserving at dispatch alone is insufficient; surface_foreign_stem_write()'s explains why a log row was chosen over a non-zero exit ('blocking this subagent's return would hang it over a file it may have had nothing to do with'); dispatch-guard.py's `# Use UTC with a trailing Z…a local-time stamp is silently wrong by the machine's offset` explains the trap rather than the line. The time-window rejection C-9's clause text names appears once, at test_hooks.py case 19 ('A time-window predicate would fire on this case; reservation-based discharge does not') rather than beside the mechanism itself — worth moving on the next pass, but the rationale is in the diff and the mechanism names #100 throughout."
+    }
+  ],
+  "timestamp": "2026-08-11T23:23:14Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

@@ -10,7 +10,8 @@ clause id. The /constitution skill writes it; the auditor agent must PASS it
 
 THE WEIGHT LINE above is set by the /constitution skill in Phase 0 and read by
 the auditor, which holds the clause count to that weight's ceiling and spends
-its rounds from that weight's audit round budget. See CLAUDE.md's weight table.
+its rounds from that weight's audit round budget. See the weight table under
+"## Job Weight" in CLAUDE.md.
 
 THE FALSIFIABILITY RULE: every clause must name a concrete check method AND be
 something you can state a failing example for. If you cannot describe an

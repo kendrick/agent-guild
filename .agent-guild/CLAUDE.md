@@ -51,7 +51,7 @@ Deep removes the clause ceiling but still draws a round budget. Rounds are where
 
 <!-- The courier column returns here when #34 rules. Courier dispatch is hook-enforced and weight-independent for now (#126). -->
 
-Three rules outrank the numbers:
+These rules outrank the numbers:
 
 - **Uncertainty fails toward deep.** A weight guessed low costs you something shipping broken. Guessed high, it costs wall clock. Those aren't the same mistake, so they don't get the same benefit of the doubt.
 - **The weight is announced, never assumed.** Phase 0 states it to the user in one line with its reason, and the user can correct it in a word. Nothing about ceremony gets derived silently.

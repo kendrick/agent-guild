@@ -268,6 +268,30 @@ FAKE_CLAUDE = textwrap.dedent(
         else:
             sys.stdout.write(json.dumps(envelope))
         raise SystemExit(exit_code)
+    elif mode == "malformed_then_quota":
+        # First attempt is discarded for a validation failure, same as
+        # malformed_once; second attempt hits quota instead of succeeding.
+        # #116/T-009: a quota abandonment invents no discarded entry for
+        # that first, already-thrown-away attempt.
+        if count == 1:
+            print(json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "terminal_reason": "completed",
+                "result": "NOT_JSON",
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+            }))
+        else:
+            print(json.dumps({
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": True,
+                "api_error_status": 429,
+                "terminal_reason": "api_error",
+                "result": "API Error: Request rejected (429) · Rate limit exceeded",
+            }))
+            raise SystemExit(1)
     else:
         print(json.dumps(success))
     """
@@ -408,6 +432,21 @@ try:
         and len(calls) == 2,
         f"rc={process.returncode} outcome={outcome!r} calls={calls!r}",
     )
+    # #116/T-009: the ledger's discarded entry carries the FIRST attempt's
+    # own duration and usage, not the crossing's cumulative figures — the
+    # tell that the shared clock was reused instead.
+    discarded = outcome["ledger"].get("discarded") if outcome else None
+    check(
+        "the discarded attempt's own figures land in the ledger, not the cumulative ones",
+        discarded is not None
+        and len(discarded) == 1
+        and discarded[0]["tokens_in"] == 7
+        and discarded[0]["tokens_out"] == 3
+        and discarded[0]["exit_code"] == 0
+        and "structured_output" in discarded[0]["reason"]
+        and discarded[0]["duration_ms"] != outcome["ledger"]["duration_ms"],
+        f"discarded={discarded!r} row_duration_ms={outcome and outcome['ledger']['duration_ms']!r}",
+    )
 finally:
     temp.cleanup()
 
@@ -456,6 +495,31 @@ try:
         and outcome["ledger"]["quota_event"] is True
         and outcome["attempts"] == 1
         and len(calls) == 1,
+        f"rc={process.returncode} outcome={outcome!r}",
+    )
+    check(
+        "a quota abandonment stays distinguishable: no discarded entry invented for it",
+        outcome is not None and "discarded" not in outcome["ledger"],
+        f"ledger={outcome and outcome['ledger']!r}",
+    )
+finally:
+    temp.cleanup()
+
+temp, process, outcome, calls, _prompt = run_courier("malformed_then_quota")
+try:
+    # Same point as the case above, but with a discarded attempt actually
+    # sitting in attempt_records when quota hits: even then, nothing is
+    # invented for the row that abandoned the crossing.
+    check(
+        "quota after a discarded first attempt still invents no discarded entry",
+        process.returncode == 0
+        and outcome is not None
+        and outcome["status"] == "quota"
+        and outcome["verdict"] is None
+        and outcome["ledger"]["quota_event"] is True
+        and outcome["attempts"] == 2
+        and "discarded" not in outcome["ledger"]
+        and len(calls) == 2,
         f"rc={process.returncode} outcome={outcome!r}",
     )
 finally:

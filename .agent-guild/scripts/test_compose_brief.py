@@ -58,15 +58,21 @@ CONSTITUTION = """# Constitution: Fixture
 
 ### C-1: First clause
 - **text**: text of first clause.
-- **check**: some check.
+- **check**: checker-judgment: some check.
 - **severity**: blocker
 - **failing example**: an example.
 
 ### C-2: Second clause
 - **text**: text of second clause.
-- **check**: some check two.
+- **check**: checker-judgment: some check two.
 - **severity**: major
 - **failing example**: another example.
+
+### C-3: Third clause
+- **text**: text of third clause.
+- **check**: .agent-guild/scripts/check-foo.sh --mode checker-judgment:x
+- **severity**: minor
+- **failing example**: a third example.
 
 ## Protected content
 
@@ -114,13 +120,13 @@ EXPECTED_NO_DIAG = """# Brief: T-100
 
 ### C-1: First clause
 - **text**: text of first clause.
-- **check**: some check.
+- **check**: checker-judgment: some check.
 - **severity**: blocker
 - **failing example**: an example.
 
 ### C-2: Second clause
 - **text**: text of second clause.
-- **check**: some check two.
+- **check**: checker-judgment: some check two.
 - **severity**: major
 - **failing example**: another example.
 
@@ -168,13 +174,13 @@ EXPECTED_WITH_DIAG = """# Brief: T-101
 
 ### C-1: First clause
 - **text**: text of first clause.
-- **check**: some check.
+- **check**: checker-judgment: some check.
 - **severity**: blocker
 - **failing example**: an example.
 
 ### C-2: Second clause
 - **text**: text of second clause.
-- **check**: some check two.
+- **check**: checker-judgment: some check two.
 - **severity**: major
 - **failing example**: another example.
 
@@ -223,6 +229,66 @@ id: T-103
 title: Zero clauses
 spec: .agent-guild/state/spec.md#section
 clauses: []
+executor: worker-standard
+executor_model: sonnet
+checker: checker-deterministic
+check_method: >-
+  Test check method.
+status: assigned
+retries: 0
+max_retries: 2
+deps: []
+escalations: []
+artifacts: []
+---
+
+## Spec excerpt
+
+Do the thing.
+
+## Rework diagnosis
+
+<!-- placeholder -->
+"""
+
+# One script-checked clause (C-3) and one judgment clause (C-2): the
+# partition's mixed case. C-3's check reads
+# `.agent-guild/scripts/check-foo.sh --mode checker-judgment:x` on purpose —
+# it contains the word `checker-judgment` without starting with it, so this
+# fixture doubles as the anchored-prefix negative case.
+TASK_MIXED = """---
+id: T-104
+title: One script clause, one judgment clause
+spec: .agent-guild/state/spec.md#section
+clauses: [C-2, C-3]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-deterministic
+check_method: >-
+  Test check method.
+status: assigned
+retries: 0
+max_retries: 2
+deps: []
+escalations: []
+artifacts: []
+---
+
+## Spec excerpt
+
+Do the thing.
+
+## Rework diagnosis
+
+<!-- placeholder -->
+"""
+
+# Every cited clause (C-3 alone) is script-checked: the all-script case.
+TASK_ALL_SCRIPT = """---
+id: T-105
+title: Every cited clause is script-checked
+spec: .agent-guild/state/spec.md#section
+clauses: [C-3]
 executor: worker-standard
 executor_model: sonnet
 checker: checker-deterministic
@@ -362,6 +428,58 @@ write_task(d, "T-103", TASK_ZERO_CLAUSES)
 rc, out, err = run(d, "T-103")
 check("zero cited clauses: nonzero exit", rc != 0, f"rc={rc}")
 check("zero cited clauses: message names the task, no traceback", "T-103" in err and "Traceback" not in err, f"err={err!r}")
+
+# ------------------------------------------------------- partition (#128)
+print("partition: script-checked clauses don't cross")
+
+# all-judgment: both cited clauses (C-1, C-2) are judgment-checked, so the
+# partition is a no-op and the brief stays byte-identical to what the
+# composer produced before the partition existed — EXPECTED_NO_DIAG already
+# embeds both clauses verbatim. Named explicitly here so the shape reads as
+# a deliberate case rather than a side effect of the golden-file tests above.
+d = fresh_state()
+write_task(d, "T-100", TASK_NO_DIAG)
+rc, out, err = run(d, "T-100")
+check("all-judgment: exit 0", rc == 0, f"rc={rc} err={err}")
+brief = read_brief(d, "T-100")
+check("all-judgment: brief byte-identical to the pre-partition composer's output",
+      brief == EXPECTED_NO_DIAG, f"got:\n{brief!r}")
+
+# mixed: C-2 is judgment-checked, C-3 is script-checked. C-3's check value
+# also contains the literal substring "checker-judgment" without starting
+# with it — the anchored-prefix negative case — so this fixture doubles as
+# proof the filter anchors at the start rather than searching anywhere in
+# the value.
+d = fresh_state()
+write_task(d, "T-104", TASK_MIXED)
+rc, out, err = run(d, "T-104")
+check("mixed: exit 0", rc == 0, f"rc={rc} err={err}")
+brief = read_brief(d, "T-104")
+check("mixed: script clause's heading is absent", "### C-3:" not in brief, f"got:\n{brief!r}")
+check("mixed: script clause's check line is absent",
+      ".agent-guild/scripts/check-foo.sh --mode checker-judgment:x" not in brief, f"got:\n{brief!r}")
+check("mixed: judgment clause survives verbatim",
+      "### C-2: Second clause\n"
+      "- **text**: text of second clause.\n"
+      "- **check**: checker-judgment: some check two.\n"
+      "- **severity**: major\n"
+      "- **failing example**: another example." in brief,
+      f"got:\n{brief!r}")
+
+# all-script: the one cited clause (C-3) is script-checked. Exit 3, the
+# exact stderr line, and no brief written — a different problem from the
+# existing zero-clauses-cited error above, so it gets a different code.
+d = fresh_state()
+write_task(d, "T-105", TASK_ALL_SCRIPT)
+rc, out, err = run(d, "T-105")
+check("all-script: exit 3", rc == 3, f"rc={rc} err={err}")
+check("all-script: exact stderr line",
+      err == "compose-brief: nothing to cross: T-105 cites only script-checked clauses\n",
+      f"err={err!r}")
+check("all-script: no brief file written",
+      not os.path.exists(os.path.join(d, ".agent-guild", "state", "briefs", "T-105.md")))
+check("all-script: briefs/ directory never created",
+      not os.path.exists(os.path.join(d, ".agent-guild", "state", "briefs")))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

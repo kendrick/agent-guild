@@ -181,6 +181,23 @@ FAKE_CODEX = textwrap.dedent(
         if out_path:
             with open(out_path, "w", encoding="utf-8") as stream:
                 stream.write("NOT_JSON")
+    elif mode == "malformed_quotes":
+        # #106's own payload shape, and a different failure from `NOT_JSON`
+        # above: this one is well-formed right up to a string value carrying
+        # raw double quotes, so the decoder gets 242 characters in before it
+        # gives up. Truncating there and keeping what parsed is exactly the
+        # bug #106 reported.
+        emit(OK_EVENTS[:3] + [{"type": "turn.completed", "usage": {
+            "input_tokens": 7, "output_tokens": 3}}])
+        if out_path:
+            body = json.dumps(verdict(
+                verdict="fail",
+                findings=[{"clause_id": "C-1", "severity": "major",
+                           "description": "the brief quotes itself",
+                           "evidence": "EMBEDDED"}],
+            )).replace("EMBEDDED", 'the brief says "C-1 must pass" at line 2')
+            with open(out_path, "w", encoding="utf-8") as stream:
+                stream.write(body)
     elif mode == "echo_mismatch":
         emit(OK_EVENTS, verdict(model="gpt-5.6", verdict="fail",
                                 findings=FAIL_FINDINGS))
@@ -362,6 +379,7 @@ try:
     check(
         "#142: a mis-echoed model keeps the judgment instead of blocking it",
         process.returncode == 0
+        and outcome is not None
         and outcome["status"] == "verdict"
         and verdict.get("verdict") == "fail"
         and len(vendor_findings) == 4
@@ -370,10 +388,11 @@ try:
     )
     check(
         "#142: the verdict carries the model the lane ran, not the one echoed",
-        verdict.get("model") == MODEL
+        outcome is not None
+        and verdict.get("model") == MODEL
         and outcome["identity"]["echoed_model"] == "gpt-5.6"
         and outcome["identity"]["echo_matched"] is False,
-        f"model={verdict.get('model')!r} identity={outcome['identity']!r}",
+        f"model={verdict.get('model')!r} identity={outcome and outcome['identity']!r}",
     )
     check(
         "#142: the divergence is recorded as one info finding by the runner",
@@ -383,7 +402,7 @@ try:
         and MODEL in runner_findings[0]["description"],
         f"runner_findings={runner_findings!r}",
     )
-    raw = outcome["persisted"]["raw_path"] if outcome.get("persisted") else None
+    raw = outcome["persisted"]["raw_path"] if outcome and outcome.get("persisted") else None
     check(
         "#142: the raw response is retained and the finding points at it",
         raw is not None
@@ -489,6 +508,30 @@ try:
         ),
         f"persisted={outcome['persisted']!r}",
     )
+    row = ledger_lines(project)[0]
+    discarded = row.get("discarded") or []
+    entry = discarded[0] if discarded else {}
+    check(
+        "#116: a retried crossing's ledger row carries attempts and one discarded entry",
+        row.get("attempts") == 2 and len(discarded) == 1,
+        f"row={row!r}",
+    )
+    check(
+        "#116: the discarded entry names the first attempt's own validation "
+        "failure and that attempt's own token usage",
+        str(entry.get("reason", "")).startswith("codex output was not JSON")
+        and entry.get("tokens_in") == 7
+        and entry.get("tokens_out") == 3
+        and entry.get("exit_code") == 0,
+        f"discarded={discarded!r}",
+    )
+    check(
+        "#116: the discarded entry's duration is its own attempt's, not the "
+        "row's cumulative clock",
+        entry.get("duration_ms") != row.get("duration_ms"),
+        f"discarded_duration={entry.get('duration_ms')!r} "
+        f"row_duration={row.get('duration_ms')!r}",
+    )
 finally:
     temp.cleanup()
 
@@ -501,6 +544,77 @@ try:
         and outcome["attempts"] == 2
         and "NOT_JSON" in outcome["verdict"]["findings"][0]["evidence"],
         f"outcome={outcome!r}",
+    )
+    row = ledger_lines(project)[0]
+    discarded = row.get("discarded") or []
+    entry = discarded[0] if discarded else {}
+    check(
+        "#116: a blocked crossing still discloses the first attempt it discarded",
+        row.get("attempts") == 2
+        and len(discarded) == 1
+        and str(entry.get("reason", "")).startswith("codex output was not JSON")
+        and entry.get("duration_ms") != row.get("duration_ms"),
+        f"row={row!r}",
+    )
+finally:
+    temp.cleanup()
+
+# ------------------------------------------------------------------ #106
+# `NOT_JSON` above fails at character one. #106's report was the harder shape:
+# a payload that parses most of the way and then truncates mid-string, which is
+# the case where "caught" and "silently accepted a prefix" look alike.
+temp, process, outcome, calls, project = run_courier(
+    "malformed_quotes", persist=True
+)
+try:
+    persisted = outcome["persisted"] if outcome else {}
+    stem_path = os.path.join(project, persisted.get("verdict_path") or "x")
+    raw_path = os.path.join(project, persisted.get("raw_path") or "x")
+    try:
+        with open(stem_path, encoding="utf-8") as stream:
+            at_stem = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        at_stem = None
+    try:
+        with open(raw_path, encoding="utf-8") as stream:
+            raw_entries = [json.loads(line) for line in stream if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        raw_entries = []
+    validated = subprocess.run(
+        [sys.executable, os.path.join(SCRIPT_DIR, "validate-verdict.py"),
+         stem_path],
+        capture_output=True, text=True,
+    )
+    blocking = (outcome["verdict"]["findings"][0] if outcome else {})
+
+    check(
+        "#106: a value carrying raw double quotes is caught, not truncated",
+        outcome is not None
+        and outcome["verdict"]["verdict"] == "blocked"
+        and "was not JSON" in blocking["description"]
+        and "Expecting ',' delimiter" in blocking["description"],
+        f"outcome={outcome!r}",
+    )
+    check(
+        "#106: the embedded-quote payload is retried exactly once, then stops",
+        outcome is not None and outcome["attempts"] == 2 and len(calls) == 2,
+        f"attempts={outcome and outcome['attempts']} calls={len(calls)}",
+    )
+    check(
+        "#106: what reaches the lane stem passes the canonical validator",
+        validated.returncode == 0
+        and at_stem is not None
+        and at_stem["verdict"] == "blocked"
+        and at_stem["task_id"] == "T-054",
+        f"rc={validated.returncode} stderr={validated.stderr!r} stem={at_stem!r}",
+    )
+    check(
+        "#106: both discarded attempts are retained verbatim, quotes and all",
+        len(raw_entries) == 2
+        and all('"C-1 must pass"' in entry["output_file"]
+                for entry in raw_entries)
+        and '"C-1 must pass"' in blocking["evidence"],
+        f"raw_path={persisted.get('raw_path')!r} entries={len(raw_entries)}",
     )
 finally:
     temp.cleanup()
@@ -588,6 +702,12 @@ for mode, label in (
                 "T-054-sonnet-r0-codex.json")),
             "a verdict was written alongside the sentinel",
         )
+        check(
+            f"#116 {mode}: a quota abandonment still carries attempts but "
+            "invents no discarded entry",
+            lines[0].get("attempts") == 1 and "discarded" not in lines[0],
+            f"line={lines[0]!r}",
+        )
     finally:
         temp.cleanup()
 
@@ -656,6 +776,12 @@ try:
         "a clean crossing keeps no raw response under the default policy",
         persisted.get("raw_path") is None,
         f"raw_path={persisted.get('raw_path')!r}",
+    )
+    check(
+        "#116: a single-attempt crossing carries attempts but invents no "
+        "discarded entry",
+        lines[0].get("attempts") == 1 and "discarded" not in lines[0],
+        f"line={lines[0]!r}",
     )
 finally:
     temp.cleanup()

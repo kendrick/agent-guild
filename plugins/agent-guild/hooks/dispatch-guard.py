@@ -335,6 +335,14 @@ def main(data):
                 )
             lane = _lib.courier_lane(data)
             effective_model = lane
+            # Computed here, ahead of both denials below, so a `.skipped`
+            # check keyed on `stem` has something to key on before the
+            # crossing is ever reserved—tier/retries come from the task file
+            # at the moment authorization is legal to grant, not recomputed
+            # from a verdict filename later (the trust #100 exploited).
+            courier_tier = str(task.get("executor_model", "")).strip().lower()
+            courier_retries = str(task.get("retries", "0")).strip() or "0"
+            stem = _lib.crossing_stem(tid, courier_tier, courier_retries)
             if _lib.lane_exhausted(lane):
                 return _lib.block(
                     f"checker-courier's '{lane}' lane is exhausted "
@@ -344,17 +352,23 @@ def main(data):
                     "retry budget moves. The sentinel is user-cleared, like "
                     "PAUSED."
                 )
+            if os.path.exists(_lib.state_path("verdicts", f"{stem}-{lane}.skipped")):
+                return _lib.block(
+                    f"checker-courier's crossing for {stem} on the '{lane}' lane "
+                    f"was recorded skipped "
+                    f"(.agent-guild/state/verdicts/{stem}-{lane}.skipped exists). "
+                    f"{tid} cites only script-checked clauses, so compose-brief "
+                    "wrote no brief for a courier to cross with—a recorded skip "
+                    "is not crossable. Nothing is substituted."
+                )
             # #141: reserve THIS dispatch's crossing before the courier ever
             # runs, so subagent-return.py has something to promote a return
             # against instead of trusting whatever filename shows up (#100,
             # where a courier dispatched for T-001 wrote T-002's verdict and
-            # nothing tied that file to any dispatch). tier/retries are read
-            # from the task file now, at the moment authorization is legal to
-            # grant—not recomputed from a verdict filename later, which is
-            # exactly the trust #100 exploited.
-            courier_tier = str(task.get("executor_model", "")).strip().lower()
-            courier_retries = str(task.get("retries", "0")).strip() or "0"
-            stem = _lib.crossing_stem(tid, courier_tier, courier_retries)
+            # nothing tied that file to any dispatch). Denials above land
+            # before this point on purpose: reserving a crossing about to be
+            # refused would leave an authorization record for a dispatch that
+            # never happened.
             _lib.reserve_crossing(tid, stem, lane)
         _log(raw, tid, effective_model)
         return 0

@@ -299,6 +299,23 @@ def _blocked_verdict(task_id, description, evidence):
     )
 
 
+def _discarded_entries(attempt_records):
+    """One `--discarded`-shaped object per non-final attempt, oldest first,
+    built from each attempt's own duration and usage rather than the
+    crossing's cumulative figures (#116, mirrored from codex-courier.py).
+    Empty when nothing was retried."""
+    return [
+        {
+            "reason": record["reason"] or "no failure reason recorded",
+            "duration_ms": record["duration_ms"],
+            "exit_code": record["exit_code"],
+            "tokens_in": record["tokens_in"],
+            "tokens_out": record["tokens_out"],
+        }
+        for record in attempt_records[:-1]
+    ]
+
+
 def _ledger(
     task_id,
     started_at,
@@ -307,6 +324,7 @@ def _ledger(
     envelope=None,
     quota_event=False,
     usage_totals=None,
+    discarded=None,
 ):
     if usage_totals is not None:
         tokens_in, tokens_out, cost_usd = usage_totals
@@ -317,6 +335,11 @@ def _ledger(
     return _courier_lib.ledger_record(
         task_id, "claude", MODEL, started_at, duration_ms,
         call["returncode"], tokens_in, tokens_out, cost_usd, quota_event,
+        # Never invented for a quota bailout, even when an earlier attempt
+        # was itself discarded first: a quota abandonment stays
+        # distinguishable from a retried crossing (#116), so callers on that
+        # path simply never pass this.
+        discarded=discarded or None,
     )
 
 
@@ -328,20 +351,37 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
     last_envelope = None
     malformed_reason = None
     usage_totals = [None, None, None]
+    attempt_records = []
 
     for attempt in range(2):
         attempts = attempt + 1
+        attempt_clock = time.monotonic()
         call = _run_once(prompt, timeout_seconds)
         last_call = call
         envelope, envelope_error = _parse_envelope(call)
         last_envelope = envelope
+        attempt_tokens_in = attempt_tokens_out = None
         if isinstance(envelope, dict):
             reported = _usage(envelope)
+            attempt_tokens_in, attempt_tokens_out, _attempt_cost = reported
             for index, value in enumerate(reported):
                 if value is None:
                     continue
                 prior = usage_totals[index]
                 usage_totals[index] = value if prior is None else prior + value
+
+        # This attempt's own elapsed time, not the crossing's cumulative
+        # clock: a discarded attempt's duration_ms has to say how long THAT
+        # call took, or the retry looks free (#116).
+        attempt_records.append({
+            "reason": None,
+            "duration_ms": max(
+                0, int((time.monotonic() - attempt_clock) * 1000)
+            ),
+            "exit_code": call["returncode"],
+            "tokens_in": attempt_tokens_in,
+            "tokens_out": attempt_tokens_out,
+        })
 
         duration_ms = max(
             0, int((time.monotonic() - started_clock) * 1000)
@@ -428,11 +468,13 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
                         call,
                         envelope,
                         usage_totals=usage_totals,
+                        discarded=_discarded_entries(attempt_records),
                     ),
                     "attempts": attempts,
                     "diagnostic": None,
                 }
         if attempt == 0:
+            attempt_records[-1]["reason"] = malformed_reason
             continue
         description = (
             "Claude structured_output remained invalid after one retry: "
@@ -454,6 +496,7 @@ def run_courier(task_id, prompt, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
             last_call,
             last_envelope,
             usage_totals=usage_totals,
+            discarded=_discarded_entries(attempt_records),
         ),
         "attempts": attempts,
         "diagnostic": evidence,

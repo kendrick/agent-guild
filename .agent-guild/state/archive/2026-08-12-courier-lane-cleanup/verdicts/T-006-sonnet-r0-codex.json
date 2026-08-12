@@ -1,0 +1,18 @@
+{
+  "task_id": "T-006",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "blocked",
+  "findings": [
+    {
+      "clause_id": "external-lane",
+      "severity": "blocker",
+      "description": "codex exec exited 1 before producing a verdict",
+      "evidence": "stdout:\n{\"type\":\"thread.started\",\"thread_id\":\"019ff4d2-64b2-70d2-8538-a369ffeeb735\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"Selected model is at capacity. Please try a different model.\"}}\n\nstderr:\nReading additional input from stdin...\n2026-08-12T07:14:16.587337Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 94 column 5"
+    }
+  ],
+  "timestamp": "2026-08-12T07:14:32Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

@@ -153,6 +153,46 @@ def _quota_return_ok(task_id, lane):
     return bool(last_for_task) and last_for_task.get("quota_event") is True
 
 
+DISCARDED_ENTRY_FIELDS = {
+    "reason", "duration_ms", "exit_code", "tokens_in", "tokens_out",
+}
+
+
+def _discarded_entries_violation(discarded):
+    """None, or a string naming the field that failed, for the optional
+    `ledger.discarded` array — one entry per attempt a retried crossing threw
+    away, in the same shape C-4 pins for vendor-call.schema.json's own
+    `discarded` field. Widening the ledger key set to admit this key is not
+    licence to stop checking what's inside it."""
+    if not isinstance(discarded, list):
+        return "discarded is not an array"
+    for index, entry in enumerate(discarded):
+        if not isinstance(entry, dict):
+            return f"discarded[{index}] is not an object"
+        unexpected = set(entry) - DISCARDED_ENTRY_FIELDS
+        missing = DISCARDED_ENTRY_FIELDS - set(entry)
+        if unexpected or missing:
+            return (
+                f"discarded[{index}] fields must be exactly "
+                f"{sorted(DISCARDED_ENTRY_FIELDS)!r}, got {sorted(entry)!r}"
+            )
+        if not isinstance(entry["reason"], str) or not entry["reason"].strip():
+            return f"discarded[{index}].reason is not a non-empty string"
+        for key in ("duration_ms", "exit_code"):
+            if type(entry[key]) is not int:
+                return f"discarded[{index}].{key} is not an integer"
+        if entry["duration_ms"] < 0:
+            return f"discarded[{index}].duration_ms is negative"
+        for key in ("tokens_in", "tokens_out"):
+            value = entry[key]
+            if value is not None and (type(value) is not int or value < 0):
+                return (
+                    f"discarded[{index}].{key} is neither a non-negative "
+                    "integer nor null"
+                )
+    return None
+
+
 def _codex_courier_outcome_ok(message, task_id):
     """Validate a read-only Codex courier return before parent persistence.
 
@@ -216,12 +256,25 @@ def _codex_courier_outcome_ok(message, task_id):
         "cost_usd",
         "quota_event",
     }
-    if set(ledger) != ledger_fields:
+    # `discarded` (#116/T-009) is optional, not required: claude-courier.py
+    # only carries it on a row with a retried or otherwise discarded attempt,
+    # so a payload with the key and one without it both have to pass. The
+    # comparison still refuses anything outside this set — admitting one more
+    # key is not the same as no longer checking.
+    optional_ledger_fields = {"discarded"}
+    unexpected = set(ledger) - ledger_fields - optional_ledger_fields
+    missing = ledger_fields - set(ledger)
+    if unexpected or missing:
         return (
             False,
-            "ledger fields must be exactly "
-            f"{sorted(ledger_fields)!r}, got {sorted(ledger)!r}",
+            f"ledger fields must be exactly {sorted(ledger_fields)!r}, "
+            f"optionally plus {sorted(optional_ledger_fields)!r}, got "
+            f"{sorted(ledger)!r}",
         )
+    if "discarded" in ledger:
+        violation = _discarded_entries_violation(ledger["discarded"])
+        if violation is not None:
+            return False, f"ledger.{violation}"
     expected_ledger = {
         "task_id": task_id,
         "vendor": "claude",

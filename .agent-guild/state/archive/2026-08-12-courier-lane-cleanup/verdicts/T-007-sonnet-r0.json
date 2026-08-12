@@ -1,0 +1,72 @@
+{
+  "task_id": "T-007",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "All seven suites in the verification block exit 0, including .agent-guild/hooks/test_hooks.py, the quiet consumer of the schema this task amends.",
+      "evidence": "check-build.sh 'python3 .agent-guild/scripts/test_compose_brief.py && ... && python3 scripts/test_build_plugin.py' -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T022620.log)'. Re-run suite by suite for per-file exit codes: test_compose_brief.py -> exit 0 | 39 passed, 0 failed; test_ledger_append.py -> exit 0 | 54 passed, 0 failed; test_codex_courier.py -> exit 0 | 46 passed, 0 failed; test_claude_courier.py -> exit 0 | 30 passed, 0 failed; hooks/test_hooks.py -> exit 0 | 182 passed, 0 failed; hooks/test_codex_adapter.py -> exit 0; scripts/test_build_plugin.py -> exit 0 | 43 passed, 0 failed."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "build-plugin.py --check is clean at the tip and at every commit on the branch, and the generated copies of the three changed files are byte-identical to their sources.",
+      "evidence": "check-build.sh with C-2's command verbatim -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T022821.log)'; the clone walk printed 'OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds' once per commit in origin/main..HEAD. cmp across the three trees: 'identical: schemas/vendor-call.schema.json', 'identical: scripts/ledger-append.py', 'identical: scripts/test_ledger_append.py' (.agent-guild/ vs plugin/project-template/.agent-guild/ vs plugins/agent-guild/project-template/.agent-guild/)."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "Nothing under .agent-guild/state/archive/ changed on the branch, committed or uncommitted; the 21 archived rows are untouched.",
+      "evidence": "check-build.sh with C-3's command verbatim -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T022836.log)'; both git diff --name-only $(git merge-base main HEAD) -- .agent-guild/state/archive and git status --porcelain -- .agent-guild/state/archive produced empty output. git diff --stat 7ae03b0..HEAD names only the 9 schema/appender/test files across the three trees."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "The two new keys are absent from required, additionalProperties stays false, every declared type matches the clause's list field by field, and all 21 archived rows still validate through ledger-append.py's own load_schema/schema_violation.",
+      "evidence": ".agent-guild/schemas/vendor-call.schema.json:60-94,100-115 read programmatically: 'attempts in required? False; discarded in required? False; additionalProperties: False; attempts type: integer; discarded type: array; items type: object; discarded.items.reason = string; discarded.items.duration_ms = integer; discarded.items.exit_code = integer; discarded.items.tokens_in = [number, null]; discarded.items.tokens_out = [number, null]; items extra props: []'. Keyword census over the whole schema: {'$schema': 1, 'title': 1, 'description': 22, 'type': 24, 'properties': 2, 'items': 2, 'required': 2, 'additionalProperties': 2} - no $ref, oneOf, anyOf, allOf, pattern or minimum, so nothing outside validate-verdict.py's hand-rolled keyword set. Archived-ledger pass via importlib load of .agent-guild/scripts/ledger-append.py: 'schema has attempts? True discarded? True' then 'rows checked: 21 failures: 0' over 2026-08-10-issue-117 (7 lines), 2026-08-11-issue-100 (8), 2026-08-11-issue-141 (6)."
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "The fabricated-zero rule holds for the new field: a discarded entry's unreported token figures round-trip as null, and an entry that omits them is rejected outright rather than defaulted to 0.",
+      "evidence": "Round trip through the delivered .agent-guild/scripts/ledger-append.py against a scratchpad ledger. Row with --discarded '{\"reason\":\"malformed JSON\",\"duration_ms\":900,\"exit_code\":1,\"tokens_in\":null,\"tokens_out\":null}' -> rc=0, read back as [{\"reason\": \"malformed JSON\", \"duration_ms\": 900, \"exit_code\": 1, \"tokens_in\": null, \"tokens_out\": null}]. Row with the token keys omitted -> 'ledger-append: discarded[0].tokens_in: required field missing', rc=1, ledger untouched. Row with neither flag -> keys absent entirely (build_line guards at ledger-append.py:272-275). Matches the live convention on this branch: .agent-guild/state/log/vendor-calls.jsonl's last row is 'T-006 1 tokens_in= None tokens_out= None'."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "Every new test case in test_ledger_append.py goes red when the production change it exercises is backed out inside a cp -a copy, and green again when restored.",
+      "evidence": "Copy at /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/7188fa38-b39f-46d7-9b46-9e5e2fe93992/scratchpad/mut (cp -a of the working tree); baseline '54 passed, 0 failed'. M1 delete attempts+discarded from schema properties -> '48 passed, 6 failed', e.g. 'FAIL attempts+discarded: exit 0 rc=1 err=ledger-append: $: additional properties not allowed: [attempts, discarded]'. M3 retype discarded tokens_in/out as plain integer (the fabricated-zero regression) -> '48 passed, 6 failed', 'FAIL discarded with unreported usage: tokens_in is null, not 0' with 'ledger-append: discarded[0].tokens_in: expected type integer, got null (None)'. M5 keep the flags but stop writing them into the line -> 'FAIL attempts+discarded: attempts read back intact', 'FAIL attempts+discarded: discarded entry reads back intact', and the unreported-usage case aborts on KeyError: 'discarded' (suite rc=1). M4 remove the argparse flags -> suite rc=1. M2 add attempts/discarded to required -> suite rc=1, and the seventh case's own predicate flips: schema_violation(LEGACY_ROW, load_schema()) returns None unmutated, ('attempts', 'required field missing') with required +[attempts], ('discarded', 'required field missing') with required +[discarded], None again once restored. Restored tree: '54 passed, 0 failed'. The job branch was never edited."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "minor",
+      "description": "Under M2 and M4 the suite aborts before reaching the cases those mutations target, because an earlier case raises FileNotFoundError instead of failing gracefully, so the two cases had to be isolated by running their own predicates.",
+      "evidence": "M2 run stderr: 'File \".../mut/.agent-guild/scripts/test_ledger_append.py\", line 92, in <module> lines = read_lines(ledger) ... FileNotFoundError: ... vendor-calls.jsonl'; only 'FAIL happy path: exit 0 rc=1 err=ledger-append: attempts: required field missing' printed before the abort. The suite still exits 1 under both mutations, and the targeted case's predicate was confirmed to flip directly, so no case survives its own mutation - this is a robustness note on the harness, not a coverage gap."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "Every file the branch changes relative to its merge base sits inside the paths the job names.",
+      "evidence": "check-build.sh with C-9's command verbatim -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T022844.log)'; the grep -vE filter over the merged diff and porcelain lists produced no output. This task's own range touches only .agent-guild/schemas/, .agent-guild/scripts/, plugin/project-template/, and plugins/agent-guild/project-template/ (git diff --stat 7ae03b0..HEAD, 9 files, 411 insertions, 0 deletions)."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The single commit in 7ae03b0..HEAD says why the change exists - retries stay on one row, and optionality is what keeps the archived rows valid - and carries none of the enumerated tells; granularity is one logical change plus the packages C-2 requires in the same commit.",
+      "evidence": "git log -1 --format=%B f32a490: subject 'fix(ledger): add attempts and discarded to the vendor-call contract'; body opens '#116 wants a retried crossing visible on the row it already produces, not spread across a second row per attempt.' and 'Both fields are left out of `required`, which is what keeps all 21 rows across the three archived ledgers valid without touching a byte of them.' Typography checked directly: 0 em dashes and 0 en dashes in the message, no headings, so neither typographic rule has anything to violate. The one three-item list ('the happy path, the null-not-zero case, and the archived-row guarantee') matches the three cases actually added, so it neither pads nor drops. git diff --stat 7ae03b0..HEAD shows one logical change (schema, appender, its tests) with its regenerated packages, no unrelated edit."
+    },
+    {
+      "clause_id": "C-11",
+      "severity": "info",
+      "description": "The work is on chore/courier-lane-cleanup, the branch has no upstream tracking ref, and nothing outside .agent-guild/state/ is uncommitted.",
+      "evidence": "check-build.sh with C-11's command verbatim -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T022847.log)'. git rev-parse --abbrev-ref HEAD -> 'chore/courier-lane-cleanup'; the deliverable f32a490 sits on top of the task base 7ae03b0."
+    }
+  ],
+  "timestamp": "2026-08-12T02:35:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

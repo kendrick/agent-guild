@@ -11,9 +11,11 @@ Run: python3 .agent-guild/hooks/test_codex_adapter.py
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 
@@ -265,6 +267,94 @@ def courier_outcome(task_id, status="verdict"):
         "diagnostic": "429" if quota else None,
     }
     return "AGENT_GUILD_COURIER_OUTCOME\n" + json.dumps(outcome)
+
+
+CLAUDE_COURIER_SCRIPT = os.path.join(KIT_ROOT, "scripts", "claude-courier.py")
+
+# A fake `claude` CLI that discards one attempt (malformed structured_output)
+# before succeeding, so the real claude-courier.py run below produces a
+# genuine `ledger.discarded` entry rather than a hand-built stand-in for one.
+FAKE_CLAUDE_RETRY = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    import json
+    import os
+    import sys
+
+    count_path = os.environ["FAKE_CLAUDE_COUNT"]
+    try:
+        with open(count_path, encoding="utf-8") as stream:
+            count = int(stream.read()) + 1
+    except (OSError, ValueError):
+        count = 1
+    with open(count_path, "w", encoding="utf-8") as stream:
+        stream.write(str(count))
+
+    task_id = os.environ["FAKE_CLAUDE_TASK_ID"]
+    if count == 1:
+        print(json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "terminal_reason": "completed",
+            "result": "NOT_JSON",
+            "usage": {"input_tokens": 7, "output_tokens": 3},
+        }))
+    else:
+        verdict = {
+            "task_id": task_id,
+            "checker": "checker-courier",
+            "vendor": "anthropic",
+            "model": "claude-haiku-4-5-20251001",
+            "verdict": "pass",
+            "findings": [],
+            "timestamp": "2026-07-26T18:00:00Z",
+            "duration_ms": None,
+            "cost_usd": None,
+        }
+        print(json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "terminal_reason": "completed",
+            "result": json.dumps(verdict),
+            "structured_output": verdict,
+            "usage": {"input_tokens": 101, "output_tokens": 23},
+        }))
+    """
+)
+
+
+def real_claude_courier_outcome(task_id):
+    """Run the actual claude-courier.py against a fake CLI that discards one
+    attempt before succeeding, and return its genuine JSON outcome.
+
+    courier_outcome() above hand-builds a payload, which is exactly why the
+    gap this task fixes stayed invisible: the fixture never grew the key the
+    real script now emits. This runs the real script instead, so the key set
+    the parent validator has to accept is the key set claude-courier.py
+    actually produces, not a stand-in for it.
+    """
+    with tempfile.TemporaryDirectory(prefix="ag-claude-courier-real-") as temp:
+        fake = os.path.join(temp, "claude")
+        with open(fake, "w", encoding="utf-8") as stream:
+            stream.write(FAKE_CLAUDE_RETRY)
+        os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
+        env = os.environ.copy()
+        env["PATH"] = temp + os.pathsep + env.get("PATH", "")
+        env["FAKE_CLAUDE_TASK_ID"] = task_id
+        env["FAKE_CLAUDE_COUNT"] = os.path.join(temp, "count")
+        prompt = f"Task-ID: {task_id}\n\n## Brief\nC-1 must pass."
+        process = subprocess.run(
+            [sys.executable, CLAUDE_COURIER_SCRIPT, "--task-id", task_id],
+            input=prompt, capture_output=True, text=True, env=env,
+        )
+        if process.returncode != 0:
+            raise AssertionError(
+                f"claude-courier.py exited {process.returncode}: "
+                f"{process.stderr}"
+            )
+        return json.loads(process.stdout)
 
 
 class CodexAdapterTest(unittest.TestCase):
@@ -897,6 +987,41 @@ class CodexAdapterTest(unittest.TestCase):
         blocked = self.run_adapter("subagent-return", bad_ledger)
         self.assertEqual(blocked.returncode, 2, blocked.stderr)
         self.assertIn("ledger.duration_ms", blocked.stderr)
+
+    def test_claude_courier_real_discarded_key_is_accepted_not_a_fixture(self):
+        """#116/T-009: courier_outcome() above never grew a `discarded` key,
+        which is exactly how the parent validator's exact key-set check on
+        `ledger` was left refusing the key claude-courier.py now emits. This
+        runs the real script instead of the fixture, so the accepted key set
+        is checked against what the courier actually produces."""
+        seed_verdict_toolchain(self.project)
+        write_task(
+            self.project,
+            "T-054",
+            status="checking",
+            checker="checker-judgment",
+        )
+        transcript = codex_transcript(
+            self.project,
+            "Task-ID: T-054\nGet a second opinion.",
+        )
+        outcome = real_claude_courier_outcome("T-054")
+        self.assertIn("discarded", outcome["ledger"])
+        self.assertEqual(len(outcome["ledger"]["discarded"]), 1)
+
+        payload = codex_input(
+            "SubagentStop",
+            self.project,
+            agent_transcript_path=transcript,
+            agent_id="019fa0c0-courier-real",
+            agent_type="checker-courier",
+            stop_hook_active=False,
+            last_assistant_message=(
+                "AGENT_GUILD_COURIER_OUTCOME\n" + json.dumps(outcome)
+            ),
+        )
+        result = self.run_adapter("subagent-return", payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_read_only_codex_courier_quota_return_precedes_parent_writes(self):
         write_task(

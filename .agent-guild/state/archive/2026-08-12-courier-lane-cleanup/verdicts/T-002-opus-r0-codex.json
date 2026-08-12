@@ -1,0 +1,30 @@
+{
+  "task_id": "T-002",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-6",
+      "severity": "blocker",
+      "description": "The checker acknowledges that the posted AC1 output omits the required `findings` property, so the comment does not demonstrate the claimed schema-conforming blocked verdict from the live replay.",
+      "evidence": "Checker-of-record C-6 minor finding: \"AC1 code block pretty-printed JSON silently drops `findings` key\"; C-6 requires demonstrated, not asserted, acceptance criteria."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "major",
+      "description": "The claimed humanizer compliance is unsupported and conflicts with the humanizer skill's explicit rules.",
+      "evidence": "The record reports only regex-style scans and title-cased headings/unspaced em dashes. `humanizer/SKILL.md` requires a formal draft-audit-final loop, final sentence-case headings, and no em/en dashes; it also treats repeated negative parallelisms such as \"X rather than Y\" as an AI-writing tell. The checker itself records five such constructions without showing the required audit-and-revise loop."
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "blocker",
+      "description": "The summarized test evidence does not establish that all seven required suites ran successfully.",
+      "evidence": "The record cites only six pass totals, \"29/43/46/30/179/43 passed, 0 failed,\" although C-1 names seven commands, including `scripts/test_build_plugin.py`; no exit evidence for that seventh suite is supplied."
+    }
+  ],
+  "timestamp": "2026-08-12T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

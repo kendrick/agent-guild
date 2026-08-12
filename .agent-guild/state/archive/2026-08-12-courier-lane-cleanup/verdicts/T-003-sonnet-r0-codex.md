@@ -1,0 +1,37 @@
+---
+task: T-003
+checker: checker-courier
+vendor: openai
+model: gpt-5.6-terra
+verdict: FAIL
+checked_at: 2026-08-12T00:00:00Z
+duration_ms: None
+cost_usd: None
+---
+
+<!-- GENERATED FILE—do not hand-edit. Rendered by render-verdict.py
+from the verdict JSON, the record of record. Edit the JSON and
+re-render instead. -->
+
+## Per-clause results
+
+| clause | severity | description | evidence |
+| ------ | -------- | ------------ | -------- |
+| C-5 | info | The recorded copy-based mutations credibly demonstrate that each of the three named added tests fails when its corresponding behavior is removed and passes when restored. | Checker evidence: c5copy baseline '182 passed, 0 failed'; each of three mutations produced the named test failure(s), followed by restored '182 passed, 0 failed' and an identical-file diff. |
+| C-7 | blocker | The record explicitly leaves compose-brief site 1 unjudged even though C-7 requires both its exact exit-3 stderr and no-output-file checks, so the all-four-sites clause is not established. | C-7 finding states: 'site 1 (compose-brief's exit 3) is out of scope per the task's check_method and was not judged'; the supplied C-7 check method instead specifies Site 1 twice, including byte-for-byte stderr and absence of the brief output file. |
+| C-7 | info | The supplied fixture observations adequately confirm lane pinning and denial-before-reservation for the examined sites. | Checker evidence shows an own-lane .skipped marker clears the debt while a far-lane marker leaves it standing, and reports dispatch-guard.py:355-363 denial before reserve_crossing at :372 with no .authorized file after denial. |
+| C-7 | minor | The stale inline route-numbering comment should be corrected to match the newly added discharge route. | .agent-guild/hooks/_lib.py:513 says route 6, while :523-524 still says 'route 5' and 'routes 1-4'. |
+| C-10 | major | The evidence does not show that the required #106 comment was read and assessed for the specified human-writing and typography criteria. | C-10 requires review of 'commit messages, the #106 comment, and the doc and role text C-8 covers'; the record's C-10 evidence only reports git log output and a Python-only commit diff. |
+
+## Diagnosis
+
+- **C-5** (info): The recorded copy-based mutations credibly demonstrate that each of the three named added tests fails when its corresponding behavior is removed and passes when restored.
+  evidence: Checker evidence: c5copy baseline '182 passed, 0 failed'; each of three mutations produced the named test failure(s), followed by restored '182 passed, 0 failed' and an identical-file diff.
+- **C-7** (blocker): The record explicitly leaves compose-brief site 1 unjudged even though C-7 requires both its exact exit-3 stderr and no-output-file checks, so the all-four-sites clause is not established.
+  evidence: C-7 finding states: 'site 1 (compose-brief's exit 3) is out of scope per the task's check_method and was not judged'; the supplied C-7 check method instead specifies Site 1 twice, including byte-for-byte stderr and absence of the brief output file.
+- **C-7** (info): The supplied fixture observations adequately confirm lane pinning and denial-before-reservation for the examined sites.
+  evidence: Checker evidence shows an own-lane .skipped marker clears the debt while a far-lane marker leaves it standing, and reports dispatch-guard.py:355-363 denial before reserve_crossing at :372 with no .authorized file after denial.
+- **C-7** (minor): The stale inline route-numbering comment should be corrected to match the newly added discharge route.
+  evidence: .agent-guild/hooks/_lib.py:513 says route 6, while :523-524 still says 'route 5' and 'routes 1-4'.
+- **C-10** (major): The evidence does not show that the required #106 comment was read and assessed for the specified human-writing and typography criteria.
+  evidence: C-10 requires review of 'commit messages, the #106 comment, and the doc and role text C-8 covers'; the record's C-10 evidence only reports git log output and a Python-only commit diff.

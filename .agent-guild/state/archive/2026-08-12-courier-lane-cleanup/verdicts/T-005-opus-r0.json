@@ -1,0 +1,66 @@
+{
+  "task_id": "T-005",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "All seven suites named in C-1 exit 0 after this task's edits, run as one command through check-build.sh exactly as the clause spells it.",
+      "evidence": "check-build.sh 'python3 .agent-guild/scripts/test_compose_brief.py && ... && python3 scripts/test_build_plugin.py' -> tail: '43 passed, 0 failed' / 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T014750.log)'"
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "build-plugin.py --check is clean at the tip and at every commit in origin/main..HEAD walked in a throwaway clone, so the regenerated packages and dogfooded .claude/ wrappers ride the same commit as the guild-core/roles/, .agent-guild/CLAUDE.md, and .agent-guild/templates/ edits that caused them.",
+      "evidence": "check-build.sh with C-2's verbatim command -> repeated 'OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds; the Claude plugin passes strict validation' per commit, then 'check-build.sh: exit 0'. git show --stat 81baa04 lists the three sources beside plugin/, plugins/agent-guild/, .claude/agents/checker-courier.md, and the Codex .toml in one commit."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "All eight requirements on C-8's own list are present, and reading each document against the code it now describes turned up no instruction leading to a state the code refuses and no code behavior a document contradicts.",
+      "evidence": "guild-core/roles/checker-courier.md:9 ('A crossing happens only when the brief carries at least one judgment clause'), :28 (exit-3 instruction quoting the stderr line and 'Stop there. Report the skip and run no lane command at all'), :21 (the 'if evidence a clause requires was not supplied' fallback gone; grep -rn 'not supplied' over guild-core/, .claude/agents/, plugin/agents/ returns nothing), :32 ('a retried call sums its attempts into a single row, and that row also carries `attempts` and one `discarded[]` entry per attempt that was thrown away'). .agent-guild/CLAUDE.md:29 and the dual-check paragraph both read 'after every checker of record whose task cites a judgment clause'; the debt list gains the '…-r<N>-<lane>.skipped' bullet ('Four files discharge a debt'); the state map entry names the author and trigger ('the orchestrator's record ... You write it by hand, on `compose-brief.py`'s exit 3 and on nothing else ... No hook files it for you') and carries the lane trap ('a marker filed under the far host's discharges nothing'). .agent-guild/templates/task.md:47-50 makes the skip explicit ('denied, blocked, or skipped because the task cited no judgment clause at all'). Code cross-check: compose-brief.py:129-138 anchors on the `checker-judgment:` prefix and compose() returns before any write, matching the doc; _lib.py:497-507 route 5; dispatch-guard.py:338-360 computes `stem` ahead of the denial and blocks on the marker; the .claude/agents/ Claude adapter composes the brief before invoking codex-courier.py --brief, so the role's stop-at-exit-3 fits the actual flow."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "Re-derived the two code behaviors the docs assert, rather than reading them: compose-brief.py exits 3 with the byte-exact stderr line and writes no brief, and an own-lane .skipped marker discharges a debt while a far-lane one does not.",
+      "evidence": "Fixture at scratchpad/c8fix (task citing a plain script clause plus one whose check reads 'check-foo.sh --mode checker-judgment:x'): 'EXIT=3', stderr 'compose-brief: nothing to cross: T-900 cites only script-checked clauses', BYTE-EXACT MATCH: True, and no briefs directory written. Fixture at scratchpad/c8lib via CLAUDE_PROJECT_DIR with a T-901-opus-r0.json verdict of record: no marker -> debts [('T-901','T-901-opus-r0','codex')]; T-901-opus-r0-claude.skipped (far lane) -> debt still stands; T-901-opus-r0-codex.skipped (own lane) -> debts []."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "The `discarded[]` detail in the courier role is the one place a document describes something the code does not yet carry; C-8's own list requires it and the task records the forward reference as deliberate, so it is not a contradiction.",
+      "evidence": "grep -c discarded .agent-guild/schemas/vendor-call.schema.json .agent-guild/scripts/ledger-append.py -> 0 and 0; .agent-guild/state/tasks/T-005.md:45 ('That field is built in T-007 and T-008; the role text is where an agent learns it exists.')"
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "Every path the branch changes relative to its merge base with main, committed or otherwise, falls inside C-9's allowed set.",
+      "evidence": "check-build.sh with C-9's verbatim command -> no output from the grep -vE filter, 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T014842.log)'"
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The commit message gives the change's cause rather than only its content, and the added doc prose, the new #34 comment, and the edited #106 text carry none of the enumerated tells; both typographic rules hold.",
+      "evidence": "git log 32d2418..HEAD subject 'docs(courier): describe the crossing #128 stopped making' with a body naming the failure mode ('One that misdirects sends a courier to shell out with no brief to carry, or leaves the orchestrator waiting on a verdict compose-brief already refused to make possible'), unwrapped, one logical change per commit. Typography, checked directly over the added lines: 7 em dashes, 0 spaced (python scan of the + lines of the three source diffs); no headings added or changed in the docs; the GitHub headings are title-cased ('## One Fewer Meaning For `blocked`', '### The Fourth Criterion, On Re-Serialization, Changed On Purpose')."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "Both GitHub deliverables exist in the shape the task names: a new comment on #34 recording the single meaning of `blocked`, and an edit to the existing #106 comment rather than a second post.",
+      "evidence": "gh api repos/:owner/:repo/issues/34/comments -> new id 5263296031 created 2026-08-12T06:44:54Z, body a single short section ending 'This is one input to the evaluation, not an argument about how it should come out.' gh issue view 106 --comments -> 2 comments total; gh api .../issues/106/comments -> id 5262456691 created 2026-08-12T04:56:18Z, updated_at 2026-08-12T06:45:58Z (an edit). The GraphQL userContentEdits diff shows the AC 1 block relabelled from a `json.load` print transcript to 'An excerpt of the file the crossing left at the lane-suffixed stem, with `findings` elided', 'AC 4, the raw text preserved' folded into 'AC 3, second half' with 'Retention is the tail of the third criterion, not the fourth one', the heading gaining ', On Re-Serialization', and the closing line moving to 'The amended re-serialization criterion'. Nothing outside the labelling changed."
+    },
+    {
+      "clause_id": "C-11",
+      "severity": "info",
+      "description": "The work sits on chore/courier-lane-cleanup with no upstream tracking ref, and nothing outside .agent-guild/state/ is left uncommitted.",
+      "evidence": "check-build.sh with C-11's verbatim command -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T014844.log)'; git rev-parse --abbrev-ref HEAD -> chore/courier-lane-cleanup; git status --porcelain -> empty; git log --oneline 32d2418..HEAD -> '81baa04 docs(courier): describe the crossing #128 stopped making'"
+    }
+  ],
+  "timestamp": "2026-08-12T07:05:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

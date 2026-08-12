@@ -1,0 +1,36 @@
+{
+  "task_id": "T-005",
+  "checker": "checker-courier",
+  "vendor": "openai",
+  "model": "gpt-5.6-terra",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-8",
+      "severity": "blocker",
+      "description": "The courier documentation asserts that each discarded attempt is recorded in `discarded[]`, but the brief states that this behavior will only be built in T-007/T-008, so the document describes code an agent cannot yet meet.",
+      "evidence": "guild-core/roles/checker-courier.md (reported line 32): \"that row also carries `attempts` and one `discarded[]` entry per attempt that was thrown away\"; brief evidence: \"forward reference to `discarded[]` (built in T-007 and T-008)\"."
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "The supplied excerpts otherwise cover the judgment-clause gate, exit-3 no-lane instruction, removed unsupported-evidence fallback, orchestrator-authored lane-pinned `.skipped` route, and explicit template skip case.",
+      "evidence": "guild-core/roles/checker-courier.md:9,21-28; .agent-guild/CLAUDE.md relevant excerpts; .agent-guild/templates/task.md Courier comparison section."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The commit subject gives the behavioral cause—crossings stopped by #128—rather than merely naming a documentation edit, and the supplied prose shows no specific prohibited AI-writing tell or spacing violation.",
+      "evidence": "Commit 81baa04 subject: \"docs(courier): describe the crossing #128 stopped making\"; supplied document excerpts include flush em dashes such as \"Write—no Edit\" and \"only when the brief carries\"."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "The provided evidence describes one cohesive documentation/contract update and states that #34 received a new comment while #106 received an edit.",
+      "evidence": "Brief sections \"GitHub Comments\" and \"Evidence: Commit Message\"."
+    }
+  ],
+  "timestamp": "2026-08-12T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

@@ -1,0 +1,42 @@
+{
+  "task_id": "T-001",
+  "checker": "checker-deterministic",
+  "vendor": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "All seven test suites exit 0: test_compose_brief.py, test_ledger_append.py, test_codex_courier.py, test_claude_courier.py, test_hooks.py, test_codex_adapter.py, and test_build_plugin.py.",
+      "evidence": "check-build.sh: 379 tests passed across all suites, exit 0"
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "Generated packages are regenerated and match the sources at the commit tip; build-plugin.py --check validates each commit's packages.",
+      "evidence": "check-build.sh: Validation passed, OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds, exit 0"
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "All changed files stay within the allowed paths: .agent-guild/scripts/, .agent-guild/hooks/, .agent-guild/schemas/, .agent-guild/templates/, .agent-guild/state/, guild-core/roles/, scripts/plugin-src/, plugin/, plugins/agent-guild/, .claude/agents/, .claude/skills/, .agent-guild/CLAUDE.md, docs/plugin-readme.md, and .github/workflows/plugin-build.yml.",
+      "evidence": "check-build.sh: No files outside allowed paths detected, exit 0"
+    },
+    {
+      "clause_id": "C-11",
+      "severity": "info",
+      "description": "The branch is chore/courier-lane-cleanup, has no upstream tracking ref, and all work outside .agent-guild/state/ is committed.",
+      "evidence": "check-build.sh: Branch name verified, no upstream ref, no uncommitted work outside state/, exit 0"
+    },
+    {
+      "clause_id": "C-12",
+      "severity": "info",
+      "description": "CI workflow includes python3 .agent-guild/scripts/test_codex_courier.py as a live indented line in the run block.",
+      "evidence": "check-build.sh: grep matched the exact pattern in .github/workflows/plugin-build.yml, exit 0"
+    }
+  ],
+  "timestamp": "2026-08-11T23:41:39Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

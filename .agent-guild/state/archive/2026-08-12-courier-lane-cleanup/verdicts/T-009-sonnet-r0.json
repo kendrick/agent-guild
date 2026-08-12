@@ -1,0 +1,72 @@
+{
+  "task_id": "T-009",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "All seven suites in the verification block exit 0 after this task's edits, including both consumer suites the shared payload contract runs through.",
+      "evidence": "check-build.sh 'python3 .agent-guild/scripts/test_compose_brief.py && ... && python3 scripts/test_build_plugin.py' -> exit 0. Log .agent-guild/state/log/build-20260812T032618.log per-suite tails: line 46 '39 passed, 0 failed' (compose_brief), 112 '54 passed, 0 failed' (ledger_append), 168 '53 passed, 0 failed' (codex_courier), 204 '33 passed, 0 failed' (claude_courier), 404 '182 passed, 0 failed' (test_hooks), 484 '43 passed, 0 failed' (build_plugin); test_codex_adapter 'Ran 28 tests ... OK'. Final line: 'check-build.sh: exit 0'."
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "build-plugin.py --check is clean at the tip and at every one of the 13 commits past origin/main, and the atomicity constraint held: _courier_lib.ledger_record and subagent-return.py landed together in dcf6b04, so no commit carries a helper emitting a key its own validator refuses.",
+      "evidence": "check-build.sh with C-2's verbatim clone-walk -> 'check-build.sh: exit 0'; log .agent-guild/state/log/build-20260812T032718.log holds 14 'OK: shared-core wrappers, both published packages...' lines against `git rev-list --count origin/main..HEAD` = 13 (tip + 13 commits). Atomicity re-derived independently: `git show --stat dcf6b04` lists BOTH '.agent-guild/scripts/_courier_lib.py | 17 +++--' and '.agent-guild/hooks/subagent-return.py | 59 ++++--' in one commit. Per-commit payload walk (git worktree, checker script percommit.py, real courier vs that commit's own validator) over 3059c2f, 65dea37, dcf6b04, 4373ab7, c80d541: every commit 'retry ... validator=ACCEPTED' and 'single ... validator=ACCEPTED'; discarded first appears in the emitted payload at 4373ab7, one commit AFTER the validator was widened. WALK_RESULT=0."
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "Nothing under .agent-guild/state/archive/ changed on this branch, committed or uncommitted.",
+      "evidence": "check-build.sh with C-3's verbatim guard (git diff --name-only merge-base -- state/archive; git status --porcelain -- state/archive) -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T032710.log)'. Independently: `git diff --name-only 3059c2f..HEAD` returns only .py files, no archive path."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "Every new or amended test case in the task's artifact list goes red when the production change it covers is backed out in a cp -a copy, and green again when restored; the exempt harness guard is excluded on the clause's own reasoning.",
+      "evidence": "Copy at /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/7188fa38-b39f-46d7-9b46-9e5e2fe93992/scratchpad/mut (cp -a of the working tree; live tree confirmed unmodified afterwards by `git status --porcelain | cut -c4- | grep -v state/` returning nothing). Baseline in copy: test_claude_courier '33 passed, 0 failed', test_codex_adapter 'Ran 28 tests ... OK'. Mutation 1, claude-courier.py reverted to 4373ab7^: 'FAIL the discarded attempt's own figures land in the ledger, not the cumulative ones  discarded=None row_duration_ms=296' / '32 passed, 1 failed'. Mutation 2b, quota path passes _discarded_entries and the `or None` restraint dropped: 'FAIL a quota abandonment stays distinguishable: no discarded entry invented for it  ledger={... 'discarded': []}' and 'FAIL quota after a discarded first attempt still invents no discarded entry' / '31 passed, 2 failed'. Mutation 4, subagent-return.py reverted to dcf6b04^: 'FAIL: test_claude_courier_real_discarded_key_is_accepted_not_a_fixture ... AssertionError: 2 != 0 : ... ledger fields must be exactly [...], got [... 'discarded' ...]' / 'FAILED (failures=1)'. Mutation 5, courier reverted so it stops emitting the key: same test red with \"AssertionError: 'discarded' not found in {...}\". Restore: '33 passed, 0 failed', 'OK', '53 passed, 0 failed'."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "minor",
+      "description": "The duration arm of the new claude-courier case is not independently killable: swapping attempt_clock for started_clock leaves the suite green, because on a two-attempt crossing the only discarded attempt is the first, where the two clocks nearly coincide. The case still satisfies C-5 via the full backout, and C-15's substantive requirement holds on observed values.",
+      "evidence": "Mutation 3 in the same copy (.agent-guild/scripts/claude-courier.py lines 376-384, '\"duration_ms\": max(0, int((time.monotonic() - attempt_clock) * 1000))' -> started_clock): 'MUTATION 3: attempt duration read off the cumulative clock' -> '33 passed, 0 failed'. The clause's own bar is met by Mutation 1, which reverts the production edit the case exercises and does turn it red. Observed unmutated values from a live courier run keep the two apart: discarded[0].duration_ms=301 vs ledger.duration_ms=354."
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "minor",
+      "description": "The 65dea37 guard works and has a large observable effect, but test_codex_courier.py still aborts under a None outcome at a third unguarded dereference (line 505), so the #116 assertions below it never run under that mutation. This site is outside T-009's named scope and the file's only change here is the C-5-exempt guard, so it is not a violation of a cited clause -- reported plainly because two prior checkers met the earlier abort.",
+      "evidence": "Forced `outcome = None` in run_courier (test_codex_courier.py:279-282) inside the cp -a copy. WITHOUT the guard (65dea37^ file, same mutation): aborts at line 379 'and outcome[\"status\"] == \"verdict\"  TypeError: 'NoneType' object is not subscriptable' after 6 reported checks. WITH the guard (HEAD): runs on and reports 18 checks, 13 of them FAIL assertions, then aborts at .agent-guild/scripts/test_codex_courier.py:505 'outcome[\"persisted\"][\"raw_path\"] is not None  TypeError: 'NoneType' object is not subscriptable'. Remaining unguarded sites by grep: lines 505, 507, 795, 797, 809."
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "Every file the branch changes relative to its merge base sits inside the paths this job names.",
+      "evidence": "check-build.sh with C-9's verbatim guard -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T032744.log)', the grep -v filter leaving an empty $out. `git diff --name-only 3059c2f..HEAD | grep -v '\\.py$'` returns nothing, so this task touched only Python under .agent-guild/, plugin/, and plugins/agent-guild/."
+    },
+    {
+      "clause_id": "C-10",
+      "severity": "info",
+      "description": "All four commit messages in 3059c2f..HEAD give the cause, not just the edit; granularity is one logical change per commit; and both typographic rules hold vacuously or affirmatively.",
+      "evidence": "`git log 3059c2f..HEAD --format='%B'`: dcf6b04 names the failure it prevents ('the parent rejects the return, the crossing never promotes, and the debt rides silently to STALLED.md ... since both consumer fixtures hand-build their payloads') and states why both halves are one commit; 65dea37 gives the cause ('the suite aborts there, ten lines before T-008's guard is ever reached'); c80d541 explains why the fixture hid the gap; 4373ab7's 'pins three things' matches the three checks the diff actually adds, so it is not a padded tripartite list. Typography: `grep ' — '` over the four messages returns nothing and `grep -c '—'` returns 0, so no spaced em dash exists to violate the rule; `git diff --name-only 3059c2f..HEAD | grep -v '\\.py$'` is empty, so no doc heading changed and the title-case rule is vacuous. Granularity: 65dea37 = guard only; dcf6b04 = the two payload-contract ends the task requires together; 4373ab7 = courier capture with its tests; c80d541 = the adapter test. The three spaced em dashes added in code comments match established house style (47 such lines already in .agent-guild/scripts and hooks at base 3059c2f) and fall outside this clause's enumerated prose scope."
+    },
+    {
+      "clause_id": "C-11",
+      "severity": "info",
+      "description": "The work is on chore/courier-lane-cleanup, the branch has no upstream tracking ref, and nothing outside .agent-guild/state/ is uncommitted.",
+      "evidence": "check-build.sh with C-11's verbatim guard -> 'check-build.sh: exit 0 (log: .agent-guild/state/log/build-20260812T032747.log)'. `git rev-parse --abbrev-ref HEAD` -> 'chore/courier-lane-cleanup'; `git status --porcelain` empty at check time; four commits in range c80d541, 4373ab7, dcf6b04, 65dea37."
+    },
+    {
+      "clause_id": "C-15",
+      "severity": "info",
+      "description": "The payload claude-courier.py actually emits is accepted by the real parent validator, discarded is admitted as optional rather than required, the validator stayed strict about unknown keys with set(outcome) untouched, the shape is discarded only with C-4's five members and types and no attempts inside ledger, an unreported usage writes null rather than a fabricated 0, and a quota abandonment stays distinguishable. Both lanes verified from live runs.",
+      "evidence": "Checker harness roundtrip.py ran the REAL .agent-guild/scripts/claude-courier.py against a checker-written fake CLI and fed its genuine stdout to the REAL _codex_courier_outcome_ok in .agent-guild/hooks/subagent-return.py: 19/19 checks passed. Retried crossing T-901 emitted ledger.discarded=[{'reason': 'Claude CLI envelope omitted object structured_output', 'duration_ms': 301, 'exit_code': 0, 'tokens_in': 47, 'tokens_out': 13}] with row duration_ms=354 and cumulative tokens_in=108 tokens_out=26; validator returned reason None (ACCEPTED). Un-retried crossing T-902 omitted the key entirely and was ALSO accepted, so the key is optional and no un-retried claude crossing is refused. No-usage attempt T-903 wrote tokens_in=None tokens_out=None, never 0, and was accepted. Strictness retained: an unknown ledger key -> \"ledger fields must be exactly [...], optionally plus ['discarded'], got ['bogus_key', ...]\"; an unknown top-level key -> \"outcome fields must be exactly ['attempts', 'diagnostic', 'ledger', 'status', 'verdict'], got [... 'extra_top_level' ...]\" (set(outcome) unchanged, subagent-return.py:221-233, attempts still pinned to {1,2} at :237-239); tokens_in=0.5 inside an entry -> 'ledger.discarded[0].tokens_in is neither a non-negative integer nor null'; a missing member -> \"discarded[0] fields must be exactly ['duration_ms','exit_code','reason','tokens_in','tokens_out']\". Emitted ledger keys sorted: ['cost_usd','discarded','duration_ms','exit_code','model','quota_event','started_at','task_id','tokens_in','tokens_out'] -- no 'attempts' inside ledger. End-to-end through the real hook PROCESS (codex-hook-adapter subagent-return): 'retry discarded=yes hook exit=0 ACCEPTED', 'single discarded=no hook exit=0 ACCEPTED'; a poisoned payload on the same path gave 'hook exit=2 BLOCKED', so exit 0 is acceptance and not a silent no-op. Negative control: the same real payload against the pre-widening validator (dcf6b04^) -> 'FAIL real retried payload is ACCEPTED by the parent validator', confirming the widening is load-bearing and the refused-at-the-door defect was real. Quota drive of the live courier (T-904, 429 on attempt 2 after a discarded attempt 1): quota_event=true, attempts=2, 'discarded' absent from the ledger. Codex lane re-driven through test_codex_courier.py's own malformed_once fake-CLI harness: attempts=2, one discarded entry, reason 'codex output was not JSON: Expecting value: line 1 column 1 (char 0)', entry duration_ms=298 != row duration_ms=365, top-level sums still 108/26."
+    }
+  ],
+  "timestamp": "2026-08-12T08:38:36Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

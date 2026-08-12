@@ -400,7 +400,7 @@ try:
         and MODEL in runner_findings[0]["description"],
         f"runner_findings={runner_findings!r}",
     )
-    raw = outcome["persisted"]["raw_path"] if outcome.get("persisted") else None
+    raw = outcome["persisted"]["raw_path"] if outcome and outcome.get("persisted") else None
     check(
         "#142: the raw response is retained and the finding points at it",
         raw is not None

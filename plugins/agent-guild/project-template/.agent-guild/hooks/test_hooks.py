@@ -1176,7 +1176,7 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-001"}}, proj)
 check("worker before CON-audit PASS → exit 2", rc == 2 and "constitution audit" in err, err)
 
-con_pass(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="pending")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-001"}}, proj)
@@ -1295,7 +1295,7 @@ rc, out, err = run_hook("dispatch-guard.py",
                         proj_worker_linter)
 check("worker w/ failing linter, no CON-audit → exit 2 on CON-audit, not job-spec",
       rc == 2 and "constitution audit" in err and "job-spec" not in err, err)
-con_pass(proj_worker_linter)
+audits_pass(proj_worker_linter)
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-900"}},
                         proj_worker_linter)
@@ -1407,12 +1407,12 @@ rc, out, err = run_hook("dispatch-guard.py",
 check("cites clauses, no check_method → checker blocked too",
       rc == 2 and "check_method is empty" in err, f"rc={rc} err={err}")
 
-# --------------------------------------- dispatch-guard: CON-audit staleness
-# Issue #110: the gate used to answer "did some constitution pass once," which
-# a job discovers only after workers have built against a document nothing
-# approved. These pin the two halves of the repair—latest round wins, and the
-# PASS is about specific bytes.
-print("dispatch-guard.py: CON-audit staleness (#110)")
+# ------------------------------------------- dispatch-guard: DEC-audit gate
+# Issue #161: the decomposition audit used to be a memo. It is the only check
+# in the system that can see a spec section no task covers, and that hole is
+# invisible downstream—no task means no checker, so the job runs green and
+# builds the wrong scope.
+print("dispatch-guard.py: DEC-audit gate (#161)")
 
 
 def worker_rc(proj, tid="T-001"):
@@ -1421,6 +1421,53 @@ def worker_rc(proj, tid="T-001"):
                                           "prompt": f"Task-ID: {tid}"}}, proj)
     return rc, err
 
+
+proj_dec = fresh_proj()
+con_pass(proj_dec)
+write_task(proj_dec, "T-001", status="assigned")
+rc, err = worker_rc(proj_dec)
+check("tasks exist, no DEC-audit verdict → exit 2",
+      rc == 2 and "DEC-audit" in err, f"rc={rc} err={err}")
+
+dec_pass(proj_dec)
+rc, err = worker_rc(proj_dec)
+check("DEC-audit PASS → exit 0", rc == 0, f"rc={rc} err={err}")
+
+write_verdict(proj_dec, "DEC-audit-r1.md", "FAIL", diagnosis=True)
+rc, err = worker_rc(proj_dec)
+check("newer DEC FAIL beats older PASS → exit 2 naming r1",
+      rc == 2 and "r1" in err and "FAIL" in err, f"rc={rc} err={err}")
+
+write_verdict(proj_dec, "DEC-audit-r2.md", "PASS")
+rc, err = worker_rc(proj_dec)
+check("fresh DEC PASS reopens the gate → exit 0", rc == 0, f"rc={rc} err={err}")
+
+write_verdict(proj_dec, "DEC-audit-r10.md", "FAIL", diagnosis=True)
+rc, err = worker_rc(proj_dec)
+check("DEC r10 FAIL beats r2 PASS → exit 2 naming r10",
+      rc == 2 and "r10" in err, f"rc={rc} err={err}")
+
+# The deadlock case. A gate that blocks the audit that opens it is a job with
+# no way out, so both non-worker paths have to stay clear of it.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: DEC-audit"}}, proj_dec)
+check("DEC gate closed → auditor still dispatches (no deadlock)",
+      rc == 0, f"rc={rc} err={err}")
+
+write_task(proj_dec, "T-002", status="checking")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-deterministic",
+                                        "prompt": "Task-ID: T-002"}}, proj_dec)
+check("DEC gate closed → checker still dispatches (worker-only gate)",
+      rc == 0, f"rc={rc} err={err}")
+
+# --------------------------------------- dispatch-guard: CON-audit staleness
+# Issue #110: the gate used to answer "did some constitution pass once," which
+# a job discovers only after workers have built against a document nothing
+# approved. These pin the two halves of the repair—latest round wins, and the
+# PASS is about specific bytes.
+print("dispatch-guard.py: CON-audit staleness (#110)")
 
 proj_stale = fresh_proj()
 con_pass(proj_stale)
@@ -1498,7 +1545,7 @@ check("CON gate closed → auditor still dispatches (no deadlock)",
 # translation of it.
 print("dispatch-guard.py: structured dispatch_id (issue #71)")
 proj_id = fresh_proj()
-con_pass(proj_id)
+audits_pass(proj_id)
 write_task(proj_id, "T-001", status="assigned")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1558,7 +1605,7 @@ check("dispatch_id carries an Audition-ID → exit 0", rc == 0, f"rc={rc} err={e
 # check, and escalate as T-001.
 print("dispatch-guard.py: per-dispatch task_name (issue #77)")
 proj_uniq = fresh_proj()
-con_pass(proj_uniq)
+audits_pass(proj_uniq)
 write_task(proj_uniq, "T-001", status="assigned")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1590,7 +1637,7 @@ check("a retry's distinct name still resolves → exit 0", rc == 0, f"rc={rc} er
 # against the gate itself, not only against the adapter that translates it.
 print("dispatch-guard.py: followup_task refusal (issue #77)")
 proj_fu = fresh_proj()
-con_pass(proj_fu)
+audits_pass(proj_fu)
 write_task(proj_fu, "T-001", status="checking")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1631,7 +1678,7 @@ check("namespaced worker w/o Task-ID → exit 2, blocked like bare form",
 # instead of normalized, and the executor comparison (`agent != executor`)
 # fails the same way against the task's bare `executor:` field. Both traps
 # only fire when the dispatch is otherwise legal enough to reach them.
-con_pass(proj_ns)
+audits_pass(proj_ns)
 write_task(proj_ns, "T-010", status="assigned", executor="worker-standard", executor_model="sonnet")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "agent-guild:worker-standard",
@@ -1661,7 +1708,7 @@ check("bare-name worker, fully legal (regression after normalization) → exit 0
 # fixtures pin its three extra denials on top of that already-legal path.
 print("dispatch-guard.py: checker-courier (issue #8)")
 proj_courier = fresh_proj()
-con_pass(proj_courier)
+audits_pass(proj_courier)
 write_task(proj_courier, "T-020", status="checking", checker="checker-judgment")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1707,7 +1754,7 @@ check("checker-courier dispatch once sentinel is cleared → exit 0", rc == 0, f
 # stop-gate.py can tell a genuinely running subagent apart from a stuck loop.
 print("dispatch-guard.py: in-flight markers (#111)")
 proj_dm = fresh_proj()
-con_pass(proj_dm)
+audits_pass(proj_dm)
 write_task(proj_dm, "T-040", status="assigned")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard",
@@ -1963,7 +2010,7 @@ rc, out, err = run_hook("subagent-return.py",
 check("id resolves but no task file → exit 0 loud, no hang", rc == 0 and "could not identify" in err, err)
 
 # auditor return
-con_pass(proj)
+audits_pass(proj)
 tx = transcript(proj, "Audit-ID: CON-audit")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "auditor", "transcript_path": tx}, proj)
@@ -2051,13 +2098,13 @@ rc, out, err = run_hook("subagent-return.py",
 check("auditor return validates r10, not r2 → exit 2",
       rc == 2 and "not valid" in err, f"rc={rc} err={err}")
 
-proj_dec = fresh_proj()
-write_constitution(proj_dec)
-write_verdict(proj_dec, "DEC-audit-r0.md", "PASS")
-tx = transcript(proj_dec, "Audit-ID: DEC-audit")
+proj_dec_return = fresh_proj()
+write_constitution(proj_dec_return)
+write_verdict(proj_dec_return, "DEC-audit-r0.md", "PASS")
+tx = transcript(proj_dec_return, "Audit-ID: DEC-audit")
 rc, out, err = run_hook("subagent-return.py",
-                        {"agent_type": "auditor", "transcript_path": tx}, proj_dec)
-dec_stamp = os.path.join(proj_dec, ".agent-guild", "state", "verdicts",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_dec_return)
+dec_stamp = os.path.join(proj_dec_return, ".agent-guild", "state", "verdicts",
                          "DEC-audit-r0.md.sha256")
 check("auditor returns valid DEC verdict → exit 0", rc == 0, f"rc={rc} err={err}")
 check("DEC verdict gets no stamp (tasks/ mutates; digest would be a lie)",

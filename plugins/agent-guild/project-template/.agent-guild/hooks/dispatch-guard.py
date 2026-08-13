@@ -426,6 +426,16 @@ def main(data):
     if not ok:
         return _lib.block(reason)
 
+    # A task file provably exists by now (the missing-task block above), which
+    # is the precondition this gate needs: tasks without a DEC-audit PASS are a
+    # decomposition nothing has checked for the one hole no checker downstream
+    # can see. A task that was never written gets no checker, so a spec section
+    # no task covers is simply never built, and every verdict in the job is
+    # green while it happens (#161).
+    ok, reason = _lib.audit_gate("DEC-audit")
+    if not ok:
+        return _lib.block(reason)
+
     if status != "assigned":
         return _lib.block(
             f"{tid} is '{status}', not 'assigned'. A worker runs only on an "

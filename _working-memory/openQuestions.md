@@ -65,6 +65,8 @@ Two more surfaced in this repo during #117's own run. Both are about the courier
 
 Verified 2026-07-31: `SubagentStop` fires on codex-cli 0.145.0 at agent completion, about a second after `SubagentStart`, with a complete payload. Four earlier probes across two projects captured nothing, under both a no-matcher catch-all and the guild's own agent-name matcher, while `SessionStart`, `PreToolUse`, and `Stop` all landed in the same directories through the same recorder. The one asymmetry noticed but not tested: those capture directories sat under `/private/tmp`, and Codex's sandbox denies writes there, though the parent's `PreToolUse` captures reached them anyway. Until this is understood, treat an absent capture as weak evidence and register a control event known to fire in the same session before concluding anything from silence.
 
+That method earned itself on 2026-08-12. #134's step 0 spike concluded that guild hooks never fire for workflow-spawned agents, and the finding only holds because the same dispatch was run through the ordinary Agent path in the same session and was refused. Silence alone would have proven nothing. The question here stays open; what's settled is that the control is worth the extra minute.
+
 ## Should a Gating Heuristic Announce Itself?
 
 `check-job-spec.py` refuses an auditor dispatch on the first rule that fires, and eleven rules all block identically. Seven of them prove: a cited line exists, a script is executable, the graph is acyclic. Four infer, each carrying constants tuned against a single seven-task corpus. `run_rules` already orders them proofs-first and its docstring says so, but nothing downstream carries the distinction.

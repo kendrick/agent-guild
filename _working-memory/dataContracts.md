@@ -30,7 +30,11 @@ Nothing below `## Clauses` is safe to add to lightly: `check-job-spec.parse_cons
 
 ## Task Frontmatter
 
-Source: `.agent-guild/templates/task.md`. Fields: `id`, `title`, `spec` (anchor into `spec.md`), `clauses[]`, `executor`, `executor_model`, `checker`, `check_method`, `status`, `retries`, `max_retries`, `deps[]`, `escalations[]`, `artifacts[]`. Every clause in `clauses` must appear in `check_method`, named to a script invocation or a `checker-judgment` rubric.
+Source: `.agent-guild/templates/task.md`. Fields: `id`, `title`, `spec` (anchor into `spec.md`), `clauses[]`, `executor`, `executor_model`, `checker`, `check_method`, `status`, `retries`, `max_retries`, `deps[]`, `dep_rationale[]`, `owns[]`, `escalations[]`, `artifacts[]`. Every clause in `clauses` must appear in `check_method`, named to a script invocation or a `checker-judgment` rubric.
+
+`owns[]` (#133) declares every path the task writes: an exact file path, or a directory prefix ending in `/`. Two tasks whose entries overlap must be connected by a dep path, which is what keeps them out of one wave (`rule_R13`). An empty `owns` is the ABSENCE of a claim, not a claim to write nothing, and it is the shipped template default. `ready-set.py` therefore refuses to group a task that declares none with any peer (#162); R13 and R14 still skip such a task entirely, which is the half of #162 still open.
+
+`dep_rationale[]` (#125) carries one `T-NNN: why` line per entry in `deps`. `rule_R14` checks only that the two lists correspond one to one, and only on a task that also declares `owns`. Whether a rationale actually holds is DEC-audit judgment, not a linter's.
 
 `check_method` is normally a YAML block scalar (`>-`), which `_lib.parse_frontmatter` reads since #109; before that it parsed to `''` and the checker ran nothing. Any block scalar works now (`|`, `>`, with any chomping indicator), matching YAML semantics closely enough that Ruby's psych agrees on the kit's fixtures. Explicit indentation indicators (`|2`), anchors, and nesting are still unsupported and always were. A task that cites clauses while `check_method` resolves empty is refused by `dispatch-guard` for workers and checkers alike.
 
@@ -89,3 +93,11 @@ Two figures the ledger still does not carry, both visible in the same vendor `us
 `dispatch-guard` is the consumer and treats the three exits differently: 1 blocks and quotes the diagnostic with a reproduce command, 3 blocks with its own message because a linter that could not read the paperwork is no evidence the paperwork is sound, and a missing script or a timeout allows the dispatch. Missing is the payload-freeze case, where a repo's hooks can be newer than the scripts beside them and a hard fail would brick every auditor dispatch. A timeout appends to `state/log/gate-gaps.log` and writes a stderr note, so an un-run gate is auditable rather than silent.
 
 The rule severities it checks against are imported from `validate-verdict.py`'s `DEFECT_SEVERITIES` rather than restated, so the pass-carrying-a-defect rule keeps one home. (#132)
+
+## Ready Set
+
+`ready-set.py [STATE] [--running T-NNN ...]` prints one JSON object with four keys, always in this order: `wave` (dispatch executors now, each `{id, agent, reason}`), `checks` (`needs-check` tasks owing a checker, same shape), `deferred` (`{id, reason}`, reason naming unmet deps, an owns collision, undeclared ownership, or a spent retry budget), and `attention` (`{id, reason}`: a `disputed` task, or one whose dep is `abandoned`). Exit 0 computed, 3 infra: an unreadable or unparseable task file, a duplicate frontmatter `id`, or a STATE dir that does not exist. A STATE dir with no `tasks/` is exit 0 with empty buckets, since no job active is not an error.
+
+It is a pure function of the task files plus the supplied `--running` list, and it deliberately never reads `state/log/in-flight/` itself. That is what makes a Claude host and a Codex host compute the same wave from the same inputs; a fallback to reading markers here would reintroduce the host drift the script exists to remove. Determinism is part of the contract: every bucket sorts ascending by numeric task id, and where two candidates collide the lower id wins the wave.
+
+`stop-gate.py` is the only in-tree consumer. It supplies `--running` from its own fresh markers and must honor all four buckets, since a task the gate advises against ready-set's own verdict is how #165's review found the gate instructing a dependency violation. A missing script, a timeout, a non-zero exit, or unparseable JSON all degrade to per-task `_next_move` advice; the gate never blocks less than it did before, only presents differently.

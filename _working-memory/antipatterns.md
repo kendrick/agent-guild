@@ -199,3 +199,19 @@ So the entry holds, and holds harder than when it was written. Its precondition 
 **What broke:** The suite still aborts, now at 505, with 507, 795, 797 and 809 behind it. T-008's checker found the run dying identically with and without the fix; T-009's found it reaching 18 checks before dying anyway. Three checkers across three tasks have now lost time to the same file.
 **Why we backed out:** Naming a site treats a file-wide pattern as a point defect, and each fix looks complete until the next mutation finds the next one.
 **Don't suggest:** guarding a single named dereference. Sweep the file for the pattern, and say in the task that the guard is exempt from the mutation arm because it repairs the instrument rather than adding behavior.
+
+## 2026-08-12: Don't drive guild dispatches from a Workflow script
+
+#134 proposed a `drive-job` workflow to execute Phase 2 on a Claude host, with `ready-set.py` computing and the workflow fanning out. Its step 0 spike killed it: guild hooks do not fire for workflow-spawned agents. `worker-bulk` dispatched from a workflow with no `Task-ID` ran and returned, leaving no `dispatches.log` line and no in-flight marker, while the identical dispatch through the Agent path was refused by `dispatch-guard`.
+
+Such a driver bypasses `Task-ID` identity, the `executor_model` tier match, `reserve_crossing`, and the in-flight markers, and it does so invisibly: every gate reports green by never running. That is the #94 and #141 shape, where work returns that no dispatch gate authorized.
+
+**Don't suggest** driving Phase 2, a wave, or any gated dispatch from `Workflow`, and don't suggest re-implementing the gates inside the workflow script to compensate. A second copy of the enforcement is what this repo's one-source build exists to prevent, and it would drift. Workflows are fine for anything the guild does not need gated; the spike itself was one. This reopens only if hooks can observe workflow-spawned dispatches, or the harness documents that they are meant to.
+
+## 2026-08-12: Don't read an empty declaration as a negative claim
+
+`ready-set.py`'s `_owns_overlap` returned False whenever either side's `owns` was empty, reasoning that a task declaring no paths "can't collide with anything." That treats an absent claim as a claim to write nothing. Since `owns: []` is what `templates/task.md` ships and what `new-task.py` stamps, undeclared was every fresh task's default state, so the wave's safety guarantee evaporated exactly where nobody had thought about ownership yet, and the wave still printed `no owns overlap` as its reason for grouping them (#162).
+
+The fix reads undeclared as unknown: a task declaring no `owns` waves alone. Note the shape of the escape, since the obvious alternative is worse. Deferring every undeclared task instead would deadlock a decomposition that declares none, because nothing would ever reach a wave and nothing would ever dispatch.
+
+**Don't suggest** defaulting an absent declaration to the permissive reading in any gate, and don't suggest a reason string that asserts a check which did not run. Where a field's absence is the shipped default, the absent case IS the common case, so it gets the conservative branch. Where the conservative branch could stall the loop, make it degrade to the pre-feature behavior rather than to a refusal.

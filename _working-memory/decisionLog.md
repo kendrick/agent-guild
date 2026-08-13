@@ -14,6 +14,20 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-12: An Undeclared `owns` Rides Alone Rather Than Deferring
+
+**Source:** #162 half A, `09cff3e`, shipped inside #165; comment recorded on #162
+
+**Context:** #133 gave tasks `owns` and the wave uses it to keep colliding writers apart. But `_owns_overlap` returned False whenever either side was empty, and `owns: []` is what the template ships, so the default task was the unchecked one. The wave grouped tasks nobody had compared and printed "no owns overlap" as the reason.
+
+**Decision:** Two tasks share a wave only if both declare `owns`. A task declaring none still dispatches, alone. The reason strings now name what was actually compared.
+
+**Why alone and not deferred.** Deferring every undeclared task looks stricter and is worse: in a decomposition that declares none, nothing would ever reach a wave, so nothing would ever dispatch and the job would deadlock behind a safety rule. Alone is the pre-wave behavior, so the failure mode of an unadopted field is losing the new speed, never losing the ability to run. That shape is worth reaching for whenever a conservative branch could stall a loop: degrade to the old behavior, not to a refusal.
+
+**Why this half needed no decision.** The issue was filed whole because R13's opt-in scoping exists to keep archived corpora green. That constraint turned out not to reach `ready-set.py` at all: the script is new, no corpus runs through it, and no test asserted the permissive pairing. Splitting the issue on that line let the unsafe default get fixed before merge while the linter question stayed open on its own terms.
+
+**Alternatives considered:** requiring `owns` at the linter now, rejected because it changes whether archived corpora pass and deserves an unhurried migration decision; fixing only the reason string, rejected because an honest label on an unsafe grouping is still an unsafe grouping.
+
 ## 2026-08-12: Guild Hooks Do Not Fire For Workflow-Spawned Agents
 
 **Source:** #134 step 0 spike on `fanout-driver-and-gate-fixes`; comment recorded on #134

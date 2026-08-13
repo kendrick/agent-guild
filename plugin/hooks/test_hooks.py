@@ -1407,6 +1407,119 @@ rc, out, err = run_hook("dispatch-guard.py",
 check("cites clauses, no check_method → checker blocked too",
       rc == 2 and "check_method is empty" in err, f"rc={rc} err={err}")
 
+# --------------------------------- dispatch-guard: dep gate (#135, worker path)
+# A worker dispatch used to ignore `deps` entirely—dispatch-guard checked
+# status/executor/model/retries but never whether a dep had actually produced
+# anything. This is net-new enforcement: a dep now has to be `complete`, or at
+# `needs-check`/`checking` with all of ITS OWN deps `complete` (one level of
+# speculation), before a worker on the task downstream of it is legal.
+print("dispatch-guard.py: dep gate (#135)")
+proj_dep = fresh_proj()
+audits_pass(proj_dep)
+seed_ready_set(proj_dep)
+
+# H1: dep at pending → blocked, naming the dep and its status.
+write_task(proj_dep, "T-101", status="pending", deps="[]")
+write_task(proj_dep, "T-102", status="assigned", deps="[T-101]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-102"}}, proj_dep)
+check("H1: dep at pending → exit 2", rc == 2, f"rc={rc} err={err}")
+check("H1: message names the dep and its status", "T-101 (pending)" in err, err)
+
+# H2: dep at needs-check with no deps of its own → satisfies, exit 0.
+write_task(proj_dep, "T-103", status="needs-check", deps="[]")
+write_task(proj_dep, "T-104", status="assigned", deps="[T-103]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-104"}}, proj_dep)
+check("H2: dep needs-check, its own deps empty → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# H2b: the same permission, but earned rather than vacuous. T-117's own dep
+# resolved, so it satisfies clause 2 for real. Without this the gate's
+# grandparent read is untested: every other fixture gives the dep an empty
+# `deps`, and on those the read is a no-op. Delete it and H3 still passes for
+# the wrong reason—an unread grandparent is an absent one, which fails the
+# predicate the same way an unverified one does—so the only thing that
+# catches the loss is a chain the gate is supposed to ALLOW.
+write_task(proj_dep, "T-116", status="complete", deps="[]")
+write_task(proj_dep, "T-117", status="needs-check", deps="[T-116]")
+write_task(proj_dep, "T-118", status="assigned", deps="[T-117]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                        "prompt": "Task-ID: T-118"}}, proj_dep)
+check("H2b: dep needs-check whose own dep is complete → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+# H3: dep at needs-check, but ITS dep is only needs-check too (depth 2) →
+# the speculation doesn't reach two levels deep, so this stays blocked.
+write_task(proj_dep, "T-106", status="needs-check", deps="[]")
+write_task(proj_dep, "T-105", status="needs-check", deps="[T-106]")
+write_task(proj_dep, "T-107", status="assigned", deps="[T-105]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-107"}}, proj_dep)
+check("H3: dep's own dep unresolved at depth 2 → exit 2", rc == 2, f"rc={rc} err={err}")
+
+# H4: dep at rework, and separately at disputed → both block. Neither status
+# is a legitimate build input regardless of what its own deps look like.
+write_task(proj_dep, "T-108", status="rework", deps="[]")
+write_task(proj_dep, "T-109", status="assigned", deps="[T-108]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-109"}}, proj_dep)
+check("H4: dep at rework → exit 2", rc == 2 and "T-108 (rework)" in err, err)
+
+write_task(proj_dep, "T-110", status="disputed", deps="[]")
+write_task(proj_dep, "T-111", status="assigned", deps="[T-110]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-111"}}, proj_dep)
+check("H4: dep at disputed → exit 2", rc == 2 and "T-110 (disputed)" in err, err)
+
+# H5: dep at complete → exit 0 (the ordinary, non-speculative case still works).
+write_task(proj_dep, "T-112", status="complete", deps="[]")
+write_task(proj_dep, "T-113", status="assigned", deps="[T-112]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-113"}}, proj_dep)
+check("H5: dep at complete → exit 0 (regression guard)", rc == 0, f"rc={rc} err={err}")
+
+# H6: ready-set.py absent (a copied-in kit that predates #135)—allow through,
+# not a block, per the same payload-freeze posture _job_spec_block takes.
+# Uses a proj with no seed_ready_set(), so .agent-guild/scripts/ready-set.py
+# genuinely doesn't exist.
+proj_nogate = fresh_proj()
+audits_pass(proj_nogate)
+write_task(proj_nogate, "T-201", status="pending")
+write_task(proj_nogate, "T-202", status="assigned", deps="[T-201]")
+gate_gaps_dep = os.path.join(proj_nogate, ".agent-guild", "state", "log", "gate-gaps.log")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-202"}}, proj_nogate)
+check("H6: ready-set.py missing → exit 0 (allow through)", rc == 0, f"rc={rc} err={err}")
+check("H6: gate-gaps.log records the gap",
+      os.path.exists(gate_gaps_dep) and "T-202" in open(gate_gaps_dep).read(),
+      open(gate_gaps_dep).read() if os.path.exists(gate_gaps_dep) else "gate-gaps.log missing")
+check("H6: stderr carries a note", "ready-set.py" in err and "T-202" in err, err)
+
+# H7: a dep task FILE that exists but is unparseable to ready-set.py's
+# stricter frontmatter parser (no closing '---')—the orchestrator's data to
+# fix, not an infrastructure gap, so this BLOCKS rather than allowing
+# through, the opposite posture from H6.
+bad_dep_path = os.path.join(proj_dep, ".agent-guild", "state", "tasks", "T-114.md")
+with open(bad_dep_path, "w", encoding="utf-8") as f:
+    f.write(
+        "---\nid: T-114\nstatus: pending\nretries: 0\ndeps: []\n"
+        "executor: worker-standard\nchecker: checker-deterministic\n"
+    )
+write_task(proj_dep, "T-115", status="assigned", deps="[T-114]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-115"}}, proj_dep)
+check("H7: unparseable dep file → exit 2", rc == 2, f"rc={rc} err={err}")
+check("H7: message names the dep file", "T-114.md" in err, err)
+
+# H8: the gate is worker-path only—a checker dispatch on a `checking` task
+# with the same unmet dep must not be touched by it.
+write_task(proj_dep, "T-116", status="pending")
+write_task(proj_dep, "T-117", status="checking", deps="[T-116]", checker="checker-deterministic")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-deterministic", "prompt": "Task-ID: T-117"}}, proj_dep)
+check("H8: checker dispatch ignores the dep gate → exit 0", rc == 0, f"rc={rc} err={err}")
+
 # ------------------------------------------- dispatch-guard: DEC-audit gate
 # Issue #161: the decomposition audit used to be a memo. It is the only check
 # in the system that can see a spec section no task covers, and that hole is

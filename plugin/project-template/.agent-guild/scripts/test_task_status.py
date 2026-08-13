@@ -40,7 +40,10 @@ def check(label, cond, detail=""):
 LEGAL_TRANSITIONS = {
     "pending": ["assigned", "abandoned"],
     "assigned": ["needs-check", "disputed", "abandoned"],
-    "needs-check": ["checking", "abandoned"],
+    # needs-check -> rework is invalidation (#135): the worker returned, then
+    # a dependency failed its check, so the artifact goes back without
+    # spending a checker on it.
+    "needs-check": ["checking", "rework", "abandoned"],
     "checking": ["complete", "rework", "abandoned"],
     "rework": ["assigned", "abandoned"],
     "disputed": ["complete", "rework", "checking", "abandoned"],
@@ -98,18 +101,37 @@ for cur, successors in LEGAL_TRANSITIONS.items():
             )
 
 # --------------------------------------------------- 2. terminal statuses
-print("terminal statuses (complete, abandoned) accept no transition")
+print("abandoned accepts no transition; complete accepts only rework")
 
-for cur in TERMINAL_STATUSES:
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="abandoned")
+    for nxt in ALL_STATUSES:
+        if nxt == "abandoned":
+            continue
+        rc, out, err = run_script(d, "T-001", nxt)
+        check(f"abandoned -> {nxt}: exit 1 (terminal)", rc == 1, f"rc={rc} err={err}")
+        check(f"abandoned -> {nxt}: stderr names it terminal", "terminal" in err, err)
+
+# `complete` stopped being terminal with #135: invalidation has to be able to
+# reopen a task that built on a dependency which then failed its check. Every
+# other successor stays refused, so the hatch is one edge and not a general
+# reopening. Each case gets a fresh fixture—a shared one would let the legal
+# transition land and leave the rest testing a task that had already moved.
+for nxt in ALL_STATUSES:
+    if nxt == "complete":
+        continue
     with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
         tasks_dir = os.path.join(d, "tasks")
-        write_task(tasks_dir, "T-001", status=cur)
-        for nxt in ALL_STATUSES:
-            if nxt == cur:
-                continue
-            rc, out, err = run_script(d, "T-001", nxt)
-            check(f"{cur} -> {nxt}: exit 1 (terminal)", rc == 1, f"rc={rc} err={err}")
-            check(f"{cur} -> {nxt}: stderr names it terminal", "terminal" in err, err)
+        write_task(tasks_dir, "T-001", status="complete")
+        rc, out, err = run_script(d, "T-001", nxt)
+        if nxt == "rework":
+            check("complete -> rework: exit 0 (invalidation hatch)", rc == 0,
+                  f"rc={rc} err={err}")
+        else:
+            check(f"complete -> {nxt}: exit 1", rc == 1, f"rc={rc} err={err}")
+            check(f"complete -> {nxt}: stderr names rework as the only successor",
+                  "rework" in err and "legal successors" in err, err)
 
 # -------------------------------------------- 3. illegal transitions, named
 print("an illegal transition exits 1 and names the legal successors")

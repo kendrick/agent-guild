@@ -18,11 +18,11 @@ does not invent transitions. The map:
 
     pending      -> assigned, abandoned
     assigned     -> needs-check, disputed, abandoned
-    needs-check  -> checking, abandoned
+    needs-check  -> checking, rework, abandoned
     checking     -> complete, rework, abandoned
     rework       -> assigned, abandoned
     disputed     -> complete, rework, checking, abandoned
-    complete     -> (terminal)
+    complete     -> rework
     abandoned    -> (terminal)
 
 Rationale for the two edges the table doesn't spell out in one line:
@@ -44,13 +44,34 @@ Rationale for the two edges the table doesn't spell out in one line:
     disputed->rework, mirroring the checking->rework edge that path
     starts from.
 
+Two more edges exist for invalidation (#135), which is what happens when a
+dependency fails its check after something downstream already built on its
+artifact. The descendant never failed anything itself, so it doesn't arrive
+at rework the usual way:
+
+  - needs-check -> rework. The worker returned and the dep failed before a
+    checker ran. Sending it back now instead of through `checking` is the
+    point: nothing is learned by spending a checker on an artifact already
+    known to rest on something about to change.
+  - complete -> rework. The recovery hatch, and it should stay rare. The
+    contract asks you not to complete a task while any of its deps is still
+    unverified, which costs nothing—completion was never on the critical
+    path, dispatch was—and makes an invalidated `complete` task a sign the
+    rule was skipped. It's an edge rather than a refusal because a job that
+    can't be driven out of a wrong state is worse than one status that
+    reopens.
+
+`complete` is therefore no longer terminal, though `abandoned` still is.
+A reopened task rejoins `open_tasks()` and the stop gate drives it, which
+is what you want: work resting on a failed dependency should hold the turn
+open until it's rebuilt.
+
 Judgment call: `abandoned` is reachable from every non-terminal status
 (pending, assigned, needs-check, checking, rework, disputed)—"cancelled,
 with a logged reason" is not scoped to any one point in the lifecycle by
 the contract text. `complete` is NOT a legal predecessor of `abandoned`:
 a finished task being retroactively cancelled isn't the "cancelled before
-it got done" shape the word describes, and the contract never says a
-`complete` task can be reopened at all.
+it got done" shape the word describes.
 
 ## Byte preservation
 
@@ -98,11 +119,13 @@ STATUS_ORDER = [
 TRANSITIONS = {
     "pending": frozenset({"assigned", "abandoned"}),
     "assigned": frozenset({"needs-check", "disputed", "abandoned"}),
-    "needs-check": frozenset({"checking", "abandoned"}),
+    "needs-check": frozenset({"checking", "rework", "abandoned"}),
     "checking": frozenset({"complete", "rework", "abandoned"}),
     "rework": frozenset({"assigned", "abandoned"}),
     "disputed": frozenset({"complete", "rework", "checking", "abandoned"}),
-    "complete": frozenset(),
+    # Invalidation only (#135). See the transition-map notes above for why
+    # this edge exists and why reaching for it should be rare.
+    "complete": frozenset({"rework"}),
     "abandoned": frozenset(),
 }
 

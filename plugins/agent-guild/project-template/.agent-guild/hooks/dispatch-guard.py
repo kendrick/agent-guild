@@ -12,6 +12,10 @@ dispatch, this blocks unless:
     check list (#109);
   - the dispatch is state-legal for the role (worker ⇒ assigned,
     checker ⇒ checking);
+  - for a worker, every dep satisfies as a build input—complete, or
+    needs-check/checking with all of ITS OWN deps complete (one level of
+    speculation, #135)—so nothing starts building against inputs its own
+    inputs haven't produced yet;
   - a worker's tier budget isn't already spent (retries within max), catching
     a forgotten escalation;
   - a worker's dispatched model matches the task's current tier, catching a
@@ -37,6 +41,7 @@ and drops an in-flight marker (_lib.mark_in_flight) under
 that's genuinely still working reads differently from a stalled loop.
 subagent-return.py clears the marker once the subagent's return resolves.
 """
+import importlib.util
 import os
 import re
 import subprocess
@@ -210,6 +215,135 @@ def _job_spec_block(ident):
         detail,
         "Fix that before spending an opus auditor on a defect a script "
         f"already proved. Reproduce with: {reproduce}",
+    )
+
+
+def _log_dep_gate_gap(tid, detail):
+    """Best-effort record that ready-set.py couldn't be loaded, so a worker
+    dispatched with the dependency gate un-consulted for `tid`. Same path
+    resolution and bare except Exception: pass posture as _log_gate_gap
+    above—this is what keeps an allow-through-on-missing-module auditable
+    instead of silent."""
+    try:
+        os.makedirs(_lib.state_path("log"), exist_ok=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with open(_lib.state_path("log", "gate-gaps.log"), "a", encoding="utf-8") as f:
+            f.write(
+                f"{ts} | dep-gate | {tid} | ready-set.py unavailable "
+                f"({detail}); worker dispatched with the dependency gate "
+                "un-run\n"
+            )
+    except Exception:
+        pass
+
+
+_READY_SET_MODULE = None
+_READY_SET_LOAD_ATTEMPTED = False
+
+
+def _load_ready_set():
+    """ready-set.py, loaded by path and cached at module level so repeated
+    dispatches in one process don't re-exec it. Copies the `_load_module`
+    idiom ready-set.py itself uses at its own top (for check-diff-scope.py):
+    the filename has a hyphen, so it can't be imported the normal way.
+
+    Returns None—never raises—if the file is missing, or it (or anything it
+    transitively imports, e.g. its own check-diff-scope.py) fails to load.
+    Same reasoning as _job_spec_block's precedent above: install.py never
+    upgrades a project's copied-in .agent-guild/ payload, so a repo can run
+    hooks newer than its own scripts/. An old ready-set.py never proposes
+    speculative dispatch in the first place, so a gate built to catch a bad
+    speculation has nothing to catch there—allowing through is safe by
+    construction, not a shortcut."""
+    global _READY_SET_MODULE, _READY_SET_LOAD_ATTEMPTED
+    if _READY_SET_MODULE is not None or _READY_SET_LOAD_ATTEMPTED:
+        return _READY_SET_MODULE
+    _READY_SET_LOAD_ATTEMPTED = True
+    path = os.path.join(_lib.project_dir(), ".agent-guild", "scripts", "ready-set.py")
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "dispatch_guard_ready_set", path
+        )
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    _READY_SET_MODULE = module
+    return module
+
+
+def _dep_gate_block(tid, task):
+    """None if a worker dispatch on `tid` is legal with respect to its deps,
+    else the message for _lib.block(). Worker-path only; the position in
+    main() (right after the status≠assigned check, before the executor
+    match) is deliberate—a wrong status is the more fundamental defect and
+    its own message already tells the orchestrator how to fix it.
+
+    Fast path: an empty or absent `deps` skips the gate entirely, so most
+    tasks pay nothing for it.
+
+    Otherwise this evaluates ready-set.py's dep_unmet_reason/unmet_deps
+    (frozen interface, #135)—a dep counts as a build input once it's
+    complete, or at needs-check/checking with all of ITS OWN deps
+    complete (one level of speculation)—against a minimal two-level `tasks`
+    dict: the dispatched task, its deps, and those deps' own deps, which is
+    as deep as the predicate ever looks.
+
+    Two failure modes get opposite postures, and that split is the point:
+      - ready-set.py missing, or it (or a transitive import) failing to
+        load: ALLOW the dispatch through (see _load_ready_set's docstring).
+      - a dep task FILE that's missing or unparseable: BLOCK, naming the
+        file. That's the orchestrator's data to fix, not an infrastructure
+        gap, so conflating the two would hide a real defect behind the
+        payload-freeze allowance meant for a different problem.
+    """
+    deps = task.get("deps")
+    if isinstance(deps, str):
+        deps = [deps] if deps.strip() else []
+    if not deps:
+        return None
+
+    module = _load_ready_set()
+    if module is None:
+        _log_dep_gate_gap(tid, "module missing or failed to load")
+        sys.stderr.write(
+            f"dispatch-guard: ready-set.py is missing or failed to load—the "
+            f"dependency gate did not run for {tid}. Logged to "
+            ".agent-guild/state/log/gate-gaps.log; the worker is dispatched "
+            "unchecked.\n"
+        )
+        return None
+
+    tasks = {}
+    try:
+        tasks[tid] = module.read_task(_lib.task_file(tid))
+        for dep_id in deps:
+            if dep_id in tasks:
+                continue
+            dep_task = module.read_task(_lib.task_file(dep_id))
+            tasks[dep_id] = dep_task
+            for grand_id in dep_task.get("deps") or []:
+                if grand_id not in tasks:
+                    tasks[grand_id] = module.read_task(_lib.task_file(grand_id))
+    except module.TaskParseError as e:
+        return (
+            f"{tid}'s dep graph couldn't be read: {e}. That's data to fix "
+            f"in the task file, not an infrastructure gap—repair it, then "
+            f"dispatch the worker on {tid} again."
+        )
+
+    unmet = module.unmet_deps(tasks[tid], tasks)
+    if not unmet:
+        return None
+    first = unmet[0].split()[0]
+    return (
+        f"{tid}'s deps aren't ready to build on: {', '.join(unmet)}. A "
+        "worker dispatches when every dep is complete, or is at "
+        "needs-check/checking with all of ITS deps complete (one level of "
+        "speculation). Wait—ready-set.py offers this task the moment that "
+        f"holds; if {first} is in rework, drive its retry first."
     )
 
 
@@ -496,6 +630,10 @@ def main(data):
             "assigned task. If this is rework, set status back to assigned "
             "first; if it's a fresh task, move it pending → assigned."
         )
+
+    dep_msg = _dep_gate_block(tid, task)
+    if dep_msg:
+        return _lib.block(dep_msg)
 
     executor = str(task.get("executor", "")).strip()
     if executor and agent != executor:

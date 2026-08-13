@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Fixture-based tests for task-status.py. Every fixture is a scratch
+`state/tasks/` directory in a fresh temp dir, and the script runs as a
+subprocess so these tests exercise the real CLI contract (exit codes,
+stderr messages, on-disk bytes)—matching test_ready_set.py's approach for
+its sibling script.
+
+The transition map below is hardcoded independently of task-status.py's
+own TRANSITIONS constant, not imported from it: importing it would only
+prove the script agrees with itself, not that it matches
+.agent-guild/CLAUDE.md's "Task lifecycle" table, which is what these tests
+are actually checking.
+
+Run: python3 .agent-guild/scripts/test_task_status.py
+"""
+import os
+import subprocess
+import sys
+import tempfile
+
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT = os.path.join(SCRIPTS_DIR, "task-status.py")
+
+passed = failed = 0
+
+
+def check(label, cond, detail=""):
+    global passed, failed
+    if cond:
+        passed += 1
+        print(f"  ok   {label}")
+    else:
+        failed += 1
+        print(f"  FAIL {label}  {detail}")
+
+
+# The map under test, derived independently from CLAUDE.md's lifecycle
+# table for the same reason test_ready_set.py doesn't reuse ready-set.py's
+# own constants for its fixtures' expected values.
+LEGAL_TRANSITIONS = {
+    "pending": ["assigned", "abandoned"],
+    "assigned": ["needs-check", "disputed", "abandoned"],
+    "needs-check": ["checking", "abandoned"],
+    "checking": ["complete", "rework", "abandoned"],
+    "rework": ["assigned", "abandoned"],
+    "disputed": ["complete", "rework", "checking", "abandoned"],
+}
+TERMINAL_STATUSES = ["complete", "abandoned"]
+ALL_STATUSES = list(LEGAL_TRANSITIONS) + TERMINAL_STATUSES
+
+
+def write_task(tasks_dir, tid, status="pending", retries=0, extra=""):
+    """A minimal task fixture in the real frontmatter shape: id, status,
+    retries, plus whatever `extra` frontmatter lines the caller wants."""
+    os.makedirs(tasks_dir, exist_ok=True)
+    content = (
+        "---\n"
+        f"id: {tid}\n"
+        f"status: {status}\n"
+        f"retries: {retries}\n"
+        f"{extra}"
+        "---\n\n## Spec excerpt\n\nFixture body.\n"
+    )
+    path = os.path.join(tasks_dir, f"{tid}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
+
+
+def run_script(state_dir, task_id, status, *extra_argv):
+    proc = subprocess.run(
+        [sys.executable, SCRIPT, task_id, status, state_dir, *extra_argv],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+# ------------------------------------------------- 1. every legal transition
+print("every legal transition applies and exits 0")
+
+for cur, successors in LEGAL_TRANSITIONS.items():
+    for nxt in successors:
+        with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+            tasks_dir = os.path.join(d, "tasks")
+            path = write_task(tasks_dir, "T-001", status=cur)
+            rc, out, err = run_script(d, "T-001", nxt)
+            check(f"{cur} -> {nxt}: exit 0", rc == 0, f"rc={rc} err={err}")
+            check(
+                f"{cur} -> {nxt}: status line updated",
+                f"status: {nxt}\n" in read(path),
+                read(path),
+            )
+
+# --------------------------------------------------- 2. terminal statuses
+print("terminal statuses (complete, abandoned) accept no transition")
+
+for cur in TERMINAL_STATUSES:
+    with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+        tasks_dir = os.path.join(d, "tasks")
+        write_task(tasks_dir, "T-001", status=cur)
+        for nxt in ALL_STATUSES:
+            if nxt == cur:
+                continue
+            rc, out, err = run_script(d, "T-001", nxt)
+            check(f"{cur} -> {nxt}: exit 1 (terminal)", rc == 1, f"rc={rc} err={err}")
+            check(f"{cur} -> {nxt}: stderr names it terminal", "terminal" in err, err)
+
+# -------------------------------------------- 3. illegal transitions, named
+print("an illegal transition exits 1 and names the legal successors")
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="pending")
+    # pending's only legal successors are assigned and abandoned; needs-check
+    # is never legal directly from pending.
+    rc, out, err = run_script(d, "T-001", "needs-check")
+    check("illegal: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("illegal: names 'assigned' as a legal successor", "assigned" in err, err)
+    check("illegal: names 'abandoned' as a legal successor", "abandoned" in err, err)
+    check(
+        "illegal: does not claim needs-check is legal",
+        "legal successors of pending: needs-check" not in err,
+        err,
+    )
+    check("illegal: file left untouched", "status: pending" in read(
+        os.path.join(tasks_dir, "T-001.md")
+    ), "status line should not have changed")
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="checking")
+    # checking's legal successors are complete, rework, abandoned—never
+    # straight back to needs-check.
+    rc, out, err = run_script(d, "T-001", "needs-check")
+    check("illegal (checking): exit 1", rc == 1, f"rc={rc} err={err}")
+    for name in ("complete", "rework", "abandoned"):
+        check(f"illegal (checking): names '{name}'", name in err, err)
+
+# ------------------------------------------------- 4. --increment-retries
+print("--increment-retries bumps retries and leaves everything else alone")
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    path = write_task(tasks_dir, "T-001", status="rework", retries=1)
+    before = read(path)
+    rc, out, err = run_script(d, "T-001", "assigned", "--increment-retries")
+    check("increment: exit 0", rc == 0, f"rc={rc} err={err}")
+    after = read(path)
+    check("increment: retries bumped to 2", "retries: 2\n" in after, after)
+    check("increment: status updated to assigned", "status: assigned\n" in after, after)
+
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    diff = [
+        (i, b, a)
+        for i, (b, a) in enumerate(zip(before_lines, after_lines))
+        if b != a
+    ]
+    check(
+        "increment: exactly the status and retries lines differ",
+        len(diff) == 2
+        and {b for _, b, _ in diff} == {"status: rework", "retries: 1"},
+        diff,
+    )
+
+# without the flag, retries must not move at all
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    path = write_task(tasks_dir, "T-001", status="rework", retries=1)
+    rc, out, err = run_script(d, "T-001", "assigned")
+    check("no-increment: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("no-increment: retries untouched", "retries: 1\n" in read(path), read(path))
+
+# --------------------------------------------------- 5. byte preservation
+print("byte preservation: only the status line changes, nothing else")
+
+FIXTURE_EXTRA = (
+    "max_retries: 2\n"
+    "deps: []\n"
+    "dep_rationale: []\n"
+    "# One entry per dep in `deps`, naming what THIS task actually needs\n"
+    "# from that one task—not a summary of what the other task does.\n"
+    "owns: []\n"
+    "# Each entry is an exact file path, or a directory prefix ending in\n"
+    "# `/` (covers everything under it).\n"
+    "escalations: []\n"
+    "artifacts:\n"
+    "  - some/weird/path.py\n"
+)
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    path = write_task(tasks_dir, "T-001", status="checking", retries=0, extra=FIXTURE_EXTRA)
+    before = read(path)
+    rc, out, err = run_script(d, "T-001", "complete")
+    check("byte-preservation: exit 0", rc == 0, f"rc={rc} err={err}")
+    after = read(path)
+
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    check(
+        "byte-preservation: same number of lines",
+        len(before_lines) == len(after_lines),
+        (len(before_lines), len(after_lines)),
+    )
+    diff = [
+        (i, b, a)
+        for i, (b, a) in enumerate(zip(before_lines, after_lines))
+        if b != a
+    ]
+    check(
+        "byte-preservation: exactly ONE line differs",
+        len(diff) == 1,
+        diff,
+    )
+    check(
+        "byte-preservation: the differing line is the status line",
+        bool(diff) and diff[0][1] == "status: checking" and diff[0][2] == "status: complete",
+        diff,
+    )
+    check(
+        "byte-preservation: file still ends with the original trailing newline",
+        after.endswith("\n") == before.endswith("\n"),
+        (before[-5:], after[-5:]),
+    )
+
+# ------------------------------------------------- 6. missing task file
+print("a missing task file exits 3")
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    rc, out, err = run_script(d, "T-999", "assigned")
+    check("missing: exit 3", rc == 3, f"rc={rc} out={out} err={err}")
+    check("missing: names T-999.md", "T-999.md" in err, err)
+    check("missing: uses the task-status: prefix", "task-status:" in err, err)
+
+# --------------------------------------------- 7. no frontmatter delimiters
+print("a task file with no frontmatter delimiters exits 3")
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    with open(os.path.join(tasks_dir, "T-001.md"), "w", encoding="utf-8") as f:
+        f.write("not frontmatter at all\njust some prose\n")
+    rc, out, err = run_script(d, "T-001", "assigned")
+    check("no-frontmatter: exit 3", rc == 3, f"rc={rc} out={out} err={err}")
+    check("no-frontmatter: names the delimiter problem", "'---'" in err, err)
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    # Opening delimiter present, closing one missing.
+    with open(os.path.join(tasks_dir, "T-002.md"), "w", encoding="utf-8") as f:
+        f.write("---\nid: T-002\nstatus: pending\nretries: 0\n")
+    rc, out, err = run_script(d, "T-002", "assigned")
+    check("unclosed-frontmatter: exit 3", rc == 3, f"rc={rc} out={out} err={err}")
+    check("unclosed-frontmatter: names the closing delimiter", "closing" in err, err)
+
+# ------------------------------------------------- 8. missing status field
+print("frontmatter with no status: field exits 3")
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    with open(os.path.join(tasks_dir, "T-001.md"), "w", encoding="utf-8") as f:
+        f.write("---\nid: T-001\nretries: 0\n---\n")
+    rc, out, err = run_script(d, "T-001", "assigned")
+    check("no-status-field: exit 3", rc == 3, f"rc={rc} out={out} err={err}")
+    check("no-status-field: names the missing field", "status" in err, err)
+
+print(f"\n{passed} passed, {failed} failed")
+sys.exit(1 if failed else 0)

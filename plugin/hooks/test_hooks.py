@@ -237,6 +237,25 @@ def write_in_flight_marker(proj, tid, agent, dispatched_at=None):
         json.dump({"dispatched_at": dispatched_at or _fresh_ts()}, f)
 
 
+def write_crossing_reservation(proj, stem, lane, task_id, reserved_at=None,
+                                promoted=False):
+    """A stand-in for what _lib.reserve_crossing() writes at DISPATCH time,
+    so stop-gate fixtures can set up a crossing reservation directly without
+    routing through a real dispatch-guard round trip. Fresh by default
+    (reserved "now"); callers driving staleness use the
+    AGENT_GUILD_CROSSING_STALE_S env seam instead of backdating the
+    timestamp, mirroring write_in_flight_marker's own convention (a TTL of 0
+    makes ANY reserved_at instantly stale, so backdating buys nothing a real
+    dispatch wouldn't already give a test)."""
+    d = os.path.join(proj, ".agent-guild", "state", "verdicts")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"{stem}-{lane}.authorized")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"task_id": task_id, "promoted": promoted,
+                   "reserved_at": reserved_at or _fresh_ts()}, f)
+    return path
+
+
 def transcript(proj, text, role="user", content_list=False):
     path = os.path.join(proj, ".agent-guild", "state", "log", "tx.jsonl")
     if content_list:
@@ -1835,6 +1854,106 @@ check("so: a .skipped marker filed under the far lane discharges nothing (#128)"
       rc_right_lane == 0 and rc_wrong_lane == 2,
       f"claude marker+hook_host=codex → rc={rc_right_lane} err={err_right!r}; "
       f"codex marker+hook_host=codex → rc={rc_wrong_lane} err={err_wrong!r}")
+
+# ------------------------------------ stop-gate: in-flight crossings (#124)
+# Every verdict of record owes a courier crossing, and until now a debt held
+# the orchestrator's turn open whether or not a courier was actually running
+# against it—so a dual-check regime that can never itself decide complete vs.
+# rework could stall the whole loop waiting on a second opinion nobody was
+# working. _crossing_status/_partition_debts read the SAME reservation
+# machinery dispatch-guard.py/subagent-return.py already use to authorize a
+# crossing (_lib.reserve_crossing/crossing_reservation), so "is a courier
+# running against THIS exact debt" is answered from the gate's own dispatch
+# record, never a guess. #100's guarantee weakens deliberately here, from
+# "the crossing landed" to "the crossing was started"—an unreserved debt
+# still blocks exactly as before.
+print("stop-gate.py: in-flight crossings (#124)")
+CROSSING_STALE_ENV = {"AGENT_GUILD_CROSSING_STALE_S": "0"}
+
+# 1/2. A FRESH, unpromoted reservation makes an otherwise-owing debt in-
+# flight: the turn ends clean. Removing the reservation on the IDENTICAL
+# fixture (same verdict of record, same task) flips it straight back to
+# blocked—pinning the pass to the reservation, not to some accidental
+# absence of debt elsewhere in the fixture. Deliberately unpromoted: a
+# courier that has already returned and been promoted is discharged through
+# crossing_authorized() (case 3 above), not through this path at all.
+proj = fresh_proj()
+write_task(proj, "T-060", status="complete", retries=0)
+verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
+write_verdict_json(proj, "T-060-sonnet-r0.json", task_id="T-060")
+reservation = write_crossing_reservation(proj, "T-060-sonnet-r0", "codex", "T-060")
+rc_fresh, _, err_fresh = run_hook("stop-gate.py", {}, proj)
+os.remove(reservation)
+rc_none, _, err_none = run_hook("stop-gate.py", {}, proj)
+check("so: a FRESH unpromoted reservation makes the debt in-flight → exit 0",
+      rc_fresh == 0, f"rc={rc_fresh} err={err_fresh!r}")
+check("so: the identical fixture with no reservation still owes → exit 2",
+      rc_none == 2 and "T-060" in err_none, f"rc={rc_none} err={err_none!r}")
+
+# 3. A STALE reservation (AGENT_GUILD_CROSSING_STALE_S=0, same test seam as
+# in-flight markers) is held again: the turn stays blocked, and the advice
+# offers a re-dispatch first (that's what actually collects #34's comparison
+# data), naming the waiver only as the fallback for a dispatch that can't
+# succeed.
+proj = fresh_proj()
+write_task(proj, "T-061", status="complete", retries=0)
+write_verdict_json(proj, "T-061-sonnet-r0.json", task_id="T-061")
+write_crossing_reservation(proj, "T-061-sonnet-r0", "codex", "T-061")
+rc_stale, _, err_stale = run_hook("stop-gate.py", {}, proj, extra_env=CROSSING_STALE_ENV)
+check("so: a STALE reservation is held again → exit 2",
+      rc_stale == 2 and "T-061" in err_stale, f"rc={rc_stale} err={err_stale!r}")
+check("so: a STALE reservation's advice offers re-dispatch",
+      "re-dispatch checker-courier" in err_stale, err_stale)
+check("so: a STALE reservation's advice names the waiver as the fallback",
+      "T-061-sonnet-r0-codex.denied" in err_stale, err_stale)
+
+# 4. STALLED.md lists only held debts, never in-flight ones. T-062 stays
+# open on its own (an unrelated `assigned` task with no debt) so the turn
+# keeps blocking across all three strikes regardless of which debts are
+# in-flight; T-063's debt carries a FRESH reservation (must never appear),
+# T-064's carries none at all (must appear, same as every debt did before
+# this change).
+proj = fresh_proj()
+write_task(proj, "T-062", status="assigned", retries=0)
+write_task(proj, "T-063", status="complete", retries=0)
+write_verdict_json(proj, "T-063-sonnet-r0.json", task_id="T-063")
+write_crossing_reservation(proj, "T-063-sonnet-r0", "codex", "T-063")
+write_task(proj, "T-064", status="complete", retries=0)
+write_verdict_json(proj, "T-064-sonnet-r0.json", task_id="T-064")
+run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_last, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+stalled_path = os.path.join(proj, ".agent-guild", "state", "STALLED.md")
+stalled_text = open(stalled_path, encoding="utf-8").read() if os.path.exists(stalled_path) else ""
+check("so: STALLED.md written on strike 3 with an in-flight debt in the mix",
+      rc_last == 0 and os.path.exists(stalled_path), f"rc={rc_last}")
+check("so: STALLED.md names the held debt (T-064)", "T-064" in stalled_text, stalled_text)
+check("so: STALLED.md never names the in-flight debt (T-063)",
+      "T-063" not in stalled_text, stalled_text)
+
+# 5. _next_move's courier branch: gated on held, not on raw debts. T-070's
+# debt is in-flight (fresh reservation)—the courier line must NOT fire, and
+# the task falls through to the ordinary "verdict landed, act on it" advice
+# instead. T-071 is the never-started control, identical in every other
+# respect, where the courier line still must fire—proving the silence above
+# tracks the reservation and not some accidental change to the branch itself.
+proj = fresh_proj()
+write_task(proj, "T-070", status="checking", retries=0)
+write_verdict_json(proj, "T-070-sonnet-r0.json", task_id="T-070")
+write_crossing_reservation(proj, "T-070-sonnet-r0", "codex", "T-070")
+write_task(proj, "T-071", status="checking", retries=0)
+write_verdict_json(proj, "T-071-sonnet-r0.json", task_id="T-071")
+rc_mixed, _, err_mixed = run_hook("stop-gate.py", {}, proj)
+check("so: _next_move stays silent on 'dispatch checker-courier' for an in-flight crossing",
+      "T-070" in err_mixed
+      and "T-070 [checking] → its checker of record has landed but the "
+          "second opinion hasn't" not in err_mixed
+      and "T-070 [checking] → its checker has landed a verdict; act on it" in err_mixed,
+      err_mixed)
+check("so: _next_move still says 'dispatch checker-courier' for a never-started crossing",
+      "T-071 [checking] → its checker of record has landed but the second "
+      "opinion hasn't; dispatch checker-courier before completing." in err_mixed,
+      err_mixed)
 
 # --------------------------------------------------------- subagent-return
 print("subagent-return.py")

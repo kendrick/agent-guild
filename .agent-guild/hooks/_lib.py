@@ -431,17 +431,34 @@ def crossing_authorized(stem, lane):
     return isinstance(record, dict) and record.get("promoted") is True
 
 
-def crossing_reserved(stem, lane):
-    """True if a reservation exists for `stem`/`lane`, whether or not it was
-    ever promoted—used by foreign_stem_writes() to tell a legitimately
-    in-flight crossing (reserved, courier still running, not yet returned)
-    apart from one nobody ever dispatched at all. Never raises."""
+def crossing_reservation(stem, lane):
+    """The reservation record reserve_crossing() wrote for `stem`/`lane`, or
+    None if none exists or it can't be read/parsed.
+
+    The record carries `task_id`, `promoted`, and `reserved_at`—that last
+    field is what lets a caller (stop-gate.py's staleness partition) work
+    out how long ago the crossing started, which crossing_reserved()'s bare
+    bool can't answer. Never raises: an unreadable or malformed record reads
+    as no reservation, the same fail-closed posture every other reader in
+    this module holds to."""
     try:
         with open(_authorization_path(stem, lane), encoding="utf-8") as f:
             record = json.load(f)
     except Exception:
-        return False
-    return isinstance(record, dict) and bool(record.get("task_id"))
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def crossing_reserved(stem, lane):
+    """True if a reservation exists for `stem`/`lane`, whether or not it was
+    ever promoted—used by foreign_stem_writes() to tell a legitimately
+    in-flight crossing (reserved, courier still running, not yet returned)
+    apart from one nobody ever dispatched at all. Never raises.
+
+    Built on crossing_reservation() so the two can't drift: this is just
+    that record's existence, narrowed to "and it actually names a task"."""
+    record = crossing_reservation(stem, lane)
+    return record is not None and bool(record.get("task_id"))
 
 
 def foreign_stem_writes(owner_tid, lane):

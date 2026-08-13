@@ -32,6 +32,19 @@ a genuine second strike, so the state file also persists the main
 transcript's byte size. Two firings against an unchanged transcript are one
 real block, not two, and the counter holds rather than advancing.
 
+A debt (a courier crossing owed against a verdict of record—see
+_lib.second_opinion_debts) held the turn open before whether or not a
+courier was actually running against it, which could stall the loop on a
+second opinion that, by contract, can never itself decide complete vs.
+rework (#124). _partition_debts splits debts into held and in-flight using
+the same reservation record dispatch-guard.py/subagent-return.py already
+write and promote (_lib.reserve_crossing/crossing_reservation): a FRESH
+reservation means a courier is plausibly still running, so that debt drops
+out of the block message, STALLED.md, and the early-return check entirely.
+Everything else—no reservation, or one gone stale—is held exactly as
+before. #100's guarantee weakens deliberately here, from "the crossing
+landed" to "the crossing was started."
+
 Presentation, separately from all of the above: this gate shells out to
 .agent-guild/scripts/ready-set.py to group ready tasks into one wave, fed
 `--running` from the fresh in-flight markers this gate already computes
@@ -48,11 +61,21 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
 
 STALL_LIMIT = 3
+
+# A courier crossing's reservation (_lib.reserve_crossing, written at
+# dispatch time) counts as "a courier is genuinely running" only within this
+# many seconds of its reserved_at stamp—past that, a debt whose courier died
+# mid-flight must not stay permanently exempt from blocking the turn.
+# AGENT_GUILD_CROSSING_STALE_S is the test seam, same shape as _lib.in_flight's
+# AGENT_GUILD_INFLIGHT_STALE_S: it lets a test zero this out instantly instead
+# of waiting out a real hour to prove a dead courier's reservation goes stale.
+CROSSING_STALE_S_DEFAULT = 3600.0
 
 # Short on purpose (#125): ready-set.py only parses a handful of small task
 # files, nothing like check-job-spec.py's full paperwork lint, so there's no
@@ -62,6 +85,63 @@ STALL_LIMIT = 3
 # subprocess.run() timeout without a real 5s wait for every run of this
 # suite.
 READY_SET_TIMEOUT_S = float(os.environ.get("AGENT_GUILD_READY_SET_TIMEOUT", "5"))
+
+
+def _crossing_status(stem, lane, ttl=None):
+    """'fresh', 'stale', or 'none' for stem/lane's courier-crossing
+    reservation (_lib.reserve_crossing / _lib.crossing_reservation).
+
+    'fresh' means a checker-courier was legally dispatched for this EXACT
+    crossing within `ttl` seconds and hasn't necessarily returned yet—so a
+    courier is plausibly still running, and the debt shouldn't hold the
+    orchestrator's turn open on a check that, by the dual-check regime, can
+    never itself decide complete vs. rework. 'stale' means one was
+    dispatched but that window lapsed: whatever ran never came back, and the
+    debt is held again exactly like 'none' (nothing was ever reserved).
+
+    A record missing `reserved_at`, or carrying a value that won't parse,
+    reads as 'none' rather than raising or being treated as perpetually
+    fresh—fail toward holding the debt, the same posture
+    second_opinion_debts() itself takes on a malformed record.
+    """
+    record = _lib.crossing_reservation(stem, lane)
+    if not record:
+        return "none"
+    if ttl is None:
+        try:
+            ttl = float(os.environ.get(
+                "AGENT_GUILD_CROSSING_STALE_S", str(CROSSING_STALE_S_DEFAULT)))
+        except ValueError:
+            ttl = CROSSING_STALE_S_DEFAULT
+    try:
+        reserved_at = datetime.strptime(
+            record["reserved_at"], "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+    except Exception:
+        return "none"
+    age = (datetime.now(timezone.utc) - reserved_at).total_seconds()
+    return "fresh" if age <= ttl else "stale"
+
+
+def _partition_debts(debts):
+    """Split second_opinion_debts()'s (task_id, stem, lane) list into
+    (held, in_flight). A FRESH reservation means a courier is plausibly
+    running against that exact crossing right now, so counting it against
+    the orchestrator's turn would stall the loop on a check that can never
+    itself decide complete vs. rework. Everything else—no reservation at
+    all, or one gone stale—is held: #100's original guarantee weakens
+    deliberately here, from "the crossing landed" to "the crossing was
+    started," but an unreserved (or abandoned) debt still blocks exactly as
+    before.
+    """
+    held, in_flight = [], []
+    for d in debts:
+        _tid, stem, lane = d
+        if _crossing_status(stem, lane) == "fresh":
+            in_flight.append(d)
+        else:
+            held.append(d)
+    return held, in_flight
 
 
 def _next_move(tid, status, retries, debts, marker_state=None, marker_ts=None):
@@ -78,6 +158,11 @@ def _next_move(tid, status, retries, debts, marker_state=None, marker_ts=None):
     # in-flight marker already cleared (the checker of record already
     # returned), and the debt is still the more specific, more actionable
     # thing to say.
+    #
+    # `debts` here MUST already be held_debts (main() passes only that): a
+    # FRESH courier reservation means one is plausibly still running, and
+    # telling the orchestrator to "dispatch checker-courier" against a
+    # crossing already in flight would open a duplicate-dispatch window.
     if status == "checking" and any(
         d_tid == tid and d_stem.endswith(f"-r{retries}")
         for d_tid, d_stem, _lane in debts
@@ -334,8 +419,14 @@ def main(data):
     # survives status changes the open-task picture doesn't, so it has to be
     # checked independently of whether any task is still open.
     debts = _lib.second_opinion_debts(data)
+    # A debt whose courier reservation is still FRESH is in-flight, not
+    # stuck—see _partition_debts. It never holds the turn, never lands in
+    # STALLED.md, and never gets its own debt line; only held_debts does any
+    # of that below. in_flight_debts is unused past this line by design: its
+    # whole job is to be the set held_debts excludes.
+    held_debts, _in_flight_debts = _partition_debts(debts)
     tasks = _lib.open_tasks()
-    if not tasks and not debts:
+    if not tasks and not held_debts:
         # Clean slate—clear any stale block counter and let the turn end.
         _save_state(None, 0)
         return 0
@@ -344,7 +435,7 @@ def main(data):
     # staleness transition (nothing renewing a marker before its TTL lapses)
     # each change it exactly like a status or retry change would (#111).
     fresh_markers = _lib.in_flight()
-    digest = json.dumps([sorted(tasks), _verdicts_landed(), debts, fresh_markers])
+    digest = json.dumps([sorted(tasks), _verdicts_landed(), held_debts, fresh_markers])
     prev = _load_state()
     stop_active = bool(data.get("stop_hook_active"))
     transcript_size = _transcript_size(data)
@@ -391,7 +482,7 @@ def main(data):
             "",
         ] + [f"- {t[0]} [{t[1]}] retries={t[2]}" for t in tasks] + [
             f"- {d_tid}: second opinion outstanding for {d_stem}-{d_lane}.json"
-            for d_tid, d_stem, d_lane in debts
+            for d_tid, d_stem, d_lane in held_debts
         ] + [
             "",
             "The gate has stood down so the turn can end. Investigate by hand: a "
@@ -422,7 +513,7 @@ def main(data):
     wave_ids = {w["id"] for w in wave}
 
     task_lines = [
-        _next_move(*t, debts, *_marker_info(t[0], fresh_markers, all_markers))
+        _next_move(*t, held_debts, *_marker_info(t[0], fresh_markers, all_markers))
         for t in tasks
         if t[0] not in wave_ids
     ]
@@ -430,20 +521,33 @@ def main(data):
     # verdict-of-record's own name (T-001-sonnet-r0), and printing that alone
     # would point the orchestrator at the file that already exists instead of
     # the lane-suffixed one (T-001-sonnet-r0-codex.json) that's actually
-    # missing.
-    debt_lines = [
-        f"  {d_tid}: second opinion outstanding—dispatch checker-courier to "
-        f"write {d_stem}-{d_lane}.json."
-        for d_tid, d_stem, d_lane in debts
-    ]
+    # missing. A STALE reservation gets different advice than a never-started
+    # one: re-dispatch is what actually collects #34's comparison data, so
+    # that's offered first, with the waiver named only as the fallback for a
+    # dispatch that genuinely can't succeed.
+    debt_lines = []
+    for d_tid, d_stem, d_lane in held_debts:
+        if _crossing_status(d_stem, d_lane) == "stale":
+            debt_lines.append(
+                f"  {d_tid}: second opinion outstanding—its earlier "
+                f"checker-courier dispatch for {d_stem}-{d_lane}.json went "
+                "stale before returning; re-dispatch checker-courier, or "
+                f"write {d_stem}-{d_lane}.denied if the dispatch cannot "
+                "succeed."
+            )
+        else:
+            debt_lines.append(
+                f"  {d_tid}: second opinion outstanding—dispatch checker-courier "
+                f"to write {d_stem}-{d_lane}.json."
+            )
     wave_block = _wave_block(wave)
     body_sections = ([wave_block] if wave_block else []) + [
         "\n".join(task_lines + debt_lines)
     ]
     body = "\n".join(body_sections)
     return _lib.block(
-        f"{len(tasks)} task(s) still open and {len(debts)} second opinion(s) "
-        "outstanding—the turn can't end yet. Next move for each:\n"
+        f"{len(tasks)} task(s) still open and {len(held_debts)} second "
+        "opinion(s) outstanding—the turn can't end yet. Next move for each:\n"
         f"{body}\n"
         "Do the next move, then stop again. If you need to hand control back to "
         "the user mid-job, the user can `touch .agent-guild/state/PAUSED`."

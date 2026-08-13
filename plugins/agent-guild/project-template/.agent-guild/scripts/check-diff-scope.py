@@ -184,7 +184,11 @@ def owns_entry_problem(entry, repo_root=None):
         return f"invisible character U+{ord(invisible):04X}"
     if "\\" in entry:
         return "backslash; entries use '/' separators"
-    glob_char = next((c for c in entry if c in "*?[]"), None)
+    # `*` and `?` only. Brackets are ordinary filename characters and
+    # `app/[slug]/page.tsx` is the most common path shape in half the
+    # frameworks a copied-in kit will meet; rejecting it would fail
+    # DEC-audit with no spelling the author could fix.
+    glob_char = next((c for c in entry if c in "*?"), None)
     if glob_char is not None:
         return (
             f"glob character {glob_char!r}; an entry is a literal path, and a "
@@ -214,6 +218,18 @@ def owns_entry_problem(entry, repo_root=None):
     return None
 
 
+def path_within(path, prefix):
+    """True if `path` sits inside directory `prefix`, which ends in '/'.
+
+    Containment, not overlap, and the difference is the whole reason this
+    isn't paths_overlap. Overlap is symmetric because two owners collide
+    whichever way you read the pair. A grant flows one way only: allowing
+    `docs/generated/` says nothing about a file at `docs`, which is
+    ABOVE the granted territory rather than inside it. Sharing the
+    symmetric predicate here let exactly that through."""
+    return path.startswith(prefix)
+
+
 def in_scope(path, allowed_files, allowed_dirs, ignored):
     if path in allowed_files:
         return True
@@ -221,7 +237,7 @@ def in_scope(path, allowed_files, allowed_dirs, ignored):
         return True
     if path.startswith(".agent-guild/state/"):
         return True
-    return any(paths_overlap(path, prefix) for prefix in allowed_dirs)
+    return any(path_within(path, prefix) for prefix in allowed_dirs)
 
 
 def main(argv=None):

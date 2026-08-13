@@ -46,8 +46,8 @@ none.
 
 R13 sits after R7 (with R15 in between) because it needs R7's acyclic-DAG
 guarantee before it can walk a `deps` chain looking for a path between two
-owners—the same
-reason R8 (which walks the same chain) runs after R7 too. R13 is opt-in at
+owners—the same reason R8 (which walks the same chain) runs after R7 too.
+R13 is opt-in at
 the linter (#133): a task with no `owns:` field, or an empty one, is never
 an R13 violation—only a task this rule has nothing to check. The field
 postdates every archived corpus, so treating its absence as a violation

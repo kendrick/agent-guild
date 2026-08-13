@@ -201,7 +201,33 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
         err,
     )
 
-# ------------------------------------------- 7. owns_entry_problem (#162)
+# ---------------------------------- 7. an allowlist grant only flows down
+# A directory grant says nothing about a file at a node ABOVE it. That's
+# containment, and it is not the symmetric question two owners ask about
+# each other, which is why in_scope has its own predicate. Written against
+# the CLI because the distinction was briefly lost in a shared one.
+print("a directory grant doesn't admit a file above it")
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, "docs")  # a FILE at the node above the granted directory
+    rc, out, err = run_script(d, "docs/generated/")
+    check("a file at an ancestor of the granted directory: out of scope", rc == 1, f"rc={rc} err={err}")
+    check("ancestor file: named as the offender", "out of scope: docs" in err, err)
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, "plugin")  # a file where the grant names a directory
+    rc, out, err = run_script(d, "plugin/")
+    check("a file at the granted directory's own node: out of scope", rc == 1, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, os.path.join("docs", "generated", "api.md"))
+    rc, out, err = run_script(d, "docs/generated/")
+    check("a file inside the granted directory: in scope", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------------- 8. owns_entry_problem (#162)
 # The one predicate here that isn't reachable through the CLI: R13 and
 # ready-set.py both import it, so it gets tested in-process.
 print("owns_entry_problem: the two shapes, and what isn't one of them")
@@ -212,7 +238,21 @@ _spec.loader.exec_module(_mod)
 owns_entry_problem = _mod.owns_entry_problem
 paths_overlap = _mod.paths_overlap
 
-for good in ["src/a.py", "src/", "a.py", "docs/guide/index.md", "plugin/"]:
+for good in [
+    "src/a.py",
+    "src/",
+    "a.py",
+    "docs/guide/index.md",
+    "plugin/",
+    # Brackets are ordinary filename characters, and this is the most
+    # common path shape in half the frameworks a copied-in kit will meet.
+    # Refusing it would fail DEC-audit with no spelling the author could
+    # write instead, so the glob check is `*` and `?` only.
+    "app/[slug]/page.tsx",
+    "app/[...catchall]/route.ts",
+    "src/my file.py",
+    "lib/a~backup.js",
+]:
     check(f"well-formed entry {good!r}: no problem", owns_entry_problem(good) is None)
 
 for bad, label in [
@@ -224,7 +264,8 @@ for bad, label in [
     (" src/a.py", "leading space"),
     ("", "empty string"),
     ("/", "bare slash"),
-    ("src/*.py", "glob"),
+    ("src/*.py", "glob star"),
+    ("src/a?.py", "glob question mark"),
     ("~/a.py", "home expansion"),
     ("$OUT/a.py", "variable expansion"),
     ("​src/a.py", "zero-width space"),

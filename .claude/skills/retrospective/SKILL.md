@@ -25,6 +25,7 @@ Write `.agent-guild/state/retrospective.md` covering:
 - **Disputes**: each one and how it was ruled. A checker overruled more than once points at a weak clause.
 - **Check-infra debt**: ERROR verdicts mean a check couldn't run. Those checks need fixing before the next job leans on them.
 - **What the constitution missed**: defects that slipped through, or clauses that turned out unfalsifiable in practice. This is the most valuable output—it's next job's Phase 0 input.
+- **Outstanding crossings**: every stem whose second opinion was started and never landed, named one per line. A crossing no longer holds the turn open once a courier has been dispatched against it (#124), which is what stops one lane stalling a whole wave, and the cost of that is a crossing can now reach Phase 3 still open. Nothing else in the run will mention it. Recording the stem is what keeps the gap in #34's comparison data visible instead of reading as a crossing that agreed.
 - **Weight against outcome**: the constitution's `**Job weight**:` line verbatim, since it carries the derivation and any correction the user made, plus the clause count the document actually reached and the audit rounds each id spent, counted off the `<Audit-ID>-r<N>` stems. Recorded every job, those numbers are what let the ceiling be checked against what happened instead of re-argued from memory. A user's correction matters most, since it's the derivation being wrong where somebody caught it.
 
 ## 3. Offer to archive

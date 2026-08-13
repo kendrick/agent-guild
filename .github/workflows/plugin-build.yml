@@ -48,6 +48,8 @@ jobs:
           python3 .agent-guild/scripts/test_codex_courier.py
           python3 .agent-guild/scripts/test_compose_brief.py
           python3 .agent-guild/scripts/test_ledger_append.py
+          python3 .agent-guild/scripts/test_ready_set.py
+          python3 .agent-guild/scripts/test_task_status.py
           python3 .agent-guild/scripts/test_verdict_tools.py
           python3 .agent-guild/hooks/test_hooks.py
           python3 .agent-guild/hooks/test_codex_adapter.py

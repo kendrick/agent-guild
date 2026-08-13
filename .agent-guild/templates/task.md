@@ -14,6 +14,21 @@ status: pending
 retries: 0
 max_retries: 2
 deps: []
+dep_rationale: []
+# One entry per dep in `deps`, naming what THIS task actually needs from
+# that one task—not a summary of what the other task does. Example:
+#   dep_rationale:
+#     - T-001: provides the schema the tests import
+# Every dep edge is a serialization point, so an edge nobody can justify is
+# wall clock nobody agreed to pay. check-job-spec.py's R14 checks only that
+# the two lists correspond one to one, and only on a task that also
+# declares `owns`; whether a given rationale is actually true is the
+# auditor's call, not R14's.
+owns: []
+# Each entry is an exact file path, or a directory prefix ending in `/`
+# (covers everything under it). Tasks whose `owns` entries overlap must be
+# connected by a dep path—one transitively depending on the other—because
+# overlapping owners must never run concurrently.
 escalations: []
 artifacts: []
 ---

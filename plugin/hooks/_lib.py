@@ -203,6 +203,99 @@ def lane_exhausted(lane):
         return False
 
 
+IN_FLIGHT_TTL_S_DEFAULT = 3600.0
+
+
+def _in_flight_dir():
+    return state_path("log", "in-flight")
+
+
+def mark_in_flight(ident, agent):
+    """Record that `agent` was just legally dispatched for `ident` (a
+    Task-ID, Audit-ID, or Audition-ID)—called from dispatch-guard.py at
+    every allowed dispatch. stop-gate.py reads these to tell a genuinely
+    stuck loop apart from a subagent that's still working (#111): the task
+    tuple, the verdict set, and the debt list all stay put while a worker or
+    checker is mid-flight, which is exactly what used to make a long-running
+    dispatch look identical to a livelock. Waves made that the common case
+    instead of a rare one.
+
+    Best-effort, same posture as dispatch-guard's own _log(): a write
+    failure here must never turn a legal dispatch into a block. Losing a
+    marker silently degrades back to the pre-#111 blindness, not to
+    anything worse.
+    """
+    try:
+        d = _in_flight_dir()
+        os.makedirs(d, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        path = os.path.join(d, f"{ident}--{agent}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"dispatched_at": ts}, f)
+    except Exception:
+        pass
+
+
+def clear_in_flight(ident, agent):
+    """Remove the marker mark_in_flight wrote for (ident, agent). Called
+    from subagent-return.py once a subagent's return is fully resolved. A
+    missing file is not an error: the marker can legitimately already be
+    gone (aged out under the TTL, or never written because the dispatch
+    predates this feature)."""
+    try:
+        path = os.path.join(_in_flight_dir(), f"{ident}--{agent}.json")
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def in_flight(ttl=None):
+    """Sorted list of in-flight marker stems (`<ident>--<bare-agent>`, the
+    filename minus `.json`) whose dispatch is still FRESH: within `ttl`
+    seconds of now. `ttl=None` (the default) reads
+    AGENT_GUILD_INFLIGHT_STALE_S if set, else IN_FLIGHT_TTL_S_DEFAULT
+    (3600s)—the env var is the test seam, letting a test zero out every
+    marker's freshness instantly instead of waiting out a real hour to prove
+    a dead agent's marker ages out.
+
+    Staleness matters on purpose: nothing here suppresses stall detection
+    permanently. A marker that can't be read or parsed is treated as absent
+    rather than crashing the gate—the same fail-open posture
+    second_opinion_debts() holds for a malformed record, because a wedged
+    marker file must never be able to jam the very livelock backstop it
+    exists to unblock.
+    """
+    if ttl is None:
+        try:
+            ttl = float(os.environ.get(
+                "AGENT_GUILD_INFLIGHT_STALE_S", str(IN_FLIGHT_TTL_S_DEFAULT)))
+        except ValueError:
+            ttl = IN_FLIGHT_TTL_S_DEFAULT
+    d = _in_flight_dir()
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return []
+    now = datetime.now(timezone.utc)
+    fresh = []
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                record = json.load(f)
+            dispatched_at = datetime.strptime(
+                record["dispatched_at"], "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue  # malformed/unreadable marker: not fresh, not fatal
+        if (now - dispatched_at).total_seconds() <= ttl:
+            fresh.append(name[: -len(".json")])
+    return sorted(fresh)
+
+
 def courier_lane(data=None):
     """Return the far-side lane for this host.
 
@@ -338,17 +431,34 @@ def crossing_authorized(stem, lane):
     return isinstance(record, dict) and record.get("promoted") is True
 
 
-def crossing_reserved(stem, lane):
-    """True if a reservation exists for `stem`/`lane`, whether or not it was
-    ever promoted—used by foreign_stem_writes() to tell a legitimately
-    in-flight crossing (reserved, courier still running, not yet returned)
-    apart from one nobody ever dispatched at all. Never raises."""
+def crossing_reservation(stem, lane):
+    """The reservation record reserve_crossing() wrote for `stem`/`lane`, or
+    None if none exists or it can't be read/parsed.
+
+    The record carries `task_id`, `promoted`, and `reserved_at`—that last
+    field is what lets a caller (stop-gate.py's staleness partition) work
+    out how long ago the crossing started, which crossing_reserved()'s bare
+    bool can't answer. Never raises: an unreadable or malformed record reads
+    as no reservation, the same fail-closed posture every other reader in
+    this module holds to."""
     try:
         with open(_authorization_path(stem, lane), encoding="utf-8") as f:
             record = json.load(f)
     except Exception:
-        return False
-    return isinstance(record, dict) and bool(record.get("task_id"))
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def crossing_reserved(stem, lane):
+    """True if a reservation exists for `stem`/`lane`, whether or not it was
+    ever promoted—used by foreign_stem_writes() to tell a legitimately
+    in-flight crossing (reserved, courier still running, not yet returned)
+    apart from one nobody ever dispatched at all. Never raises.
+
+    Built on crossing_reservation() so the two can't drift: this is just
+    that record's existence, narrowed to "and it actually names a task"."""
+    record = crossing_reservation(stem, lane)
+    return record is not None and bool(record.get("task_id"))
 
 
 def foreign_stem_writes(owner_tid, lane):
@@ -771,13 +881,39 @@ def con_audit_passed():
 _DISPATCH_TOOLS = {"Task", "Agent", "spawn_agent"}
 
 
-def _id_in(text):
-    """First Task-ID / Audit-ID / Audition-ID in a blob of text, or None."""
+_LABELED_ID_PATTERNS = (
+    ("task", TASK_ID_RE),
+    ("audit", AUDIT_ID_RE),
+    ("audition", AUDITION_ID_RE),
+)
+
+
+def labeled_ids(text):
+    """Every labeled Task-ID / Audit-ID / Audition-ID in a blob of text, as
+    (kind, id, position) tuples sorted by match start—`kind` one of "task",
+    "audit", "audition". Finds every match of every pattern rather than
+    stopping at the first regex to hit, so a caller can reason about ALL the
+    ids a blob carries, not just whichever one a fixed regex order surfaces
+    first."""
     if not isinstance(text, str):
-        return None
-    m = (TASK_ID_RE.search(text) or AUDIT_ID_RE.search(text)
-         or AUDITION_ID_RE.search(text))
-    return m.group(1) if m else None
+        return []
+    found = []
+    for kind, pattern in _LABELED_ID_PATTERNS:
+        for m in pattern.finditer(text):
+            found.append((kind, m.group(1), m.start()))
+    found.sort(key=lambda t: t[2])
+    return found
+
+
+def _id_in(text):
+    """Earliest labeled Task-ID / Audit-ID / Audition-ID in a blob of text, or
+    None. Earliest BY POSITION, not by which regex is declared first: a
+    dispatch prompt commonly carries context beyond its own id (e.g. an
+    auditor's prompt noting an unrelated task still in flight), and the id
+    that labels THIS dispatch is whichever one actually comes first in the
+    text, regardless of which of the three patterns happens to match it."""
+    found = labeled_ids(text)
+    return found[0][1] if found else None
 
 
 def id_from_transcript(transcript_path):

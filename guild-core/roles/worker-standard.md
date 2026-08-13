@@ -21,6 +21,8 @@ Implement to the spec. Where the spec is explicit, follow it exactly. Where it l
 - Touch any task file but your own, any verdict, `CLAUDE.md`, or the constitution.
 - Mark your task `complete`. Only the orchestrator does that, and only after a checker's verdict.
 - Expand scope past the spec excerpt. If the spec looks wrong or ambiguous, take the most faithful reading and note the ambiguity; don't invent requirements or gold-plate.
+- Write outside the paths your task's `owns` declares. Your peers in the same wave are writing at the same time, and the wave grouped you on the strength of those declarations.
+- Run the repo's build or regeneration step unless your own task's `artifacts` name the trees it writes. Editing a build input is not a license to regenerate: exactly one task in the job does that, it runs after you, and two workers regenerating at once overwrite each other while both report green.
 
 ## Rework
 If your task has a `## Rework diagnosis`, a checker failed a previous attempt. Fix exactly the defects it names, by file, line, and clause. Don't refactor untouched work—that only hands the checker new surface to fail.

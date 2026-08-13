@@ -141,6 +141,33 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         result,
     )
 
+# ------------------------------------- 3b. --running excludes EVERY bucket
+# The module docstring promises "excluded from `wave` and from every other
+# bucket," but the `attention` loop and the `checks` comprehension used to
+# never consult `running` at all—a task named with --running still came back
+# in attention or checks. Both buckets pull from statuses the wave loop
+# never touches (`disputed`, `needs-check`), so this needs its own fixture
+# rather than reusing #3's pending/owns one.
+print("--running excludes a task from attention and checks too, not just wave")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="disputed")
+    write_task(d, "T-002", status="needs-check")
+    rc, result, err = run_and_parse(d, "--running", "T-001", "T-002")
+    check("running (all buckets): exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "running (all buckets): a disputed task named in --running is "
+        "excluded from attention",
+        result["attention"] == [],
+        result,
+    )
+    check(
+        "running (all buckets): a needs-check task named in --running is "
+        "excluded from checks",
+        result["checks"] == [],
+        result,
+    )
+
 # ------------------------------------------- 4. dep on an abandoned task
 print("a task whose dep is abandoned lands in attention")
 
@@ -182,6 +209,38 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
     rc, out, err = run_script(d)
     check("missing-fields: exit 3", rc == 3, f"rc={rc} out={out}")
     check("missing-fields: names T-002.md", "T-002.md" in err, err)
+
+# ------------------------------------------- 5b. duplicate frontmatter id
+# load_tasks() keys its dict on the frontmatter `id`, not the filename—two
+# files declaring the same id used to collapse silently into one dict entry,
+# so the earlier file (and whatever real task it names) vanished from every
+# bucket with nothing on stderr to explain why. This module's own fail-loud
+# contract says a task silently skipped here is a task nobody would ever
+# dispatch, so a repeated id has to raise, naming both files.
+print("two task files declaring the same id exits 3, naming both files")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["file-a.py"])
+    write_task(d, "T-005", owns=["file-b.py"])
+    # write_task() names the file after its first arg, but its frontmatter's
+    # `id:` line is written the same way—force the collision by rewriting
+    # T-005.md's own id to T-001 directly, the on-disk shape a stale
+    # copy-paste of a task file would actually produce.
+    dup_path = os.path.join(d, "tasks", "T-005.md")
+    with open(dup_path, encoding="utf-8") as f:
+        content = f.read()
+    content = content.replace("id: T-005", "id: T-001", 1)
+    with open(dup_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    rc, out, err = run_script(d)
+    check("duplicate-id: exit 3", rc == 3, f"rc={rc} out={out}")
+    check(
+        "duplicate-id: names both files",
+        "T-001.md" in err and "T-005.md" in err,
+        err,
+    )
+    check("duplicate-id: names the duplicated id", "T-001" in err, err)
+    check("duplicate-id: uses the ready-set: prefix", "ready-set:" in err, err)
 
 # ------------------------------------------------------------ 6. determinism
 print("determinism: same input, byte-identical output across repeated runs")
@@ -225,7 +284,7 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
 print("a task with a spent retry budget defers instead of waving")
 
 with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
-    write_task(d, "T-001", status="rework", retries=2, max_retries=2)
+    write_task(d, "T-001", status="pending", retries=2, max_retries=2)
     rc, result, err = run_and_parse(d)
     check("spent-budget: exit 0", rc == 0, f"rc={rc} err={err}")
     check("spent-budget: not in wave", result["wave"] == [], result)
@@ -236,6 +295,26 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         and "retries=2" in result["deferred"][0]["reason"],
         result["deferred"],
     )
+
+# ------------------------------------------------- bonus: rework is never waved
+# The retry ladder (.agent-guild/CLAUDE.md) requires the orchestrator to copy
+# the checker's diagnosis, increment `retries`, and move the task back to
+# `assigned` before a worker may run on it—dispatch-guard.py refuses a
+# worker dispatch on anything but `assigned`. A `rework` task offered in the
+# wave would invite skipping straight past those steps into that refusal, so
+# ready-set.py must never place one there—or in `deferred`/`attention`
+# either: those buckets exist for pending-task obstacles, and a rework
+# task's next move is the ladder itself, which only the caller (not
+# ready-set) knows how to word.
+print("a rework task is never offered in any bucket, even with no obstacles")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="rework", owns=["file-a.py"], retries=1)
+    rc, result, err = run_and_parse(d)
+    check("rework: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("rework: not in wave", result["wave"] == [], result)
+    check("rework: not in deferred", result["deferred"] == [], result)
+    check("rework: not in attention", result["attention"] == [], result)
 
 # --------------------------------------------------------- bonus: unmet deps
 print("a task with an unmet (incomplete) dep defers, naming it")

@@ -779,6 +779,60 @@ rc, out, err = run_hook("stop-gate.py", {}, proj)
 check("wave: a lone ready task names it without the fanout instruction",
       rc == 2 and "T-001" in err and "ONE message" not in err, err)
 
+# --------------- stop-gate: deferred/attention buckets must reach the gate (#155)
+# Before this fix, only ready_result["wave"] survived the trip through
+# stop-gate.py—deferred and attention were computed by ready-set.py and then
+# thrown away, and a task IN the wave lost its _next_move line too (the
+# generic per-task advice is suppressed for anything `t[0] not in wave_ids`,
+# with nothing put in its place for deferred/attention). These fixtures pin
+# both halves: a deferred task must carry ready-set's own reason, not the
+# generic "assign it and dispatch its executor" instruction that would have
+# it dispatched straight into a dependency violation; an attention task must
+# be marked as needing the orchestrator's judgment, not silently handed the
+# same generic dispatch instruction toward a dep that can never resolve.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[]")
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("deferred: unmet-dep task carries ready-set's own reason verbatim",
+      "unmet deps: T-001 (pending)" in err, err)
+check("deferred: unmet-dep task is NOT told the generic dispatch move",
+      "T-002 [pending] → assign it and dispatch its executor." not in err, err)
+
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="abandoned", deps="[]", owns="[]")
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("attention: abandoned-dep task is NOT told the generic dispatch move",
+      "T-002 [pending] → assign it and dispatch its executor." not in err, err)
+check("attention: abandoned-dep task is marked as needing judgment, "
+      "carrying ready-set's reason verbatim",
+      "T-002" in err and "needs your judgment" in err
+      and "depends on abandoned task(s): T-001" in err, err)
+
+# --------------------- stop-gate: a `rework` task must keep the retry ladder (#155)
+# Before this fix, ready-set.py treated `rework` as a wave candidate, so a
+# rework task with no unmet deps/collisions landed in the wave—and the wave
+# suppression above then dropped its ladder text (the diagnosis-copy and
+# retries-increment instructions) in favor of a bare "dispatch
+# worker-standard" line. That line is also something dispatch-guard.py
+# refuses outright: a worker only runs on an `assigned` task, never
+# `rework`. ready-set.py now never offers `rework` in any bucket (see its
+# module docstring), so this always falls through to _next_move.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="rework", deps="[]", owns="[file-a.py]",
+           retries=1, max_retries=2)
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("rework task never enters the wave",
+      "READY WAVE" not in err and "Ready to dispatch now" not in err, err)
+check("rework task keeps its full retry-ladder instruction",
+      "copy the checker's diagnosis into ## Rework diagnosis" in err
+      and "retries 1" in err
+      and "re-dispatch the same worker" in err, err)
+
 # degrade path 1: ready-set.py never copied in at all (today's ordinary
 # case for a repo that hasn't picked up #125's payload yet)—the gate must
 # still block and still name the next move per task.
@@ -976,29 +1030,68 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-bulk", "prompt": "just sort the lines"}}, proj_aud)
 check("no Task-ID and no Audition-ID → exit 2", rc == 2 and "no id line" in err, err)
 
-# ------------------------- dispatch-guard: two distinct labeled ids (#108)
-# A prompt carrying labeled ids of two distinct kinds is ambiguous on its
-# face—block outright rather than silently pick the earliest, since a
-# dispatch-time block is something the dispatcher can still act on. Position
-# within the prompt shouldn't matter to whether this blocks (only to WHICH
-# single-kind blob resolves cleanly, covered in the _id_in tests above).
+# ------------------------- dispatch-guard: two distinct labeled ids (#108, #160)
+# A prompt carrying two or more DISTINCT labeled ids, each opening its own
+# line, is ambiguous on its face—block outright rather than silently pick
+# the earliest, since a dispatch-time block is something the dispatcher can
+# still act on. This is deliberately LINE-anchored (see
+# dispatch-guard.py's `_line_anchored_ids`), not the unanchored match
+# `_lib.labeled_ids` does: .agent-guild/CLAUDE.md itself quotes
+# `Audit-ID: CON-audit` mid-sentence, and matching that unanchored used to
+# refuse any dispatch whose prompt quoted the contract for context (#160),
+# on an "ambiguity" that was never there.
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "auditor",
-                                         "prompt": "Audit-ID: CON-audit\ncontext: Task-ID: T-005 is still open"}},
+                                         "prompt": "Audit-ID: CON-audit\nTask-ID: T-005"}},
                         proj_aud)
-check("prompt with Audit-ID and Task-ID → exit 2 (ambiguous)",
+check("two line-anchored ids of DIFFERENT kinds → exit 2 (ambiguous)",
       rc == 2 and "more than one" in err, err)
 check("ambiguous-id block names both candidate ids",
       "CON-audit" in err and "T-005" in err, err)
 check("ambiguous-id block instructs keeping exactly one",
       "exactly one labeled id per dispatch" in err, err)
+check("ambiguous-id block says the ids were found as separate lines",
+      "separate lines" in err, err)
 
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard",
-                                         "prompt": "Task-ID: T-005\ncontext: Audition-ID: A-009 ran earlier"}},
+                                         "prompt": "Task-ID: T-005\nTask-ID: T-007"}},
                         proj_aud)
-check("prompt with Task-ID and Audition-ID → exit 2 (ambiguous), order reversed from above",
-      rc == 2 and "more than one" in err and "T-005" in err and "A-009" in err, err)
+check("two line-anchored ids of the SAME kind → exit 2 (ambiguous too)",
+      rc == 2 and "more than one" in err and "T-005" in err and "T-007" in err, err)
+
+# A mid-sentence mention—including a quoted excerpt of the orchestrator
+# contract's own `Audit-ID: CON-audit` example—never opens a line, so it
+# never joins the ambiguity check and never blocks the dispatch's own id.
+write_task(proj, "T-010", status="assigned")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                         "prompt": "Task-ID: T-010\n"
+                                         "Per the contract: \"Then dispatch the "
+                                         "auditor with Audit-ID: CON-audit.\" "
+                                         "Not relevant to this dispatch."}},
+                        proj)
+check("contract text quoted mid-sentence → no longer blocks",
+      rc == 0, f"rc={rc} err={err}")
+
+# A single line-anchored id resolves cleanly even when the prompt narrates
+# other ids mid-sentence, same as the quoted-contract case above but with
+# a mix of kinds.
+write_task(proj, "T-011", status="assigned")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                         "prompt": "Task-ID: T-011\n"
+                                         "As background: Audit-ID: CON-audit "
+                                         "already passed, and Audition-ID: A-002 "
+                                         "ran earlier—neither is this dispatch."}},
+                        proj)
+check("single line-anchored id + quoted mentions → resolves to the single id",
+      rc == 0, f"rc={rc} err={err}")
+logged_t011 = "T-011" in open(
+    os.path.join(proj, ".agent-guild", "state", "log", "dispatches.log")
+).read()
+check("single-id-resolves dispatch logged against T-011, not a quoted mention",
+      logged_t011)
 
 # ------------------------------- dispatch-guard: a task with no checks (#109)
 # Both halves of #109 in one place. A block-scalar check_method now reads, so

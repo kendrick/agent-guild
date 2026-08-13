@@ -34,10 +34,17 @@ Emits one JSON object on stdout with four keys, in this order:
 
 A task counted in --running is excluded from `wave` and from every other
 bucket—the caller already knows it's in flight, so it would be redundant
-data, not new information. Only `pending`/`rework` tasks are wave
-candidates; `assigned`/`checking` tasks (already dispatched, per the
-caller's own bookkeeping) simply don't appear anywhere in this output—the
-caller's existing mid-flight/stale-marker logic still owns those.
+data, not new information. Only `pending` tasks are wave candidates.
+`rework` is deliberately never one: the retry ladder requires the
+orchestrator to copy the checker's diagnosis, increment `retries`, and move
+the task to `assigned` before it's legal to dispatch (dispatch-guard.py
+refuses a worker on anything else), so offering a `rework` task in the wave
+would invite skipping those steps. A `rework` task therefore never appears
+in `wave`, `deferred`, or `attention`—the caller's own `_next_move`-style
+per-task advice is what owns it, same as `assigned`/`checking` tasks
+(already dispatched, per the caller's own bookkeeping), which also don't
+appear anywhere in this output—the caller's existing mid-flight/stale-marker
+logic still owns those.
 
 Determinism is a hard requirement: same inputs always produce the same
 output, key order included. Every bucket is sorted ascending by numeric
@@ -49,8 +56,9 @@ Exit codes: 0, a set was computed (possibly all-empty buckets, including
 when STATE_DIR/tasks/ doesn't exist—no job active is not an error). 3,
 infrastructure trouble: a task file that can't be read, or whose
 frontmatter can't be parsed, or is missing one of the required keys (id,
-status, retries, deps, executor, checker)—reported on stderr, prefixed
-`ready-set: `, naming the file. A task silently skipped here is a task
+status, retries, deps, executor, checker), or whose `id` duplicates one
+already declared by an earlier file—reported on stderr, prefixed
+`ready-set: `, naming the file(s). A task silently skipped here is a task
 nobody would ever dispatch, so this fails loud rather than dropping it.
 
 Imports `paths_overlap` from check-diff-scope.py via the `_load_module`
@@ -248,6 +256,15 @@ def load_tasks(state_dir):
     reading that JSON cannot tell "nothing is ready" from "I was pointed at
     the wrong path"—which is the same silent-drop failure the per-file exit
     3 below exists to prevent, just one directory up.
+
+    Keying on frontmatter `id` rather than filename means two files can
+    declare the same id—a copy-paste of a task file that forgot to update
+    its own `id:` line, say. Silently letting the second one overwrite the
+    first in this dict would make the earlier file (and whatever task it
+    actually names) vanish from every bucket with no error anywhere: a task
+    nobody would ever dispatch, and nothing on stderr to explain why. That's
+    exactly the silent-skip this module's fail-loud contract exists to rule
+    out, so a repeated id raises TaskParseError naming both files instead.
     """
     if not os.path.isdir(state_dir):
         raise TaskParseError(f"state dir does not exist: {state_dir}")
@@ -255,11 +272,20 @@ def load_tasks(state_dir):
     if not os.path.isdir(tasks_dir):
         return {}
     tasks = {}
+    sources = {}  # id -> path that first declared it, for the duplicate error
     for name in sorted(os.listdir(tasks_dir)):
         if not TASK_FILENAME_RE.match(name):
             continue
-        t = read_task(os.path.join(tasks_dir, name))
-        tasks[t["id"]] = t
+        path = os.path.join(tasks_dir, name)
+        t = read_task(path)
+        tid = t["id"]
+        if tid in tasks:
+            raise TaskParseError(
+                f"{path}: id {tid!r} is already declared by {sources[tid]}—"
+                "two task files cannot share one id"
+            )
+        tasks[tid] = t
+        sources[tid] = path
     return tasks
 
 
@@ -282,6 +308,8 @@ def compute_ready_set(tasks, running):
 
     attention = []
     for tid in ids_sorted:
+        if tid in running:
+            continue
         if tasks[tid]["status"] == "disputed":
             attention.append(
                 (
@@ -297,7 +325,12 @@ def compute_ready_set(tasks, running):
 
     for tid in ids_sorted:
         t = tasks[tid]
-        if t["status"] not in ("pending", "rework"):
+        # rework is deliberately excluded from wave candidacy (see the
+        # module docstring): the retry ladder requires the orchestrator to
+        # do the diagnosis-copy/retries-increment/assigned steps first, and
+        # a rework task offered here would invite skipping them straight
+        # into a dispatch-guard refusal.
+        if t["status"] != "pending":
             continue
         if tid in running:
             continue
@@ -361,7 +394,7 @@ def compute_ready_set(tasks, running):
             "reason": "worker finished; checker of record is owed",
         }
         for tid in ids_sorted
-        if tasks[tid]["status"] == "needs-check"
+        if tasks[tid]["status"] == "needs-check" and tid not in running
     ]
 
     deferred_sorted = sorted(deferred, key=lambda pair: _sort_key(pair[0]))

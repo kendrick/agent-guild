@@ -38,6 +38,7 @@ that's genuinely still working reads differently from a stalled loop.
 subagent-return.py clears the marker once the subagent's return resolves.
 """
 import os
+import re
 import subprocess
 import sys
 import time
@@ -45,6 +46,45 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
+
+
+# A dispatch's own id is written as a line, per .agent-guild/CLAUDE.md ("as a
+# line in the prompt"). _lib.labeled_ids/_id_in find a labeled id ANYWHERE in a
+# blob of text, including mid-sentence—exactly right for id_from_transcript's
+# more forgiving return-time parse (a transcript can narrate or quote an id
+# without meaning to identify the return), but wrong here: .agent-guild/CLAUDE.md
+# itself quotes `Audit-ID: CON-audit` mid-sentence, and any dispatch whose prompt
+# quotes the contract for context used to trip the two-kind ambiguity block
+# below on text that was never trying to identify the dispatch at all. This
+# module deliberately does not touch _lib.labeled_ids/_id_in—other callers
+# (transcript parsing in subagent-return.py) depend on the unanchored
+# behavior—and instead reuses _lib's own compiled patterns against one stripped
+# line at a time, so the label/id shape stays a single source of truth while
+# only a line that OPENS with the label counts.
+_LEADING_MARKUP_RE = re.compile(r"^[ \t]*[-*>]*[ \t]*")
+
+
+def _line_anchored_ids(text):
+    """Every labeled Task-ID / Audit-ID / Audition-ID that opens a line (after
+    stripping leading whitespace and a common markdown list/quote prefix—`-`,
+    `*`, `>`), as (kind, id, line_no) tuples in document order. An id mentioned
+    mid-sentence—including a quoted excerpt of the orchestrator contract—never
+    opens a line and so is never a candidate here."""
+    if not isinstance(text, str):
+        return []
+    found = []
+    for lineno, line in enumerate(text.splitlines()):
+        stripped = _LEADING_MARKUP_RE.sub("", line, count=1)
+        for kind, pattern in (
+            ("task", _lib.TASK_ID_RE),
+            ("audit", _lib.AUDIT_ID_RE),
+            ("audition", _lib.AUDITION_ID_RE),
+        ):
+            m = pattern.match(stripped)
+            if m:
+                found.append((kind, m.group(1), lineno))
+                break  # a line names at most one id
+    return found
 
 
 def _log(agent, task, model):
@@ -216,33 +256,48 @@ def main(data):
     # where both exist—it's the one the dispatcher set deliberately.
     kind, ident = _lib.bare_id(ti.get("dispatch_id"))
     if kind is None:
-        found = _lib.labeled_ids(prompt)
-        # Earliest-position match wins (matches _lib._id_in), rather than a
-        # fixed regex-declaration order that let a Task-ID anywhere in the
-        # prompt beat an Audit-ID appearing earlier in it. But a prompt
-        # carrying two DISTINCT kinds of labeled id is ambiguous on its
-        # face—positional tie-breaking would silently pick one and hide the
-        # authoring mistake from the dispatcher who could still fix it. This
-        # is the one place in the id-resolution path where that's true: a
-        # human (or the orchestrator) is about to send the dispatch, so a
-        # block here is actionable in a way the same ambiguity is NOT at
-        # return time (see id_from_transcript / subagent-return.py, which
+        # Line-anchored only (see _line_anchored_ids above), not
+        # _lib.labeled_ids: a prompt commonly quotes the orchestrator contract
+        # for context, and .agent-guild/CLAUDE.md itself contains the literal
+        # `Audit-ID: CON-audit` mid-sentence. Matching that unanchored used to
+        # make any dispatch whose prompt quoted the contract collide with its
+        # own real Task-ID line and get refused for an "ambiguity" that was
+        # never there.
+        found = _line_anchored_ids(prompt)
+        # Earliest-line match wins (matches _lib._id_in's earliest-position
+        # rule, one level coarser—by line instead of by character offset,
+        # which line-anchoring makes the natural granularity). But two or
+        # more DISTINCT line-anchored ids are ambiguous on their face,
+        # whether they're the same kind (two separate Task-ID: lines) or
+        # different kinds (a Task-ID: line and an Audit-ID: line)—
+        # positional tie-breaking would silently pick one and hide the
+        # authoring mistake from the dispatcher who could still fix it.
+        # "Distinct" is by (kind, id): the SAME id repeated on two lines
+        # (an escalation note re-stating the dispatch's own Task-ID, say)
+        # isn't a mistake and shouldn't block. This is the one place in the
+        # id-resolution path where blocking on ambiguity is right: a human
+        # (or the orchestrator) is about to send the dispatch, so a block
+        # here is actionable in a way the same ambiguity is NOT at return
+        # time (see id_from_transcript / subagent-return.py, which
         # deliberately never blocks on it).
-        kinds_present = {k for k, _id, _pos in found}
-        if len(kinds_present) > 1:
+        distinct = []
+        seen = set()
+        for k, i, _lineno in found:
+            if (k, i) not in seen:
+                seen.add((k, i))
+                distinct.append((k, i))
+        if len(distinct) > 1:
             label = {"task": "Task-ID", "audit": "Audit-ID", "audition": "Audition-ID"}
-            seen = []
-            for k, i, _pos in found:
-                if k not in {sk for sk, _ in seen}:
-                    seen.append((k, i))
-            named = " and ".join(f"{label[k]} {i}" for k, i in seen)
+            named = " and ".join(f"{label[k]} {i}" for k, i in distinct)
             return _lib.block(
-                f"Dispatch to {agent} carries labeled ids of more than one "
-                f"kind in its prompt: {named}. Keep exactly one labeled id "
+                f"Dispatch to {agent} carries more than one labeled id as "
+                f"separate lines in its prompt: {named}. A quoted or "
+                "mid-sentence mention doesn't count toward this—only a line "
+                "that opens with the label does. Keep exactly one labeled id "
                 "per dispatch."
             )
         if found:
-            kind, ident, _pos = found[0]
+            kind, ident, _lineno = found[0]
 
     # Audition path: a tryout runs outside the lifecycle—no task file, no tier,
     # no CON-audit precondition. An Audition-ID is enough to log and pass; the

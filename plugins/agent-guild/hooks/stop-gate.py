@@ -46,16 +46,24 @@ before. #100's guarantee weakens deliberately here, from "the crossing
 landed" to "the crossing was started."
 
 Presentation, separately from all of the above: this gate shells out to
-.agent-guild/scripts/ready-set.py to group ready tasks into one wave, fed
-`--running` from the fresh in-flight markers this gate already computes
-(#125)—that script is the single host-neutral source of the wave decision,
-so a Claude host and a Codex host announce the identical wave from the
-identical inputs. This changes only how the block message reads, never
-whether it blocks: the underlying open-tasks/debts computation is untouched,
-and if ready-set.py is missing, times out, or exits non-zero, the gate
-degrades straight back to _next_move's per-task advice for every open
-task—the same posture dispatch-guard.py's _job_spec_block takes toward a
-stale or slow check-job-spec.py.
+.agent-guild/scripts/ready-set.py to group ready tasks into a wave, a
+deferred list, and an attention list, fed `--running` from the fresh
+in-flight markers this gate already computes (#125)—that script is the
+single host-neutral source of these decisions, so a Claude host and a Codex
+host announce them identically from identical inputs. This changes only how
+the block message reads, never whether it blocks: the underlying open-
+tasks/debts computation is untouched, and if ready-set.py is missing, times
+out, or exits non-zero, the gate degrades straight back to _next_move's
+per-task advice for every open task—the same posture dispatch-guard.py's
+_job_spec_block takes toward a stale or slow check-job-spec.py.
+
+Every open task gets exactly one line, chosen by whichever of ready-set's
+buckets names it—wave, deferred, or attention—so the gate's advice can
+never contradict ready-set's own verdict on that task (#155). A task in
+none of those (including every `rework` task: ready-set never offers one in
+the wave, since dispatching it straight would skip the retry ladder's
+diagnosis-copy and retries-increment steps and trip dispatch-guard's
+`assigned`-only check for workers) falls through to _next_move, unchanged.
 """
 import json
 import os
@@ -502,21 +510,48 @@ def main(data):
 
     all_markers = _lib.in_flight(ttl=float("inf"))
 
-    # Presentation only (#125): ready_result/wave_ids never change which
-    # tasks are open or which debts are outstanding—only which of them get
-    # folded into the wave announcement instead of an ordinary per-task
-    # line. wave_ids stays empty whenever ready-set.py degrades, which
+    # Presentation only (#125): ready_result never changes which tasks are
+    # open or which debts are outstanding—only which of them get folded into
+    # the wave/deferred/attention lines instead of an ordinary _next_move
+    # line. Every bucket stays empty whenever ready-set.py degrades, which
     # collapses this whole block straight back to the pre-#125 behavior:
     # every task gets its _next_move line, nothing gets a wave header.
+    #
+    # Every open task gets exactly one line, and that line must never
+    # contradict ready-set (#155): a task ready-set deferred (an unmet dep,
+    # an owns collision, a spent budget) must never be told to just dispatch
+    # its executor, and a task ready-set escalated to attention (a dep on an
+    # abandoned task, same as `disputed`) must never be told the generic
+    # move either—both cases carry ready-set's own reason string verbatim so
+    # the two views of the same task can't drift apart.
     ready_result = _compute_wave(fresh_markers)
     wave = ready_result["wave"] if ready_result else []
+    deferred = ready_result["deferred"] if ready_result else []
+    attention = ready_result["attention"] if ready_result else []
     wave_ids = {w["id"] for w in wave}
+    deferred_reasons = {d["id"]: d["reason"] for d in deferred}
+    attention_reasons = {a["id"]: a["reason"] for a in attention}
 
-    task_lines = [
-        _next_move(*t, held_debts, *_marker_info(t[0], fresh_markers, all_markers))
-        for t in tasks
-        if t[0] not in wave_ids
-    ]
+    task_lines = []
+    for t in tasks:
+        tid, status, retries = t
+        if tid in wave_ids:
+            continue  # named in the wave header below, not here
+        if tid in deferred_reasons:
+            task_lines.append(
+                f"  {tid} [{status}] → deferred (ready-set): "
+                f"{deferred_reasons[tid]}."
+            )
+            continue
+        if tid in attention_reasons:
+            task_lines.append(
+                f"  {tid} [{status}] → needs your judgment, not a dispatch "
+                f"(ready-set): {attention_reasons[tid]}."
+            )
+            continue
+        task_lines.append(
+            _next_move(*t, held_debts, *_marker_info(tid, fresh_markers, all_markers))
+        )
     # Named by the missing FILE, not the bare stem: a debt's `stem` is the
     # verdict-of-record's own name (T-001-sonnet-r0), and printing that alone
     # would point the orchestrator at the file that already exists instead of

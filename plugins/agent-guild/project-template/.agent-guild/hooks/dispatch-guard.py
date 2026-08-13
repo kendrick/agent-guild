@@ -417,13 +417,14 @@ def main(data):
         _lib.mark_in_flight(tid, agent)
         return 0
 
-    # Worker path.
-    if not _lib.con_audit_passed():
-        return _lib.block(
-            "No PASS constitution audit yet. Run /constitution, then dispatch "
-            "the auditor (Audit-ID: CON-audit) and get a PASS before any worker "
-            "builds against the constitution. Verification applies to all ranks."
-        )
+    # Worker path. The auditor and checker paths returned above, so both gates
+    # below refuse workers only—an audit whose own gate is shut can still be
+    # dispatched to reopen it.
+    ok, reason = _lib.audit_gate(
+        "CON-audit", artifact_path=_lib.state_path("constitution.md")
+    )
+    if not ok:
+        return _lib.block(reason)
 
     if status != "assigned":
         return _lib.block(

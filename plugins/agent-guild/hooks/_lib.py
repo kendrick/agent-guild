@@ -16,6 +16,7 @@ Design rules every hook here obeys:
 Stdlib only: this runs wherever python3 does, with no install step, so the kit
 stays copy-in portable.
 """
+import hashlib
 import json
 import os
 import re
@@ -621,20 +622,136 @@ def no_job_active():
     return len(open_tasks()) == 0
 
 
-def con_audit_passed():
-    """True once any CON-audit verdict records PASS. dispatch-guard blocks all
-    worker dispatches until then, so the orchestrator's own constitution is
-    verified before any worker builds against it."""
+def file_sha256(path):
+    """Hex sha256 of a file's bytes, or None when it can't be read. Content and
+    not mtime, so a rewrite that changes nothing leaves the gate open (#110)."""
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def audit_stamp_path(verdict_path):
+    """Where an audit's approved-content digest lives: a sidecar beside the
+    verdict, not a field inside it. The verdict belongs to the auditor that
+    wrote it, and a hook reaching into that file would make the gate a
+    co-author of the check it later reads."""
+    return verdict_path + ".sha256"
+
+
+def latest_audit_round(audit_id):
+    """(n, path) for the highest round among state/verdicts/<audit_id>-r<N>.md,
+    or (None, None) when the auditor has never filed one.
+
+    The round is parsed as an integer. Sorting the filenames instead puts r10
+    before r2, which reads the ninth round's verdict as the job's latest for
+    the rest of the run."""
     vdir = state_path("verdicts")
     if not os.path.isdir(vdir):
-        return False
+        return None, None
+    pat = re.compile(rf"^{re.escape(audit_id)}-r(\d+)\.md$")
+    best_n, best_path = None, None
     for name in os.listdir(vdir):
-        if name.startswith("CON-audit-") and name.endswith(".md"):
-            with open(os.path.join(vdir, name), encoding="utf-8") as f:
-                fm = parse_frontmatter(f.read())
-            if str(fm.get("verdict", "")).strip().upper() == "PASS":
-                return True
-    return False
+        m = pat.match(name)
+        if m:
+            n = int(m.group(1))
+            if best_n is None or n > best_n:
+                best_n, best_path = n, os.path.join(vdir, name)
+    return best_n, best_path
+
+
+# One message table for both gates, so the two audits can't drift into
+# different vocabularies for the same refusal.
+_AUDIT_GATE_MSG = {
+    "CON-audit": {
+        "missing": (
+            "No PASS constitution audit yet. Run /constitution, then dispatch "
+            "the auditor (Audit-ID: CON-audit) and get a PASS before any worker "
+            "builds against the constitution. Verification applies to all ranks."
+        ),
+        "not_pass": (
+            "CON-audit r{n} is {verdict}—the latest constitution audit did not "
+            "pass. Revise per its diagnosis and re-dispatch the auditor "
+            "(Audit-ID: CON-audit) for a fresh PASS."
+        ),
+    },
+    "DEC-audit": {
+        "missing": (
+            "Tasks exist but no DEC-audit verdict does. Dispatch the auditor "
+            "(Audit-ID: DEC-audit) and get a PASS before any worker runs a "
+            "task. Verification covers the decomposition, not just the "
+            "constitution."
+        ),
+        "not_pass": (
+            "DEC-audit r{n} is {verdict}—the latest decomposition audit did not "
+            "pass. Fix what its diagnosis names, then re-dispatch the auditor "
+            "(Audit-ID: DEC-audit) for a fresh PASS before dispatching workers."
+        ),
+    },
+}
+
+
+def audit_gate(audit_id, artifact_path=None):
+    """(ok, reason) for one of the worker path's audit gates. reason is a
+    complete block message on refusal, None on pass.
+
+    Only the latest round counts. An older PASS used to satisfy the gate for
+    the rest of the job no matter what the rounds after it found, which is how
+    a constitution that failed three consecutive audits kept dispatching
+    workers (#110, observed on the #97 run).
+
+    artifact_path binds the PASS to the bytes it judged, via the sidecar
+    subagent-return stamps at return. Without it the gate asks only whether the
+    latest round passed—which is all a decomposition can be asked today, since
+    task files change status throughout a job and would invalidate a digest on
+    the first transition."""
+    msgs = _AUDIT_GATE_MSG[audit_id]
+    n, vpath = latest_audit_round(audit_id)
+    if vpath is None:
+        return False, msgs["missing"]
+
+    with open(vpath, encoding="utf-8") as f:
+        fm = parse_frontmatter(f.read())
+    verdict = str(fm.get("verdict", "")).strip().upper() or "unreadable"
+    if verdict != "PASS":
+        return False, msgs["not_pass"].format(n=n, verdict=verdict)
+
+    if artifact_path is None:
+        return True, None
+
+    try:
+        rel = os.path.relpath(artifact_path, project_dir())
+    except (OSError, ValueError):
+        rel = artifact_path
+
+    stamp = None
+    try:
+        with open(audit_stamp_path(vpath), encoding="utf-8") as f:
+            stamp = f.read().strip()
+    except OSError:
+        pass
+    if not stamp:
+        return False, (
+            f"{audit_id} r{n} records PASS but carries no approved-content "
+            f"stamp (the verdict predates digest stamping, or the stamp was "
+            f"removed). Re-dispatch the auditor (Audit-ID: {audit_id}) for a "
+            "fresh PASS."
+        )
+
+    current = file_sha256(artifact_path)
+    if current is None:
+        return False, (
+            f"{audit_id} r{n} records PASS but {rel} does not exist. Restore or "
+            f"rewrite it, then re-audit (Audit-ID: {audit_id})."
+        )
+    if current != stamp:
+        return False, (
+            f"{rel} changed since {audit_id} r{n} approved it. Re-dispatch the "
+            f"auditor (Audit-ID: {audit_id}) and get a fresh PASS on the "
+            "current text before any worker builds against it."
+        )
+    return True, None
 
 
 # Claude Code records a subagent dispatch as an assistant tool_use block for one

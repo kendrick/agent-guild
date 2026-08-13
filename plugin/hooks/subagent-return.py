@@ -404,14 +404,32 @@ def _codex_inline_verdict_ok(message, task_id, agent):
 
 
 def _latest_audit_verdict(audit_id):
-    vdir = _lib.state_path("verdicts")
-    if not os.path.isdir(vdir):
-        return None
-    matches = sorted(
-        n for n in os.listdir(vdir)
-        if n.startswith(audit_id + "-r") and n.endswith(".md")
-    )
-    return os.path.join(vdir, matches[-1]) if matches else None
+    """The verdict this return has to validate. Shares dispatch-guard's notion
+    of "latest" deliberately: a round this gate accepts but the gate reads
+    differently is a round nothing actually checked."""
+    return _lib.latest_audit_round(audit_id)[1]
+
+
+def _stamp_audited_content(vpath):
+    """Record which constitution the auditor just judged, so a later revision
+    can't ride this round's PASS (#110).
+
+    Written here rather than by the auditor because the digest is arithmetic,
+    and a hook computing it can't transcribe it wrong. The narrow race—the
+    orchestrator revising the constitution while its own audit is in flight, so
+    this stamps bytes the auditor never read—is left open: closing it costs a
+    dispatch-time digest, and reaching it means breaking the contract mid-audit
+    on work you commissioned. Any later edit re-closes the gate anyway.
+
+    DEC-audit gets no stamp. A digest over tasks/ would invalidate itself on
+    the first status transition, so decomposition staleness needs a normalized
+    digest nobody has specified yet; recording the wrong bytes now would just
+    be a field to explain later."""
+    digest = _lib.file_sha256(_lib.state_path("constitution.md"))
+    if digest is None:
+        return
+    with open(_lib.audit_stamp_path(vpath), "w", encoding="utf-8") as f:
+        f.write(digest + "\n")
 
 
 def _unidentifiable(reason):
@@ -494,6 +512,8 @@ def main(data):
         ok, reason = _verdict_ok(vpath)
         if not ok:
             return _lib.block(f"Auditor verdict for {ident} is not valid: {reason}.")
+        if ident == "CON-audit":
+            _stamp_audited_content(vpath)
         _lib.clear_in_flight(ident, agent)
         return 0
 

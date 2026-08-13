@@ -5,6 +5,15 @@
 .agent-guild/state/*
 !.agent-guild/state/archive/
 
+# An archived run's dispatch record is the run. A global core.excludesFile
+# carrying a plain `*.log` (a common default) was quietly dropping every
+# archive's dispatches.log, so the corpora shipped without the one file that
+# says what was dispatched and when—found when a test that reads #117's log
+# passed locally and died in CI. A repo .gitignore outranks the global file,
+# so this negation puts them back. Build logs stay out; they're output, not
+# record.
+!.agent-guild/state/archive/**/dispatches.log
+
 # check-a11y self-bootstraps these on first run; they're heavy and host-specific.
 .agent-guild/scripts/node_modules/
 .agent-guild/scripts/package-lock.json

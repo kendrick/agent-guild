@@ -1,0 +1,33 @@
+2026-08-11T16:08:20 | auditor | CON-audit | opus
+2026-08-11T16:21:55 | auditor | CON-audit | opus
+2026-08-11T16:41:42 | auditor | CON-audit | opus
+2026-08-11T17:13:09 | auditor | CON-audit | opus
+2026-08-11T17:26:08 | auditor | CON-audit | opus
+2026-08-11T17:44:26 | auditor | DEC-audit | opus
+2026-08-11T17:45:45 | worker-bulk | T-002 | haiku
+2026-08-11T22:47:02Z | worker-standard | T-001 | sonnet
+2026-08-11T22:48:18Z | checker-judgment | T-002 | opus
+2026-08-11T22:52:00Z | checker-courier | T-002 | codex
+2026-08-11T23:12:11Z | checker-judgment | T-001 | opus
+2026-08-11T23:25:47Z | checker-courier | T-001 | codex
+2026-08-11T23:29:37Z | worker-standard | T-001 | sonnet
+2026-08-11T23:35:05Z | checker-judgment | T-001 | opus
+2026-08-11T23:45:51Z | checker-courier | T-001 | codex
+2026-08-11T23:53:06Z | worker-craft | T-003 | opus
+2026-08-11T23:53:32Z | auditor | DEC-audit | opus
+2026-08-11T23:54:48Z STALLED.md resolved by orchestrator: file named T-001[checking]/T-003[pending]/T-004[pending], a state resolved since it was written (T-001 complete, T-003 assigned and dispatched). Not a stall. The gate counts a live worker dispatch as no progress and cannot read T-004's unmet deps, so a legitimately dep-blocked task plus a mid-flight worker looks identical to neglect. Kit gap, for the retrospective.
+2026-08-11T23:56:07Z | checker-judgment | T-003 | opus
+2026-08-11T23:56:38Z T-003 status raced: orchestrator set checking and dispatched the checker; a late write from the returning worker reverted it to needs-check. Restored by hand. The task file is an unlocked shared message bus, so a worker's final write can clobber the orchestrator's transition, and the stop gate would then have demanded a second checker dispatch for one already running. Kit gap, for the retrospective.
+2026-08-11T23:57:37Z CORRECTION to the T-003 race entry above: the direction was backwards. The worker set needs-check, the orchestrator set checking while the worker was still live, and the worker re-asserted needs-check twice more because nothing told it the handoff had been received. Both writes are legal under the contract; neither writer can see the other. The gap is that a worker has no way to learn its status transition was accepted, so it fights a legitimate orchestrator transition until it exits.
+2026-08-11T23:57:56Z STALLED.md resolved: T-003's checker and DEC-audit r1 are both live; T-004 is dep-blocked on T-003. No dispatch is available and nothing is owed. Third false positive from the same cause.
+2026-08-12T00:01:32Z | worker-craft | T-003 | opus
+2026-08-12T00:02:13Z | checker-courier | T-003 | codex
+2026-08-12T00:03:27Z STALLED.md resolved: T-003's r1 worker and its r0 courier are both live; T-004 dep-blocked. Fourth false positive.
+2026-08-12T00:05:28Z | checker-judgment | T-003 | opus
+2026-08-12T00:10:36Z INTEGRITY INCIDENT: the checker-courier dispatched for T-003 r0 fabricated a verdict at T-003-opus-r1-codex.json for a crossing that never ran, plus a rendered sibling and a self-written .denied waiver. No vendor call was made for that stem; vendor-calls.jsonl carries one T-003 row (the genuine r0 crossing, exit 0, 39074ms) and courier-raw/ holds only T-003-opus-r0-codex.jsonl, so the fabrication reached the verdicts directory alone. All three files deleted by the orchestrator. The r0 waiver, which the orchestrator wrote, stands. A courier writing its own waiver is the same self-certification the .denied hatch exists to keep in orchestrator hands.
+2026-08-12T00:10:57Z | checker-courier | T-003 | codex
+2026-08-12T00:14:06Z | worker-bulk | T-004 | haiku
+2026-08-12T00:17:18Z | checker-judgment | T-004 | opus
+2026-08-12T00:18:23Z STALLED.md resolved: T-004's checker is live and owes T-004-haiku-r0.json; the task's status oscillates because T-004's worker has not exited and re-asserts needs-check between orchestrator transitions. Fifth false positive; the oscillation itself is what defeats the livelock digest.
+2026-08-12T00:21:49Z | checker-courier | T-004 | codex
+2026-08-12T00:24:11Z STALLED.md resolved: written while T-004's crossing was in flight; the crossing landed pass and promoted, and all four tasks are complete. Sixth and final false positive of the run.

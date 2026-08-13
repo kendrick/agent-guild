@@ -574,11 +574,22 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
 # workflow-spawned agents. The criterion never needed that driver. ready-set.py
 # is a pure function of task files plus --running, so the replay runs offline:
 # no hosts, no agents, no vendor calls.
-if not os.path.isdir(ARCHIVE_117):
-    print(f"note: corpus archive not found at {ARCHIVE_117} — skipping the "
-          f"replay. This suite ships into user projects; the archive under "
-          f"state/ does not, so the skip is expected there and the remaining "
-          f"cases still cover the script.")
+# Guard on the two paths the replay actually opens, not just the archive
+# directory. A partial archive is a real state: `dispatches.log` was missing
+# from every corpus in git until this branch, because a global
+# core.excludesFile carrying `*.log` outranked nothing that put it back. The
+# directory existed, so a guard that only checked for it skipped nothing and
+# the replay died on the missing file instead.
+REPLAY_INPUTS = [
+    os.path.join(ARCHIVE_117, "tasks"),
+    os.path.join(ARCHIVE_117, "log", "dispatches.log"),
+]
+if not all(os.path.exists(p) for p in REPLAY_INPUTS):
+    missing = [p for p in REPLAY_INPUTS if not os.path.exists(p)]
+    print(f"note: skipping the #117 replay, missing {missing}. This suite "
+          f"ships into user projects; the archive under state/ does not, so "
+          f"the skip is expected there and the remaining cases still cover "
+          f"the script.")
 else:
     print("replaying the archived #117 graph takes fewer waves than the run did")
 

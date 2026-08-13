@@ -1,0 +1,16 @@
+2026-07-14T14:01:52 | auditor | CON-audit | opus
+2026-07-14T14:09:20 | auditor | CON-audit | opus
+2026-07-14T14:14:57 | auditor | CON-audit | opus
+2026-07-14T14:26:24 | auditor | DEC-audit | opus
+2026-07-14T14:31:27 | worker-bulk | T-001 | haiku
+2026-07-14T14:32:38 | checker-deterministic | T-001 | haiku
+2026-07-14T14:33:54 | worker-standard | T-002 | sonnet
+2026-07-14T14:37:32 | checker-judgment | T-002 | opus
+2026-07-14T14:39:59 | worker-standard | T-003 | sonnet
+2026-07-14T14:42:11 | checker-judgment | T-003 | opus
+2026-07-14T14:44:23 | worker-standard | T-004 | sonnet
+2026-07-14T14:46:13 | checker-judgment | T-004 | opus
+2026-07-14T14:47:32 | worker-bulk | T-005 | haiku
+2026-07-14T14:48:30 | checker-deterministic | T-005 | haiku
+2026-07-14T14:49:29 | worker-craft | T-006 | opus
+2026-07-14T15:00:11 | checker-judgment | T-006 | opus

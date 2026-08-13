@@ -25,7 +25,18 @@ Emits one JSON object on stdout with four keys, in this order:
     deferred  — tasks held back, each {"id", "reason"}. A reason is one of:
                 "unmet deps: ..." (naming each unmet dep and its status),
                 "owns overlap with T-NNN" (naming the task it collides
-                with), or "spent retry budget: retries=N max_retries=M".
+                with), "cannot share a wave with T-NNN: `owns` is
+                undeclared ..." (see below), or "spent retry budget:
+                retries=N max_retries=M".
+
+Two tasks share a wave only if BOTH declare `owns`. An empty `owns` is the
+absence of a claim, not a claim to write nothing, and it is what
+templates/task.md ships, so undeclared is a fresh task's default state
+(#162). Treating it as "collides with nothing" would void the wave's whole
+safety guarantee precisely where nobody has thought about ownership yet.
+An undeclared task still dispatches, alone, which is the pre-wave behavior;
+every peer defers with a reason naming what to declare. Deferring the
+undeclared task instead would deadlock a decomposition that declares none.
     attention — tasks needing a human/orchestrator judgment call, each
                 {"id", "reason"}: a `disputed` task, or a task whose `deps`
                 names an `abandoned` task (waiting it out can never
@@ -290,13 +301,36 @@ def load_tasks(state_dir):
 
 
 def _owns_overlap(owns_a, owns_b):
-    """True if any entry in owns_a overlaps any entry in owns_b. A task
-    with no declared owns can't collide with anything and can't be
-    collided into—there's nothing here for another task's diff to step
-    on."""
+    """True if any declared entry in owns_a overlaps any in owns_b. Says
+    nothing about the undeclared case: an empty list is not a claim that a
+    task writes nothing, it's the absence of a claim. _pairing_blocked is
+    what tells those apart."""
     if not owns_a or not owns_b:
         return False
     return any(paths_overlap(a, b) for a in owns_a for b in owns_b)
+
+
+def _pairing_blocked(owns_a, owns_b):
+    """Why two tasks may not share a wave, or None if they may.
+
+    `owns: []` is what templates/task.md ships and what new-task.py stamps,
+    so undeclared is the DEFAULT state of a fresh task, not an unusual one.
+    Reading it as "writes nothing" would make the wave's safety guarantee
+    evaporate exactly where nobody has thought about ownership yet, and the
+    wave would still announce "no owns overlap" as its reason (#162). An
+    absent claim is treated as an unknown one instead: unknown never rides
+    with anything else.
+
+    Deferring every undeclared task instead would deadlock a decomposition
+    that declares none, since nothing would ever reach a wave. So an
+    undeclared task still dispatches; it just goes alone, which is the
+    pre-wave behavior and safe by construction.
+    """
+    if not owns_a or not owns_b:
+        return "undeclared"
+    if _owns_overlap(owns_a, owns_b):
+        return "overlap"
+    return None
 
 
 def compute_ready_set(tasks, running):
@@ -364,27 +398,42 @@ def compute_ready_set(tasks, running):
             deferred.append((tid, f"unmet deps: {', '.join(unmet)}"))
             continue
 
-        collision = None
+        collision = why = None
         for other_tid, other_owns in wave_owns:
-            if _owns_overlap(t["owns"], other_owns):
+            why = _pairing_blocked(t["owns"], other_owns)
+            if why:
                 collision = other_tid
                 break
         if collision is None:
             for rtid in sorted(running, key=_sort_key):
-                if rtid in tasks and _owns_overlap(t["owns"], tasks[rtid]["owns"]):
+                if rtid not in tasks:
+                    continue
+                why = _pairing_blocked(t["owns"], tasks[rtid]["owns"])
+                if why:
                     collision = rtid
                     break
         if collision is not None:
-            deferred.append((tid, f"owns overlap with {collision}"))
+            if why == "undeclared":
+                deferred.append((
+                    tid,
+                    f"cannot share a wave with {collision}: `owns` is "
+                    "undeclared on one or both, so no collision check is "
+                    "possible; declare it on both to run them together",
+                ))
+            else:
+                deferred.append((tid, f"owns overlap with {collision}"))
             continue
 
-        wave.append(
-            {
-                "id": tid,
-                "agent": t["executor"],
-                "reason": "deps complete, no owns overlap, retry budget available",
-            }
-        )
+        # The reason names what was actually compared. Claiming "no owns
+        # overlap" for a task nobody could check was #162's sharpest edge:
+        # the gate certified a property it had skipped.
+        if t["owns"]:
+            reason = ("deps complete, owns checked against every wave peer, "
+                      "retry budget available")
+        else:
+            reason = ("deps complete, retry budget available; alone in this "
+                      "wave because its `owns` is undeclared")
+        wave.append({"id": tid, "agent": t["executor"], "reason": reason})
         wave_owns.append((tid, t["owns"]))
 
     checks = [

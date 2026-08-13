@@ -122,6 +122,67 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         result["deferred"],
     )
 
+# ------------------------------------- 2b. undeclared owns never shares a wave
+# #162: `owns: []` is what templates/task.md ships and what new-task.py
+# stamps, so undeclared is the DEFAULT state of a fresh task. Reading it as
+# "writes nothing" let the wave group tasks nobody had checked and then
+# announce "no owns overlap" as the reason, certifying a comparison it had
+# skipped. Undeclared is now treated as unknown, and unknown rides alone.
+print("a task with undeclared owns never shares a wave, and says so")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001")  # no owns
+    write_task(d, "T-002")  # no owns
+    rc, result, err = run_and_parse(d)
+    check("undeclared: exit 0", rc == 0, f"rc={rc} err={err}")
+    # Not deadlock: deferring EVERY undeclared task would mean nothing ever
+    # reaches a wave in a decomposition that declares none, and the job
+    # would never dispatch anything at all.
+    check(
+        "undeclared: one task still dispatches, so the job can't deadlock",
+        len(result["wave"]) == 1 and result["wave"][0]["id"] == "T-001",
+        result,
+    )
+    check(
+        "undeclared: the peer defers rather than riding along unchecked",
+        ids(result["deferred"]) == ["T-002"],
+        result,
+    )
+    check(
+        "undeclared: the deferral says what to do about it",
+        "owns" in result["deferred"][0]["reason"]
+        and "T-001" in result["deferred"][0]["reason"],
+        result["deferred"],
+    )
+
+# One declared, one not: the unknown side is what blocks the pairing, so a
+# task that did its homework still can't ride with one that didn't.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001")                      # no owns
+    write_task(d, "T-002", owns=["file-b.py"])  # declared
+    rc, result, err = run_and_parse(d)
+    check(
+        "mixed: a declared task can't pair with an undeclared one",
+        ids(result["wave"]) == ["T-001"] and ids(result["deferred"]) == ["T-002"],
+        result,
+    )
+
+# The reason string is the assertion the gate makes about its own work, so
+# it must never claim an overlap check that no task could have supplied.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001")
+    rc, result, err = run_and_parse(d)
+    check(
+        "undeclared: the wave reason never claims 'no owns overlap'",
+        "no owns overlap" not in result["wave"][0]["reason"],
+        result["wave"],
+    )
+    check(
+        "undeclared: the wave reason names the undeclared owns instead",
+        "undeclared" in result["wave"][0]["reason"],
+        result["wave"],
+    )
+
 # ------------------------------------------------- 3. --running excludes a task
 print("--running excludes a task from the wave")
 

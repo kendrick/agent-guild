@@ -27,9 +27,9 @@ import tempfile
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(SCRIPTS_DIR, "check-job-spec.py")
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPTS_DIR))
-ARCHIVE_DIR = os.path.join(
-    REPO_ROOT, ".agent-guild", "state", "archive", "2026-08-10-issue-117"
-)
+
+sys.path.insert(0, SCRIPTS_DIR)
+from _corpus import ARCHIVE_117 as ARCHIVE_DIR, add_owns  # noqa: E402
 
 passed = failed = 0
 
@@ -97,44 +97,10 @@ def copy_corpus_state(state_dir):
     )
 
 
-ARTIFACTS_LIST_ITEM_RE = re.compile(r"^\s*-\s+.*$")
-
-
-def add_owns(state_dir):
-    """Give every task in `state_dir/tasks/` an `owns:` frontmatter field
-    cloned from its own `artifacts:`—the #117 corpus predates #133, so
-    `owns` doesn't exist in it yet, and every declared artifact is already
-    a valid owns entry (an exact file path; T-003's three are directory
-    prefixes already ending in `/`). Mirrors `artifacts:`'s own two shapes
-    (flat `[a, b]` or a block `- path` sequence) rather than normalizing
-    to one, so the cloned `owns:` reads exactly like the field it copied.
-    Mutates the task files on disk."""
-    tasks_dir = os.path.join(state_dir, "tasks")
-    for name in sorted(os.listdir(tasks_dir)):
-        path = os.path.join(tasks_dir, name)
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
-        out = []
-        i = 0
-        inserted = False
-        while i < len(lines):
-            line = lines[i]
-            out.append(line)
-            if not inserted and re.match(r"^artifacts:\s*(.*)$", line):
-                block = [line]
-                i += 1
-                while i < len(lines) and ARTIFACTS_LIST_ITEM_RE.match(lines[i]):
-                    block.append(lines[i])
-                    out.append(lines[i])
-                    i += 1
-                owns_block = ["owns:" + block[0][len("artifacts:"):]] + block[1:]
-                out.extend(owns_block)
-                inserted = True
-                continue
-            i += 1
-        assert inserted, f"{name}: no artifacts: field found to derive owns from"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(out) + "\n")
+# add_owns lives in _corpus.py because test_ready_set.py replays this same
+# corpus and needs the identical derivation. Two copies would drift, and a
+# fixture that derives `owns` differently from the one the linter was proved
+# against is a fixture agreeing with itself about the wrong thing.
 
 
 DEPS_LINE_RE = re.compile(r"^deps:\s*(\[.*\])\s*$")

@@ -14,6 +14,40 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-12: The Stall Backstop Now Counts Per Task, Not Per Job
+
+**Source:** #163
+
+**Context:** `stop-gate.py`'s livelock counter was one digest+count pair for the whole job, and #111's in-flight hold was an `any()` over every open task, so one live subagent froze the counter for every other task. A task stuck at `disputed` sat at count=1 through eight blocked firings while a sibling churned beside it, and Phase 2 nearly always has something mid-flight, so the backstop was effectively off for its whole length.
+
+**Decision:** One counter per open task, one per held courier debt, keyed in `state/log/stop-gate.state`'s `entries` map (`T-NNN`, or `debt:<stem>-<lane>`). The trip condition flips from global stasis to per-entity neglect: three blocked continuations in which the orchestrator never touches one particular task, while doing real work elsewhere, now stall that task on its own schedule. `STALLED.md` names only the entities that actually tripped, instead of every open task and every held debt.
+
+**The likely first surprise.** A held courier debt is the obvious candidate to trip first: nothing about a debt changes until it's discharged, so its digest is constant by construction and it advances on every firing that doesn't hold it. A task genuinely waiting on a dependency is exempted by the deferral hold (see the companion entry on #125's narrowed promise, below); an outstanding debt is not, and was never meant to be—it's supposed to get dispatched.
+
+**Alternatives considered:** Keeping the global counter and narrowing only the in-flight hold to per-task (rejected—the counter itself still moved in lockstep for every open task, so a live sibling would still reset everyone's progress every firing); scaling the strike limit to the number of open tasks (rejected—that reintroduces the crowding-out #163 was filed about, just at a higher number).
+
+## 2026-08-12: #125's "Presentation Only" Promise Narrows On Purpose For The Deferral Hold
+
+**Source:** #163, #125
+
+**Context:** #125 gave `ready-set.py`'s `deferred`/`attention` buckets to `stop-gate.py` on the promise that they were presentation only, changing only how the block message reads, never whether the gate blocks. Per-task counters need more than presentation: a task deferred on an unmet dependency has no move available to it, and counting a blocked turn against it would stall a task nobody could have advanced.
+
+**Decision:** A task in the `deferred` bucket holds its counter, but only for `kind: "deps"` and `kind: "owns"`. Two kinds are deliberately excluded. `"budget"`, because a spent retry budget is retry-ladder step 4 (escalate a tier, re-decompose, or hand the task to the user), an orchestrator judgment exactly like `disputed`, and holding it would wedge a job whose only open task sits at a spent budget with no backstop. And `"owns-undeclared"`, which adversarial review caught after the first version shipped it as a hold: ready-set defers an undeclared task against every id in `--running`, and `owns: []` is what `templates/task.md` ships, so holding it let one live subagent freeze every other pending task's counter. That is #163's own bug relocated from the marker hold to the deferral hold, and the remedy ready-set names in its reason string ("declare it on both") is an orchestrator action, which puts it alongside `budget` rather than alongside a real wait. The buckets still never decide *whether* the gate blocks, only how fast a counter climbs, so the load-bearing half of #125's promise survives; the "never touches behavior" half does not.
+
+**The fail-loud reason this is acceptable.** A missing, slow, failing, or too-old `ready-set.py` (no `kind` field at all) empties the deferred set entirely, which makes every task eligible again and can produce a `STALLED.md` a waiting task didn't earn. That's chosen deliberately over the alternative, which would quietly suppress the backstop and rebuild the exact silent hole #163 was filed about. A spurious `STALLED.md` costs a few minutes reading a file; a silently disabled backstop costs nobody noticing a stuck job for as long as it stays stuck.
+
+**Alternatives considered:** Holding every deferred kind including `budget` (rejected—deadlocks a job whose last open task is budget-deferred, with no backstop left to catch it); degrading a broken `ready-set.py` to "hold everything" rather than "hold nothing" (rejected—that's the silent failure mode #163 exists to close off).
+
+## 2026-08-12: An Unidentifiable Subagent's Marker Is Left For Its TTL, Not Guess-Cleared
+
+**Source:** #163
+
+**Context:** `subagent-return.py` clears a task's in-flight marker on every resolved return, so the stall backstop doesn't mistake a finished checker for one still running. Two of its three "can't identify this subagent" paths (a missing or unreadable `transcript_path`, or no id readable from one that is) reach that point with no task id at all, so there's nothing to key a targeted `clear_in_flight(ident, agent)` call against.
+
+**Decision:** Leave those two paths' markers in place rather than clearing by glob. The only alternative is `*--{agent}.json`, and a wave routinely runs several tasks under the same agent type at once, so that glob would delete a live sibling's marker along with the dead one, telling the stop gate a genuinely running subagent had finished and pushing it toward a spurious `STALLED.md` on healthy work. A leaked marker is bounded by `AGENT_GUILD_INFLIGHT_STALE_S` (an hour), and per-task counters mean one leak now costs only that one task's backstop for the TTL, not every task's. The third caller, a task id it can read with just no task file at that id, clears its own marker before falling through to the same logging, since it has an exact key to clear.
+
+**Alternatives considered:** Globbing `*--{agent}.json` on all three blind paths (rejected—kills a live sibling's marker under ordinary wave concurrency); adding one global "something went unidentified" flag to suppress the backstop entirely (rejected—trades a bounded, localized leak for an unbounded one that also hides every other task's real stalls).
+
 ## 2026-08-12: An Undeclared `owns` Rides Alone Rather Than Deferring
 
 **Source:** #162 half A, `09cff3e`, shipped inside #165; comment recorded on #162

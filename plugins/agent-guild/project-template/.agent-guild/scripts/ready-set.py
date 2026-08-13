@@ -22,12 +22,27 @@ Emits one JSON object on stdout with four keys, in this order:
                 {"id", "agent" (the task's `executor`), "reason"}.
     checks    — checker fan-outs due now: every task at `needs-check`, each
                 {"id", "agent" (the task's `checker`), "reason"}.
-    deferred  — tasks held back, each {"id", "reason"}. A reason is one of:
-                "unmet deps: ..." (naming each unmet dep and its status),
-                "owns overlap with T-NNN" (naming the task it collides
-                with), "cannot share a wave with T-NNN: `owns` is
+    deferred  — tasks held back, each {"id", "reason", "kind"}. A reason is
+                one of: "unmet deps: ..." (naming each unmet dep and its
+                status), "owns overlap with T-NNN" (naming the task it
+                collides with), "cannot share a wave with T-NNN: `owns` is
                 undeclared ..." (see below), or "spent retry budget:
-                retries=N max_retries=M".
+                retries=N max_retries=M". `kind` is the machine-readable
+                twin of that same reason—"deps", "owns", "owns-undeclared",
+                or "budget"—so a caller can tell them apart without pattern
+                -matching prose that's free to keep changing. stop-gate.py
+                consumes it to decide whether a deferred task's stall
+                counter should hold or advance. "deps" and "owns" name
+                obstacles nothing but waiting resolves, so the counter
+                holds. The other two must keep advancing it. "budget" is
+                retry-ladder step 4, an orchestrator judgment call (escalate
+                a tier, re-decompose, or hand it to the user) that waiting
+                can never resolve, so holding it would deadlock the backstop
+                on any job whose last open task sits at a spent budget.
+                "owns-undeclared" is deferred against EVERY id in --running,
+                and `owns: []` is what templates/task.md ships, so holding it
+                would let one live subagent freeze every other pending task's
+                counter—the same crowding-out #163 was filed to remove.
 
 Two tasks share a wave only if BOTH declare `owns`. An empty `owns` is the
 absence of a claim, not a claim to write nothing, and it is what
@@ -385,6 +400,7 @@ def compute_ready_set(tasks, running):
                     tid,
                     f"spent retry budget: retries={t['retries']} "
                     f"max_retries={t['max_retries']}",
+                    "budget",
                 )
             )
             continue
@@ -395,7 +411,7 @@ def compute_ready_set(tasks, running):
             if d not in tasks or tasks[d]["status"] != "complete"
         ]
         if unmet:
-            deferred.append((tid, f"unmet deps: {', '.join(unmet)}"))
+            deferred.append((tid, f"unmet deps: {', '.join(unmet)}", "deps"))
             continue
 
         collision = why = None
@@ -419,9 +435,10 @@ def compute_ready_set(tasks, running):
                     f"cannot share a wave with {collision}: `owns` is "
                     "undeclared on one or both, so no collision check is "
                     "possible; declare it on both to run them together",
+                    "owns-undeclared",
                 ))
             else:
-                deferred.append((tid, f"owns overlap with {collision}"))
+                deferred.append((tid, f"owns overlap with {collision}", "owns"))
             continue
 
         # The reason names what was actually compared. Claiming "no owns
@@ -446,13 +463,16 @@ def compute_ready_set(tasks, running):
         if tasks[tid]["status"] == "needs-check" and tid not in running
     ]
 
-    deferred_sorted = sorted(deferred, key=lambda pair: _sort_key(pair[0]))
+    deferred_sorted = sorted(deferred, key=lambda entry: _sort_key(entry[0]))
     attention_sorted = sorted(attention, key=lambda pair: _sort_key(pair[0]))
 
     return {
         "wave": wave,
         "checks": checks,
-        "deferred": [{"id": tid, "reason": reason} for tid, reason in deferred_sorted],
+        "deferred": [
+            {"id": tid, "reason": reason, "kind": kind}
+            for tid, reason, kind in deferred_sorted
+        ],
         "attention": [{"id": tid, "reason": reason} for tid, reason in attention_sorted],
     }
 

@@ -121,6 +121,11 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         "T-002" in result["deferred"][0]["reason"],
         result["deferred"],
     )
+    check(
+        "overlap: kind is owns",
+        result["deferred"][0]["kind"] == "owns",
+        result["deferred"],
+    )
 
 # ------------------------------------- 2b. undeclared owns never shares a wave
 # #162: `owns: []` is what templates/task.md ships and what new-task.py
@@ -154,6 +159,11 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         and "T-001" in result["deferred"][0]["reason"],
         result["deferred"],
     )
+    check(
+        "undeclared: kind is owns-undeclared",
+        result["deferred"][0]["kind"] == "owns-undeclared",
+        result["deferred"],
+    )
 
 # One declared, one not: the unknown side is what blocks the pairing, so a
 # task that did its homework still can't ride with one that didn't.
@@ -165,6 +175,11 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         "mixed: a declared task can't pair with an undeclared one",
         ids(result["wave"]) == ["T-001"] and ids(result["deferred"]) == ["T-002"],
         result,
+    )
+    check(
+        "mixed: kind is owns-undeclared",
+        result["deferred"][0]["kind"] == "owns-undeclared",
+        result["deferred"],
     )
 
 # The reason string is the assertion the gate makes about its own work, so
@@ -356,6 +371,11 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         and "retries=2" in result["deferred"][0]["reason"],
         result["deferred"],
     )
+    check(
+        "spent-budget: kind is budget",
+        result["deferred"][0]["kind"] == "budget",
+        result["deferred"],
+    )
 
 # ------------------------------------------------- bonus: rework is never waved
 # The retry ladder (.agent-guild/CLAUDE.md) requires the orchestrator to copy
@@ -392,6 +412,11 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         and result["deferred"][0]["id"] == "T-002"
         and "T-001" in result["deferred"][0]["reason"]
         and "assigned" in result["deferred"][0]["reason"],
+        result["deferred"],
+    )
+    check(
+        "unmet-deps: kind is deps",
+        result["deferred"][0]["kind"] == "deps",
         result["deferred"],
     )
 

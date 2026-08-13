@@ -549,7 +549,7 @@ rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 stalled_after_verdict = os.path.exists(
     os.path.join(proj, ".agent-guild", "state", "STALLED.md"))
 with open(os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")) as f:
-    count_after_verdict = json.load(f)["count"]
+    count_after_verdict = json.load(f)["entries"]["T-001"]["count"]
 check("verdict landing resets the stall counter",
       count_after_verdict == 1, f"count={count_after_verdict}")
 check("verdict landing → no spurious STALLED.md on strike 3",
@@ -592,7 +592,7 @@ rc2, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 stalled_inflight = os.path.exists(os.path.join(proj, ".agent-guild", "state", "STALLED.md"))
 with open(state_file, encoding="utf-8") as f:
-    count_inflight = json.load(f)["count"]
+    count_inflight = json.load(f)["entries"]["T-001"]["count"]
 check("fresh marker on an open task → three blocked stops write no STALLED.md",
       not stalled_inflight, f"count={count_inflight}")
 check("fresh marker → the stall count is held, not advanced",
@@ -694,14 +694,14 @@ with open(tx_path, "w") as f:
 rc_a, _, _ = run_hook(
     "stop-gate.py", {"stop_hook_active": False, "transcript_path": tx_path}, proj)
 with open(state_file, encoding="utf-8") as f:
-    count_after_one_fire = json.load(f)["count"]
+    count_after_one_fire = json.load(f)["entries"]["T-001"]["count"]
 check("at-most-once: one fire → count 1",
       count_after_one_fire == 1, f"count={count_after_one_fire}")
 
 rc_b, _, _ = run_hook(
     "stop-gate.py", {"stop_hook_active": False, "transcript_path": tx_path}, proj)
 with open(state_file, encoding="utf-8") as f:
-    count_after_two_fires = json.load(f)["count"]
+    count_after_two_fires = json.load(f)["entries"]["T-001"]["count"]
 check("at-most-once: same digest AND same transcript size → held at 1, not "
       "advanced",
       count_after_two_fires == 1, f"count={count_after_two_fires}")
@@ -715,7 +715,7 @@ with open(tx_path, "a") as f:
 rc_c, _, _ = run_hook(
     "stop-gate.py", {"stop_hook_active": False, "transcript_path": tx_path}, proj)
 with open(state_file, encoding="utf-8") as f:
-    count_after_grown_transcript = json.load(f)["count"]
+    count_after_grown_transcript = json.load(f)["entries"]["T-001"]["count"]
 check("same digest, DIFFERENT transcript size → advances (a real repeated block)",
       count_after_grown_transcript == 2, f"count={count_after_grown_transcript}")
 
@@ -869,6 +869,260 @@ check("degrade (script times out): still blocks", rc == 2, f"rc={rc}")
 check("degrade (script times out): falls back to per-task advice, no wave header",
       "READY WAVE" not in err and "assign it and dispatch its executor" in err,
       err)
+
+# ------------------------- stop-gate: per-task stall counters (#163)
+# The stall counter used to be one digest+count for the whole job, and #111's
+# marker hold was an any() over every open task—so ONE live subagent made
+# every other task immune to the backstop. Measured on a real fixture: a task
+# stuck at `disputed` sat frozen at count=1 through eight blocked firings
+# while a sibling churned. Under waves something is nearly always mid-flight,
+# so the backstop was off for the length of Phase 2.
+print("stop-gate.py: per-task stall counters (#163)")
+STATE_REL = (".agent-guild", "state", "log", "stop-gate.state")
+
+
+def stall_entries(proj):
+    with open(os.path.join(proj, *STATE_REL), encoding="utf-8") as f:
+        return json.load(f)["entries"]
+
+
+def stalled_text(proj):
+    path = os.path.join(proj, ".agent-guild", "state", "STALLED.md")
+    return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+
+
+# The issue's own repro, inverted into an expectation: the stuck sibling
+# reaches STALLED.md on the ordinary three-strike schedule, the mid-flight
+# task is still held at 1 (#111's guarantee, un-regressed), and the report
+# names only what's actually stuck.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="assigned", deps="[]", owns="[a.py]", retries=0)
+write_task(proj, "T-002", status="disputed", deps="[]", owns="[b.py]", retries=0)
+write_in_flight_marker(proj, "T-001", "worker-standard")
+run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text = stalled_text(proj)
+check("a stuck task stalls on schedule while a sibling holds a fresh marker",
+      "T-002" in text, f"rc={rc3} text={text!r}")
+check("STALLED.md names only the stuck task, not the mid-flight one",
+      "T-001" not in text, text)
+# Reporting T-002 parks it; the gate keeps blocking because T-001 is still
+# open and still mid-flight. A job-wide stand-down here would let the turn
+# end with a live worker nobody was going to check.
+check("reporting one task doesn't stand the gate down for a healthy sibling",
+      rc3 == 2, f"rc={rc3}")
+check("the mid-flight task's own counter is still held at 1",
+      stall_entries(proj)["T-001"]["count"] == 1, stall_entries(proj))
+
+# A task deferred behind a dependency that's genuinely running has no move
+# available to it, so its counter holds—otherwise removing the global
+# umbrella would just trade one spurious STALLED.md for another.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="assigned", deps="[]", owns="[a.py]", retries=0)
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]", retries=0)
+write_in_flight_marker(proj, "T-001", "worker-standard")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a task deferred behind a running dep writes no STALLED.md",
+      rc3 == 2 and not stalled_text(proj), f"rc={rc3}")
+
+# ...but when that dep's own marker goes stale, the dep stalls and the task
+# waiting on it does not. Same fixture, TTL zeroed.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="assigned", deps="[]", owns="[a.py]", retries=0)
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]", retries=0)
+write_in_flight_marker(proj, "T-001", "worker-standard")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj, extra_env=STALE_ENV)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj,
+                     extra_env=STALE_ENV)
+text = stalled_text(proj)
+check("a stale-marker dep stalls; the task deferred behind it doesn't",
+      "T-001" in text and "T-002" not in text, f"rc={rc3} text={text!r}")
+
+# `budget` is the one deferral kind that must NOT hold. A spent retry budget
+# is retry-ladder step 4—escalate, re-decompose, or surface it—and it can
+# only ever resolve through the orchestrator. Holding it would leave a job
+# whose last open task is budget-deferred blocked forever with no backstop.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]",
+           retries=2, max_retries=2)
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a spent-budget deferral still stalls (it can't resolve on its own)",
+      rc3 == 0 and "T-001" in stalled_text(proj), f"rc={rc3}")
+
+# The wedge valve: a dep cycle defers every task, with nothing alive to
+# un-defer any of them. check-job-spec.py's R7 catches a cycle, but only at
+# dispatch time, and dispatch time never arrives here. Honoring the hold
+# would block forever with no backstop at all.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[T-002]", owns="[a.py]")
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text = stalled_text(proj)
+check("an all-deferred wedge (dep cycle) voids the hold and stalls loudly",
+      rc3 == 0 and "T-001" in text and "T-002" in text, f"rc={rc3} text={text!r}")
+
+# Degrading fails LOUD, not quiet: with no ready-set.py at all, nothing is
+# deferral-held, so a legitimately waiting task can reach STALLED.md. A
+# degrade that suppressed the backstop instead would rebuild #163's own hole.
+proj = fresh_proj()
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("ready-set degraded → the backstop still fires (loud, not suppressed)",
+      rc3 == 0 and "T-001" in stalled_text(proj), f"rc={rc3}")
+
+# Debts are counted per debt too, so a sibling task's marker can't mask one.
+# T-062 is mid-flight the whole time; T-064's crossing is owed and nobody is
+# dispatching it. Before per-entity counters, T-062's marker held the single
+# global counter and this wrote nothing at all.
+proj = fresh_proj()
+write_task(proj, "T-062", status="assigned", retries=0)
+write_in_flight_marker(proj, "T-062", "worker-standard")
+write_task(proj, "T-064", status="complete", retries=0)
+write_verdict_json(proj, "T-064-sonnet-r0.json", task_id="T-064")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text = stalled_text(proj)
+check("an owed crossing stalls even while a sibling task is mid-flight",
+      "T-064" in text, f"rc={rc3} text={text!r}")
+check("the mid-flight sibling stays out of that report",
+      "T-062" not in text, text)
+
+# ------------- stop-gate: what adversarial review caught in the #163 fix
+# Every case below is a reproduction that failed against the first version of
+# per-task counters. They are the expensive half of this issue: each one is a
+# state the ordinary fixtures above can't reach, and each was found by
+# driving the real hook rather than by reading it.
+print("stop-gate.py: per-task counters, review regressions (#163)")
+
+# Reporting a stuck task must not disarm the gate for the rest of the job.
+# The first version returned 0 job-wide once anything tripped, and a tripped
+# entity's count only resets when its OWN digest changes—so one task nobody
+# ruled on stood the gate down permanently, which is worse than the global
+# counter it replaced (that one at least re-armed whenever anything moved).
+proj = fresh_proj()
+write_task(proj, "T-001", status="disputed", deps="[]", owns="[a.py]")
+for _ in range(3):
+    rc_park, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a job with nothing left but parked entities lets the turn end",
+      rc_park == 0 and "T-001" in stalled_text(proj), f"rc={rc_park}")
+# A healthy task arrives after the stuck one was reported. The gate has to
+# block for it: the whole point of parking is that being stuck on one thing
+# doesn't excuse the orchestrator from everything else.
+write_task(proj, "T-002", status="needs-check", deps="[]", owns="[b.py]",
+           artifacts="[out.py]")
+rc_after, _, err_after = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a parked task leaves the gate armed for its healthy siblings",
+      rc_after == 2 and "T-002" in err_after, f"rc={rc_after} err={err_after}")
+check("the parked task stops being advertised as a next move",
+      "T-001 [disputed]" not in err_after, err_after)
+
+# `owns: []` is what templates/task.md ships, and ready-set defers an
+# undeclared task against EVERY id in --running. Holding that kind would let
+# one live subagent freeze every other pending task's counter, which is
+# #163's own bug relocated from the marker hold to the deferral hold.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="assigned", deps="[]", owns="[]")
+for tid in ("T-002", "T-003"):
+    write_task(proj, tid, status="pending", deps="[]", owns="[]")
+write_in_flight_marker(proj, "T-001", "worker-standard")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text = stalled_text(proj)
+check("undeclared `owns` (the template default) doesn't hold a task's counter",
+      "T-002" in text and "T-003" in text, text)
+check("the live sibling is still held by its own marker, not stalled",
+      "T-001" not in text, text)
+
+# A ready-set.py that flickers healthy/degraded must not pin every counter.
+# The first version carried each task's ready-set disposition inside its
+# digest, so an alternating input changed every digest every firing and
+# reset every counter to 1 forever. ready-set exits 3 on any task file it
+# can't parse, which includes one caught mid-rewrite by task-status.py.
+proj = fresh_proj()
+write_task(proj, "T-001", status="needs-check", deps="[]", owns="[a.py]",
+           artifacts="[out.py]")
+ready_set_path = os.path.join(proj, ".agent-guild", "scripts", "ready-set.py")
+for i in range(6):
+    if i % 2 == 0:
+        seed_ready_set(proj)
+    elif os.path.exists(ready_set_path):
+        os.remove(ready_set_path)
+    rc_flicker, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a flickering ready-set.py can't pin the counter at 1 forever",
+      "T-001" in stalled_text(proj), stalled_text(proj))
+
+# The valve must not read a fresh marker on a `complete` task as "nothing in
+# flight"—that's the ordinary #124 courier crossing, and open_tasks() drops
+# terminal tasks, so the first version stalled a task for taking the gate's
+# own advice while a courier was demonstrably still running.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="complete", deps="[]", owns="[a.py]")
+write_task(proj, "T-002", status="pending", deps="[]", owns="[a.py]")
+write_verdict_json(proj, "T-001-sonnet-r0.json", task_id="T-001")
+write_crossing_reservation(proj, "T-001-sonnet-r0", "codex", "T-001")
+write_in_flight_marker(proj, "T-001", "checker-courier")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_courier, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a task deferred behind a live courier crossing is not stalled",
+      rc_courier == 2 and not stalled_text(proj), f"rc={rc_courier}")
+
+# A dep cycle beside one unrelated task must still surface. The valve keys
+# off entities that could still trip, so once the unrelated task is reported
+# and parked, the cycle is all that's left and the hold gives out.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[T-002]", owns="[a.py]")
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]")
+write_task(proj, "T-003", status="disputed", deps="[]", owns="[c.py]")
+for _ in range(7):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text = stalled_text(proj)
+check("a dep cycle still surfaces once the unrelated task beside it parks",
+      "T-001" in text and "T-002" in text and "T-003" in text, text)
+
+# Version skew: a project's copied-in ready-set.py from before #163 emits
+# `deferred` with no `kind`. Reading that as "not a hold" stalls a task that
+# is legitimately waiting on a running dep, so the reason string is mapped
+# back for exactly the two kinds that hold.
+proj = fresh_proj()
+seed_ready_set(proj)
+with open(ready_set_path if False else os.path.join(
+        proj, ".agent-guild", "scripts", "ready-set.py"), encoding="utf-8") as f:
+    old_ready_set = f.read()
+with open(os.path.join(proj, ".agent-guild", "scripts", "ready-set.py"),
+          "w", encoding="utf-8") as f:
+    f.write(old_ready_set.replace(
+        '{"id": tid, "reason": reason, "kind": kind}',
+        '{"id": tid, "reason": reason}'))
+write_task(proj, "T-001", status="assigned", deps="[]", owns="[a.py]")
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]")
+write_in_flight_marker(proj, "T-001", "worker-standard")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_skew, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a pre-#163 ready-set.py (no `kind`) still holds a waiting task",
+      rc_skew == 2 and not stalled_text(proj), f"rc={rc_skew}")
 
 # ------------------------------------------------------------ dispatch-guard
 print("dispatch-guard.py")
@@ -2393,6 +2647,57 @@ check("checker-courier return with neither verdict nor quota evidence → exit 2
       rc == 2 and "quota bailout" in err, err)
 
 # --------------------------------------------------- orchestrator-write-guard
+print("subagent-return.py: marker key normalization (#163)")
+
+# The two sides of the in-flight marker agreed only by accident.
+# dispatch-guard writes {ident}--{bare-agent}.json, having run bare_agent()
+# at dispatch; this hook compared the RAW agent_type against GUILD_AGENTS,
+# which a namespaced type like "agent-guild:worker-standard" always fails.
+# So it returned 0 on the membership test before validation OR the marker
+# clear ever ran—not a namespaced return being checked and passing, but one
+# the gate never looked at, leaving its marker to age out over the full TTL.
+proj = fresh_proj()
+write_task(proj, "T-041", status="needs-check", artifacts="[out.html]")
+write_in_flight_marker(proj, "T-041", "worker-standard")
+ns_marker = _in_flight_path(proj, "T-041", "worker-standard")
+tx = transcript(proj, "Task-ID: T-041\nGo build it.")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "agent-guild:worker-standard", "transcript_path": tx}, proj)
+check("namespaced worker, clean return → exit 0", rc == 0, f"rc={rc} err={err}")
+check("namespaced worker, clean return → its bare-named marker is cleared",
+      not os.path.exists(ns_marker), ns_marker)
+
+# Same namespaced type, protocol incomplete: it has to fail validation now
+# rather than be waved through unseen.
+proj = fresh_proj()
+write_task(proj, "T-042", status="assigned", artifacts="[]")
+tx = transcript(proj, "Task-ID: T-042")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "agent-guild:worker-standard", "transcript_path": tx}, proj)
+check("namespaced worker, protocol incomplete → exit 2 (validation now applies)",
+      rc == 2 and "Protocol incomplete" in err, err)
+
+# The one _unidentifiable() caller that knows its ident. The other two are
+# structurally blind—the marker is keyed on exactly the thing they can't
+# read—so they leave it for the TTL rather than glob for it and risk
+# deleting a live wave sibling's. This one can name it, and a subagent that
+# genuinely finished shouldn't suppress its own task's backstop for an hour
+# over a task file that no longer exists.
+proj = fresh_proj()
+write_in_flight_marker(proj, "T-040", "worker-standard")
+gone_marker = _in_flight_path(proj, "T-040", "worker-standard")
+tx = transcript(proj, "Task-ID: T-040\nGo build it.")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx}, proj)
+check("no task file → exit 0 loud, no hang",
+      rc == 0 and "could not identify" in err, err)
+check("no task file → its in-flight marker is cleared",
+      not os.path.exists(gone_marker), gone_marker)
+
+# ------------------------------------------------------ orchestrator-write-guard
 print("orchestrator-write-guard.py")
 proj = fresh_proj()
 rc, out, err = run_hook("orchestrator-write-guard.py",

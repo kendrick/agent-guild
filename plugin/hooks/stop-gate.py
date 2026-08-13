@@ -8,29 +8,56 @@ the exact next move for each open task. That closes the loop—worker returns,
 gate refuses to let the turn end until the checker is dispatched and its verdict
 acted on.
 
-Livelock guard: if the same open-task state blocks three times in a row while
-stop_hook_active is set, the gate gives up loudly—it writes .agent-guild/state/STALLED.md
-naming the stuck tasks and lets the turn end, rather than spinning forever. Any
-real progress resets the counter: a status change, a retry change, or a verdict
-landing.
+Livelock guard: the gate counts blocked turns PER ENTITY—one counter for each
+open task, one for each held courier debt—and when any single counter reaches
+three while stop_hook_active is set, it gives up loudly on that entity. It
+writes .agent-guild/state/STALLED.md naming only the entities that actually
+tripped, rather than spinning forever. Progress on an entity resets that
+entity's own counter: a status change, a retry change, a verdict landing
+under its id.
 
-A subagent that's genuinely still working is not real progress by that
-definition, but it isn't a stall either (#111). _lib.in_flight() names every
-dispatch still inside its freshness TTL, and its fresh names ride in the
-digest alongside the task/verdict/debt state. A task whose dispatch is still
-fresh holds the counter rather than advancing it—dispatching again would
-duplicate a subagent already running, and declaring the loop stuck would be
-just as wrong. A marker that outlives its TTL is worth nothing: staleness is
-what lets the backstop resume on a dead agent without anyone clearing state
-by hand.
+Reporting an entity PARKS it. It stops holding the turn open, and the gate
+goes right on blocking for everything else, so the turn ends only once every
+open entity is parked. Standing the whole gate down on the first trip is
+what this shipped as first, and it was strictly worse than the global
+counter it replaced: a tripped entity's count only resets when its own
+digest moves, so one task nobody ruled on disarmed the gate for the entire
+job, permanently, and every other task then climbed toward its own trip
+because nothing was compelling anyone to work on it.
+
+This was one global counter until #163 measured what that costs under waves.
+#111 taught the counter to hold while a subagent was genuinely in flight, but
+the hold was an any() over every open task, so a single live worker made
+every other task immune to the backstop. A task stuck at `disputed` sat
+frozen at count=1 through eight blocked firings while a sibling churned
+beside it. Phase 2 nearly always has something mid-flight, so the backstop
+was off for most of it. Per-entity counters are what let a stuck task reach
+STALLED.md on its own schedule, whatever its siblings are doing.
+
+The gate gets sharper in exchange, and that's deliberate: what trips it now
+is per-entity neglect rather than global stasis. Three blocked continuations
+in which the orchestrator never touches a particular task, while doing real
+work elsewhere, stall that task. Each of those blocks handed it an explicit
+next move for that exact entity, so three turns of silence is a fair reading
+of stuck. A held courier debt is where that will bite first: nothing about a
+debt changes until it's discharged, so its digest is constant by construction
+and it advances on every firing that doesn't hold it.
+
+_lib.in_flight() names every dispatch still inside its freshness TTL. A task
+whose OWN dispatch is still fresh holds its OWN counter while its siblings
+keep counting; dispatching again would duplicate a subagent already running,
+and calling that task stuck would be just as wrong. A marker that outlives
+its TTL is worth nothing: staleness is what lets the backstop resume on a
+dead agent without anyone clearing state by hand.
 
 Waves also fire this gate twice for ONE real blocked turn when both the
 plugin's hooks.json and a copy-in settings.json are registered (#41): same
 task state, same verdict set, same markers, because nothing has actually
-happened between the two firings. The digest alone can't tell that apart from
-a genuine second strike, so the state file also persists the main
-transcript's byte size. Two firings against an unchanged transcript are one
-real block, not two, and the counter holds rather than advancing.
+happened between the two firings. No per-entity digest can tell that apart
+from a genuine second strike—nothing in ANY entity changed—so the state file
+also persists the main transcript's byte size, and that hold stays global.
+Two firings against an unchanged transcript are one real block, not two, and
+every counter holds rather than advancing.
 
 A debt (a courier crossing owed against a verdict of record—see
 _lib.second_opinion_debts) held the turn open before whether or not a
@@ -45,17 +72,50 @@ Everything else—no reservation, or one gone stale—is held exactly as
 before. #100's guarantee weakens deliberately here, from "the crossing
 landed" to "the crossing was started."
 
-Presentation, separately from all of the above: this gate shells out to
+Presentation, and since #163 pacing too: this gate shells out to
 .agent-guild/scripts/ready-set.py to group ready tasks into a wave, a
 deferred list, and an attention list, fed `--running` from the fresh
 in-flight markers this gate already computes (#125)—that script is the
 single host-neutral source of these decisions, so a Claude host and a Codex
-host announce them identically from identical inputs. This changes only how
-the block message reads, never whether it blocks: the underlying open-
-tasks/debts computation is untouched, and if ready-set.py is missing, times
-out, or exits non-zero, the gate degrades straight back to _next_move's
-per-task advice for every open task—the same posture dispatch-guard.py's
-_job_spec_block takes toward a stale or slow check-job-spec.py.
+host announce them identically from identical inputs.
+
+#125 promised those buckets were presentation only, and per-entity counters
+break that promise on purpose. A task deferred because its dependency is
+still running has no move available to it, as the gate's own message says, so
+counting a blocked turn against it would stall a task nobody could have
+advanced. A task in the `deferred` bucket therefore holds its counter, but
+only for `kind: "deps"` and `kind: "owns"`. The other two kinds would each
+wedge the backstop instead of protecting it, for reasons _deferral_held
+spells out; `owns-undeclared` in particular reproduces #163's own bug,
+because `owns: []` is the shipped template default. The buckets still never
+touch WHETHER the gate blocks, only how fast a counter climbs.
+
+Everything else stays eligible: wave and `checks` entries have a dispatch
+available now, `attention` entries need a ruling now, and a task in no
+bucket at all (`assigned`, `checking`, `rework`) is between dispatches with
+its own marker to speak for it. A degrade—missing script, timeout, non-zero
+exit, or a partial result—empties the deferred set, which makes every task
+eligible and fails toward a LOUD spurious STALLED.md rather than a silently
+suppressed backstop. #163's bug was that same trade taken the other way. A
+kit too old to emit `kind` is the one degrade that isn't total: those reason
+strings are stable enough to map back, so a legitimately waiting task isn't
+punished for the far side's version.
+
+One wedge the hold could create: a dependency cycle, or a dep naming a task
+file that doesn't exist, where every task waits on another and nothing can
+ever un-defer any of them. check-job-spec.py's R7 catches both, but only at
+dispatch time, and dispatch time never arrives when nothing can dispatch.
+The valve is to void the deferral hold for that firing, which lets the wedge
+be named like anything else. It opens when every entity that could still
+trip is deferral-held, nothing is in flight, and nothing moved since the
+last firing. Already-parked entities are excluded from that test, since a
+reported entity can no longer be the thing that surfaces a wedge sitting
+behind it—without that exclusion a cycle stayed pinned at 1 forever beside
+any one unrelated task. The in-flight half is a plain marker check rather
+than a claim about open tasks: a fresh marker on a task already moved to
+`complete` is the ordinary #124 courier crossing, and open_tasks() cannot
+see it, so reasoning from the open set alone stalls a task for taking this
+gate's own advice.
 
 Every open task gets exactly one line, chosen by whichever of ready-set's
 buckets names it—wave, deferred, or attention—so the gate's advice can
@@ -75,6 +135,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
 
 STALL_LIMIT = 3
+
+# ready-set.py `deferred` kinds that hold a task's stall counter (#163): the
+# orchestrator has no move to make on either until something else finishes.
+# "budget" and "owns-undeclared" are the two deliberately left out—see
+# _deferral_held for why each one would wedge the backstop.
+DEFERRAL_HOLD_KINDS = frozenset({"deps", "owns"})
+
+# Reason-string prefixes for those same two kinds, used only when a task's
+# `deferred` entry carries no `kind` at all (see _deferral_held).
+_KIND_BY_REASON_PREFIX = (
+    ("unmet deps:", "deps"),
+    ("owns overlap with", "owns"),
+)
 
 # A courier crossing's reservation (_lib.reserve_crossing, written at
 # dispatch time) counts as "a courier is genuinely running" only within this
@@ -246,9 +319,16 @@ def _compute_wave(fresh_markers):
     """ready-set.py's parsed JSON result, or None on any failure to
     produce one—missing script, timeout, non-zero exit, or unparseable
     stdout. None means "degrade to _next_move for everything," never
-    "block less than before": every caller of this treats None exactly
-    like an empty wave, so a broken ready-set.py can only ever make the
-    message plainer, not the gate looser."""
+    "block less than before": every caller treats None exactly like an
+    empty wave, so a broken ready-set.py can only ever make the message
+    plainer, not the gate looser.
+
+    Since #163 the result also paces the stall backstop (see the deferral
+    hold in main), so None costs a second thing: no task is deferral-held,
+    every counter advances, and a task that was legitimately waiting can
+    reach STALLED.md. That direction is deliberate. A degraded ready-set.py
+    that suppressed the backstop instead would recreate exactly the silent
+    hole #163 was filed about."""
     script = os.path.join(
         _lib.project_dir(), ".agent-guild", "scripts", "ready-set.py"
     )
@@ -277,7 +357,14 @@ def _compute_wave(fresh_markers):
         result = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return None
-    if not isinstance(result, dict) or "wave" not in result:
+    # All four buckets, not just `wave`: the presentation code indexes the
+    # other three directly, so a result carrying only some of them would
+    # crash this gate instead of degrading it. Degrading is always the
+    # correct answer here—a broken ready-set.py must never take the loop's
+    # own backstop down with it.
+    if not isinstance(result, dict) or not all(
+        k in result for k in ("wave", "checks", "deferred", "attention")
+    ):
         return None
     return result
 
@@ -388,23 +475,116 @@ def _verdicts_landed():
 
 
 def _load_state():
+    """{"entries": {key: {"digest", "count"}}, "transcript_size": N}.
+
+    A file written before #163 carries one flat digest+count pair for the
+    whole job and no `entries` at all; it reads as no entries, which starts
+    every counter over. There's no migration to write because there's nothing
+    worth carrying across: the file tracks one job's blocked turns, and a
+    guild job that's mid-flight during an upgrade loses at most two strikes
+    of history."""
     try:
         with open(_state_file(), encoding="utf-8") as f:
-            return json.load(f)
+            raw = json.load(f)
     except Exception:
-        return {"digest": None, "count": 0, "transcript_size": None}
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    entries = raw.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+    return {"entries": entries, "transcript_size": raw.get("transcript_size")}
 
 
-def _save_state(digest, count, transcript_size=None):
+def _save_state(entries, transcript_size=None):
     try:
         os.makedirs(_lib.state_path("log"), exist_ok=True)
         with open(_state_file(), "w", encoding="utf-8") as f:
-            json.dump(
-                {"digest": digest, "count": count, "transcript_size": transcript_size},
-                f,
-            )
+            json.dump({"entries": entries, "transcript_size": transcript_size}, f)
     except Exception:
         pass
+
+
+def _dispositions(ready_result):
+    """{task_id: [bucket, reason, kind]} across all four of ready-set.py's
+    buckets, or {} when it degraded. `kind` is None for the three buckets
+    that don't carry one, and for a copied-in ready-set.py predating #163's
+    `kind` field—both read as "not a hold" below, which is the fail-loud
+    direction. No task appears in two buckets: ready-set `continue`s out of
+    its loop the moment it places one."""
+    out = {}
+    if not ready_result:
+        return out
+    for bucket in ("wave", "checks", "deferred", "attention"):
+        for entry in ready_result.get(bucket) or []:
+            if not isinstance(entry, dict):
+                continue
+            tid = entry.get("id")
+            if tid:
+                out[tid] = [bucket, entry.get("reason"), entry.get("kind")]
+    return out
+
+
+def _deferral_held(tid, dispositions):
+    """True if ready-set deferred this task for something the orchestrator
+    cannot act on right now: an unmet dep, or an `owns` collision with a peer
+    that genuinely claims the same paths.
+
+    Two of the four deferral kinds are deliberately outside that set, both
+    because waiting can never resolve them.
+
+    `budget`—a spent retry budget is retry-ladder step 4 (escalate a tier,
+    re-decompose, or surface the task). Holding it would leave a job whose
+    only open task is budget-deferred blocked forever with no backstop.
+
+    `owns-undeclared`—ready-set defers an undeclared task against every id in
+    `--running`, and `owns: []` is what templates/task.md ships, so holding
+    this one would let a single live subagent freeze every other pending
+    task's counter. That is #163's own bug wearing a different hat, and
+    review caught it here with a reproduction. The remedy ready-set names in
+    its reason string ("declare it on both to run them together") is an
+    orchestrator action, which puts this alongside `budget` rather than
+    alongside a real wait."""
+    d = dispositions.get(tid)
+    if not d or d[0] != "deferred":
+        return False
+    kind = d[2]
+    if kind is None:
+        # Version skew: a project's copied-in ready-set.py from before #163
+        # emits `deferred` with no `kind` at all, and reading that as "not a
+        # hold" stalls tasks that are legitimately waiting. Its reason
+        # strings are stable and documented, so map back the two that hold.
+        # `kind` is authoritative wherever it exists; this is a fallback for
+        # an old script, not a second source of truth.
+        reason = d[1] or ""
+        kind = next(
+            (k for prefix, k in _KIND_BY_REASON_PREFIX if reason.startswith(prefix)),
+            None,
+        )
+    return kind in DEFERRAL_HOLD_KINDS
+
+
+def _task_digest(tid, status, retries, verdicts, fresh_markers):
+    """This task's own slice of the job state, as the string its counter
+    compares against.
+
+    The task's ready-set disposition is deliberately NOT in here, though it
+    was at first. Putting it in meant any oscillating input reset the counter
+    forever: a ready-set.py that alternated healthy and degraded (it exits 3
+    on a task file caught mid-rewrite) flipped every task's digest every
+    firing and pinned every counter at 1, which is a silently disabled
+    backstop. Review caught that with a reproduction.
+
+    Leaving it out costs nothing real. A hold pauses an entity's clock; when
+    the hold lifts the clock RESUMES rather than restarting, and a count
+    above 1 was only ever earned during firings where the task was actionable
+    and untouched."""
+    return json.dumps([
+        status,
+        retries,
+        [v for v in verdicts if v.startswith(f"{tid}-")],
+        [m for m in fresh_markers if m.startswith(f"{tid}--")],
+    ])
 
 
 def main(data):
@@ -435,87 +615,183 @@ def main(data):
     held_debts, _in_flight_debts = _partition_debts(debts)
     tasks = _lib.open_tasks()
     if not tasks and not held_debts:
-        # Clean slate—clear any stale block counter and let the turn end.
-        _save_state(None, 0)
+        # Clean slate—clear any stale block counters and let the turn end.
+        _save_state({}, None)
         return 0
 
-    # Fresh markers ride in the digest itself, so a dispatch, a return, or a
-    # staleness transition (nothing renewing a marker before its TTL lapses)
-    # each change it exactly like a status or retry change would (#111).
+    # Fresh markers ride in each task's own digest, so a dispatch, a return,
+    # or a staleness transition (nothing renewing a marker before its TTL
+    # lapses) changes that task's digest exactly like a status or retry
+    # change would (#111)—and, since #163, changes only that task's.
     fresh_markers = _lib.in_flight()
-    digest = json.dumps([sorted(tasks), _verdicts_landed(), held_debts, fresh_markers])
+    # Hoisted above the counter block (#163): ready-set's buckets now pace
+    # the backstop as well as phrase the message, so the deferral hold needs
+    # them before any counter moves. Computed once and reused by the
+    # presentation code below—it's this gate's only subprocess, and running
+    # it twice a firing would double the cost for nothing.
+    ready_result = _compute_wave(fresh_markers)
+    dispositions = _dispositions(ready_result)
+
     prev = _load_state()
+    prev_entries = prev["entries"]
     stop_active = bool(data.get("stop_hook_active"))
     transcript_size = _transcript_size(data)
+    verdicts = _verdicts_landed()
 
-    same_digest = digest == prev.get("digest")
-    # Held, not reset: a fresh marker on any open task means something is
-    # genuinely still running, so an unchanged digest is expected, not a
-    # symptom of being stuck. Advancing here would race a legitimate
-    # long-running dispatch toward STALLED.md; resetting to 1 would hide a
-    # REAL stall that happens to start the moment a marker goes fresh.
-    has_fresh_marker_on_open_task = any(
-        any(m.startswith(f"{t[0]}--") for m in fresh_markers) for t in tasks
-    )
-    # Held for a second, distinct reason (#41): the identical transcript size
-    # across two firings with an otherwise-unchanged digest means the same
-    # real Stop event fired this gate twice (double registration), not that
-    # the orchestrator blocked, did nothing, and got blocked again. Only
-    # compared when both sides are known—an absent transcript_path (most of
-    # this test suite, and any host that doesn't supply one) must fall
-    # through to the ordinary advance-or-hold-by-marker logic below, not
-    # silently freeze the counter on None == None.
+    # Held for a reason no per-entity digest can see (#41): the identical
+    # transcript size across two firings means the same real Stop event fired
+    # this gate twice (double registration), not that the orchestrator
+    # blocked, did nothing, and got blocked again. Only compared when both
+    # sides are known—an absent transcript_path (most of this test suite, and
+    # any host that doesn't supply one) must fall through to the ordinary
+    # advance-or-hold logic below, not silently freeze every counter on
+    # None == None.
     same_transcript_size = (
         transcript_size is not None
         and prev.get("transcript_size") is not None
         and transcript_size == prev.get("transcript_size")
     )
 
-    if same_digest:
-        if has_fresh_marker_on_open_task or same_transcript_size:
-            count = int(prev.get("count", 0))  # held: no increment, no reset
-        else:
-            count = int(prev.get("count", 0)) + 1
-    else:
-        count = 1
+    # One entity per open task and per held debt: (key, digest, marker_held,
+    # deferral_held, line). A debt's digest is its own identity and never
+    # changes, which is the point—nothing about a debt moves until it's
+    # discharged, so it advances on every firing that doesn't hold it.
+    entities = [
+        (
+            tid,
+            _task_digest(tid, status, retries, verdicts, fresh_markers),
+            any(m.startswith(f"{tid}--") for m in fresh_markers),
+            _deferral_held(tid, dispositions),
+            f"- {tid} [{status}] retries={retries}",
+        )
+        for tid, status, retries in tasks
+    ] + [
+        (
+            f"debt:{d_stem}-{d_lane}",
+            json.dumps([d_tid, d_stem, d_lane]),
+            False,
+            False,
+            f"- {d_tid}: second opinion outstanding for {d_stem}-{d_lane}.json",
+        )
+        for d_tid, d_stem, d_lane in held_debts
+    ]
 
-    # Livelock backstop: same unfinished state, already in a continuation loop,
-    # tripped the limit. Give up loudly instead of blocking forever.
-    if stop_active and same_digest and count >= STALL_LIMIT:
+    def _prev_count(key):
+        try:
+            return int(prev_entries[key].get("count", 0))
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return 0
+
+    def _unchanged(key, digest):
+        prev_entry = prev_entries.get(key)
+        return isinstance(prev_entry, dict) and digest == prev_entry.get("digest")
+
+    # The deferral hold's escape valve. A task waiting on a dep or an `owns`
+    # collision shouldn't be punished for waiting, but the hold has to give
+    # out when there's nothing left to wait FOR—otherwise a dependency cycle,
+    # or a dep naming a task file that doesn't exist, holds every counter
+    # forever and the job blocks with no backstop at all.
+    #
+    # It gives out when every entity that could still trip is deferral-held,
+    # nothing is in flight, and nothing moved since the last firing. Entities
+    # already at the limit are excluded from that test on purpose: they've
+    # been reported and parked, so they can no longer be the thing that
+    # surfaces a wedge sitting behind them. Without that exclusion a
+    # dependency cycle stayed pinned at 1 forever beside any one unrelated
+    # task, and was never named. The in-flight test is a plain marker check
+    # rather than "is every open task deferred", because a fresh marker on a
+    # task already moved to `complete` is the ordinary #124 courier crossing,
+    # and open_tasks() cannot see it. Both shapes came from review, with
+    # reproductions.
+    active = [e for e in entities if _prev_count(e[0]) < STALL_LIMIT]
+    wedged = (
+        not fresh_markers
+        and bool(active)
+        and all(deferral_held for _k, _d, _m, deferral_held, _l in active)
+        and all(_unchanged(key, digest) for key, digest, _m, _d, _l in active)
+    )
+
+    entries = {}
+    stalled = []
+    for key, digest, marker_held, deferral_held, line in entities:
+        held = marker_held or (deferral_held and not wedged)
+        if _unchanged(key, digest):
+            try:
+                prev_count = int(prev_entries[key].get("count", 0))
+            except (TypeError, ValueError):
+                # A hand-mangled `count` starts this entity over rather than
+                # crashing the gate that's holding the job together. It costs
+                # the entity's history, which is the cheap direction: the
+                # worst case is a few extra blocked turns before the backstop
+                # catches up again.
+                prev_count = 0
+            count = prev_count if (held or same_transcript_size) else prev_count + 1
+        else:
+            count = 1
+        # Entities are rebuilt from scratch every firing rather than merged
+        # into what was loaded, which is what prunes a task that reached a
+        # terminal status or a debt that got discharged. A key that comes
+        # back later starts over at 1, correctly: something moved.
+        entries[key] = {"digest": digest, "count": count}
+        if count >= STALL_LIMIT:
+            stalled.append((key, f"{line} ({count} blocked turns, no progress)"))
+
+    _save_state(entries, transcript_size)
+
+    # Livelock backstop: some entity sat unchanged through the limit while
+    # nothing ran against it and nothing held it. Give up loudly on that
+    # entity, naming only it, so the report points at what's actually stuck
+    # rather than at every task that happened to be open at the time (#163).
+    #
+    # Reporting an entity PARKS it: it stops holding the turn open, and the
+    # gate goes right on blocking for everything else. Standing the whole
+    # gate down here (what this first shipped as) meant one task nobody ruled
+    # on disarmed the gate for the entire job, permanently—a per-entity
+    # counter with a job-wide surrender, and worse than the global counter it
+    # replaced, since that one at least re-armed whenever anything moved.
+    # Caught by review with a reproduction. When every open entity is parked
+    # the turn ends, which is the original backstop behavior in the only
+    # state that warranted it.
+    parked = set()
+    if stop_active and stalled:
+        parked = {key for key, _line in stalled}
         lines = [
             "# STALLED",
             "",
-            f"The stop gate blocked {count} times with no change to these tasks "
-            f"and no verdict landing:",
+            "The stop gate blocked repeatedly with no progress on these, and "
+            "nothing running against them:",
             "",
-        ] + [f"- {t[0]} [{t[1]}] retries={t[2]}" for t in tasks] + [
-            f"- {d_tid}: second opinion outstanding for {d_stem}-{d_lane}.json"
-            for d_tid, d_stem, d_lane in held_debts
-        ] + [
+        ] + [line for _key, line in stalled] + [
             "",
-            "The gate has stood down so the turn can end. Investigate by hand: a "
-            "checker owing a verdict, a dispute needing a ruling, a second "
-            "opinion nobody dispatched, or a task that should be marked "
-            "abandoned. Delete this file once resolved.",
+            "Anything else still open is left out on purpose: it either moved, "
+            "or something is still working on it. The gate goes on blocking "
+            "for those and has stopped holding the turn open for these. "
+            "Investigate by hand: a checker owing a verdict, a dispute "
+            "needing a ruling, a second opinion nobody dispatched, or a task "
+            "that should be marked abandoned. Delete this file once resolved.",
         ]
         try:
             with open(_lib.state_path("STALLED.md"), "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
         except Exception:
             pass
-        _save_state(digest, count, transcript_size)
-        return 0
-
-    _save_state(digest, count, transcript_size)
+        tasks = [t for t in tasks if t[0] not in parked]
+        held_debts = [
+            d for d in held_debts if f"debt:{d[1]}-{d[2]}" not in parked
+        ]
+        if not tasks and not held_debts:
+            return 0
 
     all_markers = _lib.in_flight(ttl=float("inf"))
 
-    # Presentation only (#125): ready_result never changes which tasks are
-    # open or which debts are outstanding—only which of them get folded into
-    # the wave/deferred/attention lines instead of an ordinary _next_move
-    # line. Every bucket stays empty whenever ready-set.py degrades, which
-    # collapses this whole block straight back to the pre-#125 behavior:
-    # every task gets its _next_move line, nothing gets a wave header.
+    # Presentation, from the same ready_result the counter block above
+    # already paced itself with (#125, #163): it never changes which tasks
+    # are open or which debts are outstanding—only which of them get folded
+    # into the wave/deferred/attention lines instead of an ordinary
+    # _next_move line. Every bucket stays empty whenever ready-set.py
+    # degrades, which collapses this whole block straight back to the
+    # pre-#125 behavior: every task gets its _next_move line, nothing gets a
+    # wave header.
     #
     # Every open task gets exactly one line, and that line must never
     # contradict ready-set (#155): a task ready-set deferred (an unmet dep,
@@ -524,8 +800,11 @@ def main(data):
     # abandoned task, same as `disputed`) must never be told the generic
     # move either—both cases carry ready-set's own reason string verbatim so
     # the two views of the same task can't drift apart.
-    ready_result = _compute_wave(fresh_markers)
-    wave = ready_result["wave"] if ready_result else []
+    # Parked entities are dropped from the wave too. They're already named in
+    # STALLED.md as needing a human, so re-advertising them as ready to
+    # dispatch would put the gate's two messages at odds about the same task.
+    wave = [w for w in (ready_result["wave"] if ready_result else [])
+            if w["id"] not in parked]
     deferred = ready_result["deferred"] if ready_result else []
     attention = ready_result["attention"] if ready_result else []
     wave_ids = {w["id"] for w in wave}

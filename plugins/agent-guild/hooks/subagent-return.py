@@ -428,7 +428,26 @@ def _unidentifiable(reason):
     block here hangs the subagent forever (a worker once had to write PAUSED to
     break exactly this loop). Fail LOUD but let it finish: the task stays open, so
     the main-session stop-gate still forces the orchestrator to verify it, which is
-    where enforcement lives anyway. Never silent—the reason hits stderr and the log."""
+    where enforcement lives anyway. Never silent—the reason hits stderr and the log.
+
+    Two of the three callers (missing/unreadable transcript_path, no id readable
+    from the transcript) reach here with no ident at all, and deliberately leave
+    the in-flight marker alone. Clearing without an ident would mean globbing
+    `*--{agent}.json` and deleting whatever matches, but a wave routinely runs
+    several tasks under the same agent type at once—that glob would delete a LIVE
+    sibling's marker along with the dead one, telling the stop gate a genuinely
+    running subagent had finished and pushing it toward a spurious STALLED.md on
+    healthy work. A leaked marker is bounded by AGENT_GUILD_INFLIGHT_STALE_S (an
+    hour), and with #163 making the stall counter per-task, one leak now only
+    costs that one task's backstop for the TTL rather than every task's—losing an
+    hour beats killing a sibling's marker. (The third caller, "has no task file",
+    does know its ident and clears its own marker before calling in here—see
+    above.)
+
+    The `_lib.block(...)` returns elsewhere in this file leave their markers in
+    place on purpose too, same as always: the subagent hasn't finished, so nothing
+    should read it as no longer working. That's pinned by an existing test and
+    unchanged by any of this."""
     msg = (
         "subagent-return could not identify this subagent's task: " + reason
         + ". Letting it finish instead of hanging; the stop-gate will catch the "
@@ -451,7 +470,7 @@ def main(data):
     # in-subagent no-op to add—the scoping is structural, not a data.get()
     # check—and it's exactly what keeps this gate from ever demanding anything
     # of a sibling task the returning subagent was never dispatched on.
-    agent = data.get("agent_type", "")
+    agent = _lib.bare_agent(data.get("agent_type", ""))
     if agent not in _lib.GUILD_AGENTS:
         return 0  # matcher should exclude these, but don't assume
 
@@ -486,6 +505,12 @@ def main(data):
 
     task = _lib.read_task(ident)
     if task is None:
+        # Unlike the two blind callers above, ident is known here—the marker
+        # dispatch-guard wrote is `{ident}--{agent}.json`, so it can be named
+        # and cleared directly. The subagent genuinely finished; leaving the
+        # marker in place would suppress this one task's stall backstop for
+        # up to an hour over a task file that no longer exists.
+        _lib.clear_in_flight(ident, agent)
         return _unidentifiable(f"{ident} has no task file")
 
     if agent in _lib.WORKER_AGENTS:

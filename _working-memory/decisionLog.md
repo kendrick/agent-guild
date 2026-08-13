@@ -14,6 +14,20 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-13: The Second Opinion Becomes Opt-In, And The Crossing Debt Goes
+
+**Source:** #167, implementing #34's closure; landed as #170 + #171
+
+**Context:** #34 measured cross-family checking over 69 crossings in three repos and ruled the bet does not pay: 2 real defects against 102 findings both sides reached independently, and 45 of the 46 in-family-only findings came from executing something or reading a repo path the courier's brief never carried. The advantage was tool access, not vendor diversity. The ruling said `checker-courier` "stays only as free capacity" without saying what that meant in the contract, which still opened its dual-check section with an expiry that had already passed.
+
+**Decision:** The courier is opt-in. Nothing auto-dispatches it, the crossing debt is retired along with the four files that discharged it, the retrospective reports only crossings that ran, and the lane's plumbing stays wired for a future experiment on a different vendor. All 85 ledger rows are `gpt-5.6-terra`, so #34 ruled on one model rather than on cross-family checking in general.
+
+**The sequencing was the trap.** #170 (prose) and #171 (code) were filed to land in that order, and they can't. `second_opinion_debts()` derived a debt per verdict-of-record file on disk, never from the contract, so deleting the prose first would have left the stop gate demanding crossings nothing explained and pointing at a `.denied` waiver the contract had just removed. They went in one branch, code first.
+
+**What survives, and why.** `crossing_stem`, because an opted-in courier's verdict still lands at the lane-suffixed stem. `exhausted/<lane>`, as the lane's quota sentinel minus the debt framing. And #100's foreign-stem guard, re-based from the reservation records onto the in-flight marker: a courier writing a sibling task's verdict is still possible, and the marker is the same legal-dispatch signal with none of the bookkeeping.
+
+**Alternatives considered:** Removing the lane outright (rejected—the corpus's one `changed_verdict: yes` came from a crossing that blocked, and a different vendor is a new experiment that shouldn't have to rebuild this); keeping auto-dispatch as advisory with no debt (rejected—it bills 30s and 37k input tokens per judgment crossing, with a 28% failure-to-produce rate, for data nothing consumes).
+
 ## 2026-08-12: The Stall Backstop Now Counts Per Task, Not Per Job
 
 **Source:** #163

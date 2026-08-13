@@ -480,7 +480,7 @@ Read that last line against the verdict you just validated. A crossing that comp
 - Session: `> Dispatch checker-courier for T-001. Task-ID: T-001.`
 - Expect: `dispatch-guard` blocks the courier before it starts with `lane is exhausted`, says nothing is substituted, and closes `The sentinel is user-cleared, like PAUSED.` It must not tell you to re-dispatch anything.
 - Session: `> Dispatch T-001's checker of record. Task-ID: T-001.`
-- Expect: the unsuffixed in-family verdict runs normally. The sentinel is lane-scoped, so it reaches comparison data and nothing else. This step checks that scoping. It is not a substitution for the denied courier, which does not need one.
+- Expect: the unsuffixed in-family verdict runs normally. The sentinel is lane-scoped, so it reaches comparison data and nothing else. This step checks that scoping. Nothing is substituted for the denied courier, and since #167 nothing needs to be: the checker of record decides the task on its own.
 
 On a real quota event, verify the final `vendor-calls.jsonl` record has `quota_event: true` and predates the sentinel. Remove the sentinel only after quota recovers.
 
@@ -497,7 +497,7 @@ Remove the throwaway project when finished. If it was only for install testing, 
 ## Two Things That Look Like Breakage But Are Not
 
 - The first accessibility check needs the network. `.agent-guild/scripts/check-a11y.mjs` installs Playwright and axe into a gitignored `node_modules` on first run. Offline bootstrap exits 3, which becomes a `blocked` check—not a pass or clause failure.
-- If a session ends with tasks still open, inspect `.agent-guild/state/STALLED.md`. The stop gate writes it after a single task (or a held courier debt) blocks it three times running with nothing else touching it, then stops holding the turn open for that entity while still blocking for every other one. Resolve the named entity by hand and delete the file.
+- If a session ends with tasks still open, inspect `.agent-guild/state/STALLED.md`. The stop gate writes it after a single task blocks it three times running with nothing else touching it, then stops holding the turn open for that task while still blocking for every other one. Resolve the named task by hand and delete the file.
 
 ## Double-Registration Failure Signature
 

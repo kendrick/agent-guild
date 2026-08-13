@@ -8,13 +8,12 @@ the exact next move for each open task. That closes the loop—worker returns,
 gate refuses to let the turn end until the checker is dispatched and its verdict
 acted on.
 
-Livelock guard: the gate counts blocked turns PER ENTITY—one counter for each
-open task, one for each held courier debt—and when any single counter reaches
-three while stop_hook_active is set, it gives up loudly on that entity. It
-writes .agent-guild/state/STALLED.md naming only the entities that actually
-tripped, rather than spinning forever. Progress on an entity resets that
-entity's own counter: a status change, a retry change, a verdict landing
-under its id.
+Livelock guard: the gate counts blocked turns PER ENTITY—one counter per open
+task—and when any single counter reaches three while stop_hook_active is set,
+it gives up loudly on that entity. It writes .agent-guild/state/STALLED.md
+naming only the entities that actually tripped, rather than spinning forever.
+Progress on an entity resets that entity's own counter: a status change, a
+retry change, a verdict landing under its id.
 
 Reporting an entity PARKS it. It stops holding the turn open, and the gate
 goes right on blocking for everything else, so the turn ends only once every
@@ -39,9 +38,7 @@ is per-entity neglect rather than global stasis. Three blocked continuations
 in which the orchestrator never touches a particular task, while doing real
 work elsewhere, stall that task. Each of those blocks handed it an explicit
 next move for that exact entity, so three turns of silence is a fair reading
-of stuck. A held courier debt is where that will bite first: nothing about a
-debt changes until it's discharged, so its digest is constant by construction
-and it advances on every firing that doesn't hold it.
+of stuck.
 
 _lib.in_flight() names every dispatch still inside its freshness TTL. A task
 whose OWN dispatch is still fresh holds its OWN counter while its siblings
@@ -59,18 +56,11 @@ also persists the main transcript's byte size, and that hold stays global.
 Two firings against an unchanged transcript are one real block, not two, and
 every counter holds rather than advancing.
 
-A debt (a courier crossing owed against a verdict of record—see
-_lib.second_opinion_debts) held the turn open before whether or not a
-courier was actually running against it, which could stall the loop on a
-second opinion that, by contract, can never itself decide complete vs.
-rework (#124). _partition_debts splits debts into held and in-flight using
-the same reservation record dispatch-guard.py/subagent-return.py already
-write and promote (_lib.reserve_crossing/crossing_reservation): a FRESH
-reservation means a courier is plausibly still running, so that debt drops
-out of the block message, STALLED.md, and the early-return check entirely.
-Everything else—no reservation, or one gone stale—is held exactly as
-before. #100's guarantee weakens deliberately here, from "the crossing
-landed" to "the crossing was started."
+A second opinion used to be an obligation this gate enforced: every verdict of
+record on disk owed a courier crossing, and an undischarged one held the turn
+open as its own entity. #167 retired that after #34 ruled the cross-family bet
+does not pay. The courier is opt-in now, so nothing here counts crossings, and
+tasks are the only entities left.
 
 Presentation, and since #163 pacing too: this gate shells out to
 .agent-guild/scripts/ready-set.py to group ready tasks into a wave, a
@@ -112,10 +102,10 @@ last firing. Already-parked entities are excluded from that test, since a
 reported entity can no longer be the thing that surfaces a wedge sitting
 behind it—without that exclusion a cycle stayed pinned at 1 forever beside
 any one unrelated task. The in-flight half is a plain marker check rather
-than a claim about open tasks: a fresh marker on a task already moved to
-`complete` is the ordinary #124 courier crossing, and open_tasks() cannot
-see it, so reasoning from the open set alone stalls a task for taking this
-gate's own advice.
+than a claim about open tasks: an opted-in courier can still be running
+against a task the orchestrator has already moved to `complete` on its
+checker of record, and open_tasks() cannot see that marker, so reasoning
+from the open set alone stalls a task for taking this gate's own advice.
 
 Every open task gets exactly one line, chosen by whichever of ready-set's
 buckets names it—wave, deferred, or attention—so the gate's advice can
@@ -129,7 +119,6 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib  # noqa: E402
@@ -149,15 +138,6 @@ _KIND_BY_REASON_PREFIX = (
     ("owns overlap with", "owns"),
 )
 
-# A courier crossing's reservation (_lib.reserve_crossing, written at
-# dispatch time) counts as "a courier is genuinely running" only within this
-# many seconds of its reserved_at stamp—past that, a debt whose courier died
-# mid-flight must not stay permanently exempt from blocking the turn.
-# AGENT_GUILD_CROSSING_STALE_S is the test seam, same shape as _lib.in_flight's
-# AGENT_GUILD_INFLIGHT_STALE_S: it lets a test zero this out instantly instead
-# of waiting out a real hour to prove a dead courier's reservation goes stale.
-CROSSING_STALE_S_DEFAULT = 3600.0
-
 # Short on purpose (#125): ready-set.py only parses a handful of small task
 # files, nothing like check-job-spec.py's full paperwork lint, so there's no
 # reason to hold the gate open anywhere near dispatch-guard's 20s budget.
@@ -168,91 +148,7 @@ CROSSING_STALE_S_DEFAULT = 3600.0
 READY_SET_TIMEOUT_S = float(os.environ.get("AGENT_GUILD_READY_SET_TIMEOUT", "5"))
 
 
-def _crossing_status(stem, lane, ttl=None):
-    """'fresh', 'stale', or 'none' for stem/lane's courier-crossing
-    reservation (_lib.reserve_crossing / _lib.crossing_reservation).
-
-    'fresh' means a checker-courier was legally dispatched for this EXACT
-    crossing within `ttl` seconds and hasn't necessarily returned yet—so a
-    courier is plausibly still running, and the debt shouldn't hold the
-    orchestrator's turn open on a check that, by the dual-check regime, can
-    never itself decide complete vs. rework. 'stale' means one was
-    dispatched but that window lapsed: whatever ran never came back, and the
-    debt is held again exactly like 'none' (nothing was ever reserved).
-
-    A record missing `reserved_at`, or carrying a value that won't parse,
-    reads as 'none' rather than raising or being treated as perpetually
-    fresh—fail toward holding the debt, the same posture
-    second_opinion_debts() itself takes on a malformed record.
-    """
-    record = _lib.crossing_reservation(stem, lane)
-    if not record:
-        return "none"
-    if ttl is None:
-        try:
-            ttl = float(os.environ.get(
-                "AGENT_GUILD_CROSSING_STALE_S", str(CROSSING_STALE_S_DEFAULT)))
-        except ValueError:
-            ttl = CROSSING_STALE_S_DEFAULT
-    try:
-        reserved_at = datetime.strptime(
-            record["reserved_at"], "%Y-%m-%dT%H:%M:%SZ"
-        ).replace(tzinfo=timezone.utc)
-    except Exception:
-        return "none"
-    age = (datetime.now(timezone.utc) - reserved_at).total_seconds()
-    return "fresh" if age <= ttl else "stale"
-
-
-def _partition_debts(debts):
-    """Split second_opinion_debts()'s (task_id, stem, lane) list into
-    (held, in_flight). A FRESH reservation means a courier is plausibly
-    running against that exact crossing right now, so counting it against
-    the orchestrator's turn would stall the loop on a check that can never
-    itself decide complete vs. rework. Everything else—no reservation at
-    all, or one gone stale—is held: #100's original guarantee weakens
-    deliberately here, from "the crossing landed" to "the crossing was
-    started," but an unreserved (or abandoned) debt still blocks exactly as
-    before.
-    """
-    held, in_flight = [], []
-    for d in debts:
-        _tid, stem, lane = d
-        if _crossing_status(stem, lane) == "fresh":
-            in_flight.append(d)
-        else:
-            held.append(d)
-    return held, in_flight
-
-
-def _next_move(tid, status, retries, debts, marker_state=None, marker_ts=None):
-    # A task can sit at `checking` with its checker of record already landed
-    # and only the courier crossing still missing. The generic "act on the
-    # verdict" line in `moves` lets a well-behaved orchestrator walk straight
-    # past that and call the task complete before the debt registers
-    # anywhere, and the debt list in the block message only catches it after
-    # the fact—so name the courier here instead. Matched to THIS retry round
-    # (not just this task) because an older round's still-open debt from a
-    # prior FAIL survives a rework cycle and shouldn't be mistaken for the
-    # current round's own crossing. Takes precedence over the marker-based
-    # wording below on purpose: a task can reach this branch with its own
-    # in-flight marker already cleared (the checker of record already
-    # returned), and the debt is still the more specific, more actionable
-    # thing to say.
-    #
-    # `debts` here MUST already be held_debts (main() passes only that): a
-    # FRESH courier reservation means one is plausibly still running, and
-    # telling the orchestrator to "dispatch checker-courier" against a
-    # crossing already in flight would open a duplicate-dispatch window.
-    if status == "checking" and any(
-        d_tid == tid and d_stem.endswith(f"-r{retries}")
-        for d_tid, d_stem, _lane in debts
-    ):
-        return (
-            f"  {tid} [{status}] → its checker of record has landed but the "
-            "second opinion hasn't; dispatch checker-courier before "
-            "completing."
-        )
+def _next_move(tid, status, retries, marker_state=None, marker_ts=None):
     # #111: `assigned` and `checking` are exactly the two statuses a task
     # sits at WHILE something is dispatched against it, so they're the two
     # statuses where "nothing has changed" is ambiguous between "nobody has
@@ -398,11 +294,11 @@ def _state_file():
 def _verdict_landed_for(tid, retries):
     """True if a verdict of record for `tid` at THIS retry round is on disk.
 
-    Round-scoped on purpose, matching the courier-debt branch above: an older
-    round's verdict survives a rework cycle, and treating it as this round's
-    would tell the orchestrator to act on a verdict that judged a different
-    artifact. Lane-suffixed files (`...-r0-codex.json`) are second opinions,
-    never the verdict of record, so they don't count.
+    Round-scoped on purpose: an older round's verdict survives a rework
+    cycle, and treating it as this round's would tell the orchestrator to act
+    on a verdict that judged a different artifact. Lane-suffixed files
+    (`...-r0-codex.json`) are second opinions, never the verdict of record,
+    so they don't count.
     """
     for name in _verdicts_landed():
         if not name.startswith(f"{tid}-"):
@@ -599,22 +495,8 @@ def main(data):
     if _lib.in_subagent(data):
         return 0
 
-    # Computed before open_tasks()'s early exit below, on purpose: that call
-    # drops terminal tasks, so a task the orchestrator already moved to
-    # `complete` is invisible to everything past this line—exactly the state
-    # the 2026-08-02 Claude run ended in, a completed T-001 with no crossing,
-    # and the gate said nothing because nothing here ever looked. A debt
-    # survives status changes the open-task picture doesn't, so it has to be
-    # checked independently of whether any task is still open.
-    debts = _lib.second_opinion_debts(data)
-    # A debt whose courier reservation is still FRESH is in-flight, not
-    # stuck—see _partition_debts. It never holds the turn, never lands in
-    # STALLED.md, and never gets its own debt line; only held_debts does any
-    # of that below. in_flight_debts is unused past this line by design: its
-    # whole job is to be the set held_debts excludes.
-    held_debts, _in_flight_debts = _partition_debts(debts)
     tasks = _lib.open_tasks()
-    if not tasks and not held_debts:
+    if not tasks:
         # Clean slate—clear any stale block counters and let the turn end.
         _save_state({}, None)
         return 0
@@ -652,10 +534,8 @@ def main(data):
         and transcript_size == prev.get("transcript_size")
     )
 
-    # One entity per open task and per held debt: (key, digest, marker_held,
-    # deferral_held, line). A debt's digest is its own identity and never
-    # changes, which is the point—nothing about a debt moves until it's
-    # discharged, so it advances on every firing that doesn't hold it.
+    # One entity per open task: (key, digest, marker_held, deferral_held,
+    # line).
     entities = [
         (
             tid,
@@ -665,15 +545,6 @@ def main(data):
             f"- {tid} [{status}] retries={retries}",
         )
         for tid, status, retries in tasks
-    ] + [
-        (
-            f"debt:{d_stem}-{d_lane}",
-            json.dumps([d_tid, d_stem, d_lane]),
-            False,
-            False,
-            f"- {d_tid}: second opinion outstanding for {d_stem}-{d_lane}.json",
-        )
-        for d_tid, d_stem, d_lane in held_debts
     ]
 
     def _prev_count(key):
@@ -699,9 +570,9 @@ def main(data):
     # surfaces a wedge sitting behind them. Without that exclusion a
     # dependency cycle stayed pinned at 1 forever beside any one unrelated
     # task, and was never named. The in-flight test is a plain marker check
-    # rather than "is every open task deferred", because a fresh marker on a
-    # task already moved to `complete` is the ordinary #124 courier crossing,
-    # and open_tasks() cannot see it. Both shapes came from review, with
+    # rather than "is every open task deferred", because an opted-in courier
+    # can still be running against a task already moved to `complete`, and
+    # open_tasks() cannot see it. Both shapes came from review, with
     # reproductions.
     active = [e for e in entities if _prev_count(e[0]) < STALL_LIMIT]
     wedged = (
@@ -730,8 +601,8 @@ def main(data):
             count = 1
         # Entities are rebuilt from scratch every firing rather than merged
         # into what was loaded, which is what prunes a task that reached a
-        # terminal status or a debt that got discharged. A key that comes
-        # back later starts over at 1, correctly: something moved.
+        # terminal status. A key that comes back later starts over at 1,
+        # correctly: something moved.
         entries[key] = {"digest": digest, "count": count}
         if count >= STALL_LIMIT:
             stalled.append((key, f"{line} ({count} blocked turns, no progress)"))
@@ -767,8 +638,8 @@ def main(data):
             "or something is still working on it. The gate goes on blocking "
             "for those and has stopped holding the turn open for these. "
             "Investigate by hand: a checker owing a verdict, a dispute "
-            "needing a ruling, a second opinion nobody dispatched, or a task "
-            "that should be marked abandoned. Delete this file once resolved.",
+            "needing a ruling, or a task that should be marked abandoned. "
+            "Delete this file once resolved.",
         ]
         try:
             with open(_lib.state_path("STALLED.md"), "w", encoding="utf-8") as f:
@@ -776,17 +647,14 @@ def main(data):
         except Exception:
             pass
         tasks = [t for t in tasks if t[0] not in parked]
-        held_debts = [
-            d for d in held_debts if f"debt:{d[1]}-{d[2]}" not in parked
-        ]
-        if not tasks and not held_debts:
+        if not tasks:
             return 0
 
     all_markers = _lib.in_flight(ttl=float("inf"))
 
     # Presentation, from the same ready_result the counter block above
     # already paced itself with (#125, #163): it never changes which tasks
-    # are open or which debts are outstanding—only which of them get folded
+    # are open—only which of them get folded
     # into the wave/deferred/attention lines instead of an ordinary
     # _next_move line. Every bucket stays empty whenever ready-set.py
     # degrades, which collapses this whole block straight back to the
@@ -829,39 +697,16 @@ def main(data):
             )
             continue
         task_lines.append(
-            _next_move(*t, held_debts, *_marker_info(tid, fresh_markers, all_markers))
+            _next_move(*t, *_marker_info(tid, fresh_markers, all_markers))
         )
-    # Named by the missing FILE, not the bare stem: a debt's `stem` is the
-    # verdict-of-record's own name (T-001-sonnet-r0), and printing that alone
-    # would point the orchestrator at the file that already exists instead of
-    # the lane-suffixed one (T-001-sonnet-r0-codex.json) that's actually
-    # missing. A STALE reservation gets different advice than a never-started
-    # one: re-dispatch is what actually collects #34's comparison data, so
-    # that's offered first, with the waiver named only as the fallback for a
-    # dispatch that genuinely can't succeed.
-    debt_lines = []
-    for d_tid, d_stem, d_lane in held_debts:
-        if _crossing_status(d_stem, d_lane) == "stale":
-            debt_lines.append(
-                f"  {d_tid}: second opinion outstanding—its earlier "
-                f"checker-courier dispatch for {d_stem}-{d_lane}.json went "
-                "stale before returning; re-dispatch checker-courier, or "
-                f"write {d_stem}-{d_lane}.denied if the dispatch cannot "
-                "succeed."
-            )
-        else:
-            debt_lines.append(
-                f"  {d_tid}: second opinion outstanding—dispatch checker-courier "
-                f"to write {d_stem}-{d_lane}.json."
-            )
     wave_block = _wave_block(wave)
     body_sections = ([wave_block] if wave_block else []) + [
-        "\n".join(task_lines + debt_lines)
+        "\n".join(task_lines)
     ]
     body = "\n".join(body_sections)
     return _lib.block(
-        f"{len(tasks)} task(s) still open and {len(held_debts)} second "
-        "opinion(s) outstanding—the turn can't end yet. Next move for each:\n"
+        f"{len(tasks)} task(s) still open—the turn can't end yet. "
+        "Next move for each:\n"
         f"{body}\n"
         "Do the next move, then stop again. If you need to hand control back to "
         "the user mid-job, the user can `touch .agent-guild/state/PAUSED`."

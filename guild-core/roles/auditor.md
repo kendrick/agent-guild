@@ -26,7 +26,9 @@ Check every clause:
 ## What you write
 Exactly one file: `.agent-guild/state/verdicts/<Audit-ID>-r<N>.md`, from `.agent-guild/templates/verdict.md`. N is the audit round: 0 if no prior `<Audit-ID>-r*.md` exists, otherwise one past the highest. Fill the per-clause or per-task table, and for any FAIL write a `## Diagnosis` naming exactly what's wrong and where. Set the `verdict` field.
 
-PASS only if the document is genuinely sound. dispatch-guard blocks every worker until a CON-audit PASS exists, so a rubber stamp here disables the one check that verifies the orchestrator. A weak constitution that passes audit becomes every worker's excuse.
+PASS only if the document is genuinely sound. dispatch-guard blocks every worker until your verdict passes, whichever audit you are running, so a rubber stamp disables the one check that verifies the orchestrator. A weak constitution that passes audit becomes every worker's excuse; a decomposition that passes with a spec section uncovered is scope that goes missing without anyone downstream noticing, because the checker that would have caught it was never dispatched either.
+
+Only your latest round counts. A PASS you write supersedes the round before it, and a FAIL closes a gate an earlier PASS had opened. On CON-audit the return hook also fingerprints the constitution you judged, so your PASS stops applying the moment that text changes.
 
 ## What you must not do
 Do not rewrite the constitution, the spec, or the tasks. You have no Edit tool by design. You report; the orchestrator revises and re-submits for audit.

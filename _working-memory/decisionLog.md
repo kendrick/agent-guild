@@ -14,6 +14,22 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-13: Both Audits Gate, And A PASS Names The Bytes It Approved
+
+**Source:** #110 and #161, closed together on `fix/audit-gates-161-110`
+
+**Context:** Phase 0 audits the constitution and Phase 1 audits the decomposition, and neither verdict did what the contract implied. `con_audit_passed()` scanned the verdicts directory for any `CON-audit-*.md` reading PASS and returned on the first hit, so a constitution revised after approval kept dispatching workers and a later FAIL never revoked an earlier PASS. Nothing read a DEC-audit verdict at all. The open question [[openQuestions]] carried about whether a failed DEC-audit should gate anything is answered here.
+
+**Decision, #161: gate it.** A bad decomposition doesn't announce itself. Workers build the tasks that exist, checkers pass them against real clauses, and the spec section no task covered is never built while every verdict in the job stays green. Coverage is the one property nothing downstream recovers, because a checker only ever verifies the task it was given. The other reading on the table, declaring DEC-audit advisory in the contract, was rejected: an audit whose verdict can't stop anything is a memo, and this one guards the failure no other check can see.
+
+**Decision, #110: bind the PASS to bytes, and count only the latest round.** Both gates now run through one `audit_gate()` helper. A newer FAIL closes a gate an older PASS opened, and the CON gate additionally compares the constitution's sha256 against a stamp recorded for the approving round. Content and not mtime, so a no-op save costs nothing.
+
+**The stamp's timing was the whole design, and the first answer was wrong.** Writing it when the auditor returned looked obviously right and failed twice. An auditor that returned without writing a verdict re-stamped the *previous* round with whatever was on disk, so the gate came to mean "an auditor round-tripped" rather than "this text was approved"—the exact defect #110 was filed about, rebuilt inside its own fix. And a Codex auditor runs read-only and returns its verdict for the orchestrator to persist, so on that host the stamp was never written at all and the gate could never open. Both went away by stamping at dispatch instead: `dispatch-guard` fingerprints the constitution it is sending the auditor to read, against the round the auditor is about to write. Only a commissioned round carries a digest, and the moment is one both hosts share.
+
+**Fail closed on a missing stamp.** Nothing distinguishes a PASS that predates the mechanism from one whose stamp was deleted, and the recovery is a single audit round on a path that is never gated. The gate also reads the artifact before the stamp, so a constitution that went missing is reported as missing rather than as unstamped, which would send you to re-audit a document that isn't there.
+
+**Alternatives considered:** the auditor writing the digest into its own verdict frontmatter (rejected—a verdict belongs to the agent that wrote it, and hook-computed arithmetic can't be transcribed wrong); grandfathering unstamped PASS verdicts (rejected, above); stamping DEC-audit too, so a future staleness rule would have data (rejected—task files change status all job long, so a digest over `tasks/` goes stale on the first transition, and a normalized digest is a decision nobody has made yet).
+
 ## 2026-08-13: A Trailing Slash Is Notation, And The Build Is A Serialization Point
 
 **Source:** #162 and #164, closed together on `fix/162-164-owns-accuracy`

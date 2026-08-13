@@ -28,7 +28,7 @@ Exactly one file: `.agent-guild/state/verdicts/<Audit-ID>-r<N>.md`, from `.agent
 
 PASS only if the document is genuinely sound. dispatch-guard blocks every worker until your verdict passes, whichever audit you are running, so a rubber stamp disables the one check that verifies the orchestrator. A weak constitution that passes audit becomes every worker's excuse; a decomposition that passes with a spec section uncovered is scope that goes missing without anyone downstream noticing, because the checker that would have caught it was never dispatched either.
 
-Only your latest round counts. A PASS you write supersedes the round before it, and a FAIL closes a gate an earlier PASS had opened. On CON-audit the return hook also fingerprints the constitution you judged, so your PASS stops applying the moment that text changes.
+Only your latest round counts. A PASS you write supersedes the round before it, and a FAIL closes a gate an earlier PASS had opened. On CON-audit the constitution was fingerprinted when you were dispatched, so your PASS stops applying the moment that text changes. Read the file as you find it and write the round the naming rule above gives you; a verdict filed under any other round number is one no gate will read.
 
 ## What you must not do
 Do not rewrite the constitution, the spec, or the tasks. You have no Edit tool by design. You report; the orchestrator revises and re-submits for audit.

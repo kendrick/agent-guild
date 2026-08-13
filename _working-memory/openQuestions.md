@@ -60,11 +60,3 @@ That method earned itself on 2026-08-12. #134's step 0 spike concluded that guil
 The failure modes are not symmetric. A proof that fires means the paperwork is wrong; an inferring rule that fires may mean the rule misread the prose, and on a misread the job stops with no recourse short of `PAUSED`, which stands down every gate rather than the one that misfired. #132's adversarial review produced false positives in R2, R10, R4's preamble scan, and R9. Three are fixed; R9's is documented at the rule as a deliberate trade, because the only fix that closes it re-blinds the rule on three real sentences.
 
 So the original worry runs in both directions. #132 warned that approximating judgment gives false confidence; the measured cost so far is the reverse, where a misfire deadlocks rather than under-catches. Tracked as #139, which lays out three directions and picks none, because choosing needs evidence about how often heuristics misfire in real jobs and there is exactly one corpus so far. Warn-only is already ruled out (see [[antipatterns]]).
-
-## Should a failed DEC-audit gate anything?
-
-`dispatch-guard` gates workers on `con_audit_passed()` and nothing else. Grep for `DEC-audit` in the hooks and the only hits are a comment and an error string, so a decomposition the auditor rejected blocks no dispatch: once Phase 0's CON-audit PASS is on disk, every worker sails through against whatever task files exist. DEC-audit is advisory in practice while the contract reads as though it were a gate.
-
-Surfaced 2026-08-12 by the third adversarial review of #159, while checking whether a budget hand-off could terminate. It is why that hand-off deadlocked Phase 1: the contract said stop dispatching, the stop gate said dispatch, and no gate stood behind either. Cutting the budget removed the contradiction without answering the question.
-
-Two readings, and the choice is not obvious. Either the gate is missing and a rejected decomposition should block workers the way a rejected constitution does, which is the symmetric design and closes the hole. Or DEC-audit is deliberately advisory, because a decomposition is revisable mid-job in a way a constitution is not, and the contract should say so plainly instead of implying enforcement. Nothing in the repo records which was intended. Unfiled as of the #159 merge.

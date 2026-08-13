@@ -661,6 +661,15 @@ def latest_audit_round(audit_id):
     return best_n, best_path
 
 
+def next_audit_round(audit_id):
+    """The round the auditor being dispatched will write. Same arithmetic the
+    auditor's own brief gives it: 0 when no round exists, otherwise one past
+    the highest. Predicting it is what lets the constitution be fingerprinted
+    when the audit is commissioned rather than when it comes back."""
+    n, _ = latest_audit_round(audit_id)
+    return 0 if n is None else n + 1
+
+
 # One message table for both gates, so the two audits can't drift into
 # different vocabularies for the same refusal.
 _AUDIT_GATE_MSG = {
@@ -725,6 +734,16 @@ def audit_gate(audit_id, artifact_path=None):
     except (OSError, ValueError):
         rel = artifact_path
 
+    # Read the artifact before the stamp. A missing constitution and a missing
+    # stamp both refuse, but only one of them is fixable by re-auditing, so
+    # reporting the stamp first sends you around a loop that can't close.
+    current = file_sha256(artifact_path)
+    if current is None:
+        return False, (
+            f"{audit_id} r{n} records PASS but {rel} does not exist. Restore or "
+            f"rewrite it, then re-audit (Audit-ID: {audit_id})."
+        )
+
     stamp = None
     try:
         with open(audit_stamp_path(vpath), encoding="utf-8") as f:
@@ -739,12 +758,6 @@ def audit_gate(audit_id, artifact_path=None):
             "fresh PASS."
         )
 
-    current = file_sha256(artifact_path)
-    if current is None:
-        return False, (
-            f"{audit_id} r{n} records PASS but {rel} does not exist. Restore or "
-            f"rewrite it, then re-audit (Audit-ID: {audit_id})."
-        )
     if current != stamp:
         return False, (
             f"{rel} changed since {audit_id} r{n} approved it. Re-dispatch the "

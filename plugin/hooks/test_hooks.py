@@ -1489,8 +1489,13 @@ rc, err = worker_rc(proj_stale)
 check("fresh stamp on revised text → exit 0", rc == 0, f"rc={rc} err={err}")
 write_constitution(proj_stale, "# Constitution\n\n- C-1: a revised clause.\n")
 rc, err = worker_rc(proj_stale)
+stamp_r0 = os.path.join(proj_stale, ".agent-guild", "state", "verdicts",
+                        "CON-audit-r0.md.sha256")
+with open(os.path.join(proj_stale, ".agent-guild", "state", "constitution.md"), "rb") as f:
+    live_digest = hashlib.sha256(f.read()).hexdigest()
 check("byte-identical rewrite → exit 0 (content, not mtime)",
-      rc == 0, f"rc={rc} err={err}")
+      rc == 0 and open(stamp_r0, encoding="utf-8").read().strip() == live_digest,
+      f"rc={rc} err={err}")
 
 write_verdict(proj_stale, "CON-audit-r1.md", "FAIL", diagnosis=True)
 rc, err = worker_rc(proj_stale)
@@ -1529,12 +1534,92 @@ rc, err = worker_rc(proj_noc)
 check("stamped CON PASS, constitution deleted → exit 2",
       rc == 2 and "does not exist" in err, f"rc={rc} err={err}")
 
+# Missing constitution AND missing stamp. Reporting the stamp here would send
+# the reader to re-audit, and an audit of a document that isn't there writes no
+# stamp either, so the message has to name the half that can actually be fixed.
+proj_neither = fresh_proj()
+write_verdict(proj_neither, "CON-audit-r0.md", "PASS")
+dec_pass(proj_neither)
+write_task(proj_neither, "T-001", status="assigned")
+rc, err = worker_rc(proj_neither)
+check("no constitution and no stamp → names the missing file, not the stamp",
+      rc == 2 and "does not exist" in err and "stamp" not in err, f"rc={rc} err={err}")
+
 # The gate is worker-only. An auditor dispatched to reopen it must get through,
 # or a stale constitution is a job that can never be repaired.
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "auditor",
                                         "prompt": "Audit-ID: CON-audit"}}, proj_legacy)
 check("CON gate closed → auditor still dispatches (no deadlock)",
+      rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------- dispatch-guard: the content stamp (#110)
+# The stamp is written when the audit is commissioned, not when it comes back.
+# Both defects below were found by adversarial review of the return-time
+# version and are the reason it moved.
+print("dispatch-guard.py: CON-audit content stamp (#110)")
+
+
+def stamp_of(proj, round_n):
+    path = os.path.join(proj, ".agent-guild", "state", "verdicts",
+                        f"CON-audit-r{round_n}.md.sha256")
+    return open(path, encoding="utf-8").read().strip() if os.path.exists(path) else None
+
+
+def digest_of(proj):
+    with open(os.path.join(proj, ".agent-guild", "state", "constitution.md"), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+AUDIT_CON = {"tool_input": {"subagent_type": "auditor", "prompt": "Audit-ID: CON-audit"}}
+
+proj_cs = fresh_proj()
+write_constitution(proj_cs)
+rc, out, err = run_hook("dispatch-guard.py", AUDIT_CON, proj_cs)
+check("CON auditor dispatched with no prior round → stamps r0",
+      rc == 0 and stamp_of(proj_cs, 0) == digest_of(proj_cs), f"rc={rc} err={err}")
+
+write_verdict(proj_cs, "CON-audit-r0.md", "FAIL", diagnosis=True)
+write_constitution(proj_cs, "# Constitution\n\n- C-1: revised.\n")
+rc, out, err = run_hook("dispatch-guard.py", AUDIT_CON, proj_cs)
+check("CON auditor re-dispatched → stamps the next round, not the last one",
+      rc == 0 and stamp_of(proj_cs, 1) == digest_of(proj_cs)
+      and stamp_of(proj_cs, 0) != stamp_of(proj_cs, 1), f"rc={rc} err={err}")
+
+# An auditor that returns having written nothing used to relabel the previous
+# round with whatever was on disk, which turned the gate into "an auditor
+# round-tripped" instead of "this text was approved."
+proj_launder = fresh_proj()
+write_constitution(proj_launder)
+run_hook("dispatch-guard.py", AUDIT_CON, proj_launder)
+write_verdict(proj_launder, "CON-audit-r0.md", "PASS")
+dec_pass(proj_launder)
+write_task(proj_launder, "T-001", status="assigned")
+rc, err = worker_rc(proj_launder)
+check("stamped at dispatch, verdict written after → exit 0", rc == 0, f"rc={rc} err={err}")
+
+write_constitution(proj_launder, "# Constitution\n\n- C-1: never audited.\n")
+tx = transcript(proj_launder, "Audit-ID: CON-audit")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_launder)
+rc_worker, err_worker = worker_rc(proj_launder)
+check("auditor returns without writing a verdict → gate stays shut",
+      rc_worker == 2 and "changed since" in err_worker,
+      f"return rc={rc} worker rc={rc_worker} err={err_worker}")
+
+# The Codex flow: the auditor is read-only there and returns its verdict for
+# the orchestrator to persist, so a stamp that waited for the subagent's return
+# would never be written and the gate could never open on that host.
+proj_codex = fresh_proj()
+write_constitution(proj_codex)
+run_hook("dispatch-guard.py", AUDIT_CON, proj_codex)
+check("stamp exists before any verdict does (read-only auditor hosts)",
+      stamp_of(proj_codex, 0) == digest_of(proj_codex))
+write_verdict(proj_codex, "CON-audit-r0.md", "PASS")
+dec_pass(proj_codex)
+write_task(proj_codex, "T-001", status="assigned")
+rc, err = worker_rc(proj_codex)
+check("orchestrator persists the verdict afterward → gate opens",
       rc == 0, f"rc={rc} err={err}")
 
 # ------------------------------------------- dispatch-guard: structured id field
@@ -2064,27 +2149,8 @@ rc, out, err = run_hook("subagent-return.py",
 check("checker valid return on T-001 while T-002 has no verdict → exit 0, no T-002 demand",
       rc == 0 and "T-002" not in out and "T-002" not in err, f"rc={rc} out={out!r} err={err!r}")
 
-# --------------------------------- subagent-return: audit content stamp (#110)
-# The stamp is what makes a CON-audit PASS a statement about specific bytes
-# rather than about the word "constitution." Written here because a digest an
-# agent transcribes is a digest that can be wrong.
-print("subagent-return.py: audit content stamp (#110)")
-
-proj_stamp = fresh_proj()
-write_constitution(proj_stamp)
-stamp_r1 = os.path.join(proj_stamp, ".agent-guild", "state", "verdicts",
-                        "CON-audit-r1.md.sha256")
-write_verdict(proj_stamp, "CON-audit-r1.md", "PASS")
-tx = transcript(proj_stamp, "Audit-ID: CON-audit")
-rc, out, err = run_hook("subagent-return.py",
-                        {"agent_type": "auditor", "transcript_path": tx}, proj_stamp)
-expected = hashlib.sha256(
-    open(os.path.join(proj_stamp, ".agent-guild", "state", "constitution.md"), "rb").read()
-).hexdigest()
-got = open(stamp_r1, encoding="utf-8").read().strip() if os.path.exists(stamp_r1) else None
-check("auditor returns valid CON verdict → exit 0", rc == 0, f"rc={rc} err={err}")
-check("auditor returns valid CON verdict → stamp matches constitution bytes",
-      got == expected, f"got={got} expected={expected}")
+# --------------------------------- subagent-return: audit rounds (#110)
+print("subagent-return.py: audit rounds (#110)")
 
 # r10 vs r2 at the return gate too: both ends have to agree on which round is
 # latest, or the round dispatch-guard reads is a round nothing validated.

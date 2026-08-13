@@ -1,6 +1,8 @@
 # Courier Comparison
 
-Every courier crossing gets a `## Courier comparison` block in its task file, filled in once the second opinion lands. The block is the unit of evidence #34 rules on: whether a checker from another model family catches what same-family checking misses. Prose alone cannot be counted across repos, and a bare count cannot be audited, so each block leads with structured YAML and follows it with prose that names the clauses behind every number.
+Every courier crossing gets a `## Courier comparison` block in its task file, filled in once the second opinion lands. Prose alone cannot be counted across repos, and a bare count cannot be audited, so each block leads with structured YAML and follows it with prose that names the clauses behind every number.
+
+The schema was built for #34, which asked whether a checker from another model family catches what same-family checking misses. #34 closed on 2026-08-13 against `gpt-5.6-terra`: it does not, and the second opinion is opt-in from #167 on. The block stays because a crossing you do dispatch still has to be recorded somewhere the retrospective can read it, and because a future experiment on a different vendor should not have to invent this shape again.
 
 This file is the schema of record. It exists because the schema drifted for months inside dispatch prompts and session-standing instructions, and the newest crossings ended up conforming to the oldest shape.
 
@@ -33,7 +35,7 @@ were deterministic, and anything the numbers flatten.
 
 ## The Fields
 
-**`repo`, `job`, `task`, and `verdict_pair`** identify the row. Inside one repo the file path already says all four, which is why the block went without them for months. That stops working the moment the corpus is pooled: #34 rules across three repos at once, and its closure criteria ask for links to the verdict pairs, which no amount of prose supplies. `verdict_pair` is a list because a task that was crossed on two retry rounds carries two pairs, and `lane: null` records a crossing that never produced a far-side file. Take the filenames from the ledger's `artifacts` field rather than guessing at the stem.
+**`repo`, `job`, `task`, and `verdict_pair`** identify the row. Inside one repo the file path already says all four, which is why the block went without them for months. That stops working the moment the corpus is pooled: #34 ruled across three repos at once, and its closure criteria asked for links to the verdict pairs, which no amount of prose supplies. `verdict_pair` is a list because a task that was crossed on two retry rounds carries two pairs, and `lane: null` records a crossing that never produced a far-side file. Take the filenames from the ledger's `artifacts` field rather than guessing at the stem.
 
 **`clause_types_sampled`** is what the crossing's findings actually cite, not what the task's `clauses` field declares. Those diverge more often than you'd expect: a task citing two rubric clauses and two script clauses reads `mixed` by declaration while the crossing itself only ever engaged the rubrics. Record what happened.
 

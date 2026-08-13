@@ -47,22 +47,24 @@ verdict Diagnosis. Newest at the bottom, headed with the attempt it addresses
 
 ## Courier comparison
 
-<!-- ORCHESTRATOR writes this once the second opinion lands, or once it is
-settled that none is coming, while #34 is still open. Read both verdicts
-directly and record three counts: findings only the courier raised, findings
-only the checker of record raised, and the overlap.
-Name the clause behind each unique finding — #34 rules on the unique-finding
-rate, and a count with no clause attached can't be audited later.
+<!-- Delete this whole section on a task nobody dispatched a courier for, which
+since #167 is most of them. The second opinion is opt-in now; this block is
+what a crossing you did ask for leaves behind, and it's where the retrospective
+reads that crossing from.
+
+ORCHESTRATOR writes it once the second opinion lands, or once it is settled
+that none is coming. Read both verdicts directly and record three counts:
+findings only the courier raised, findings only the checker of record raised,
+and the overlap. Name the clause behind each unique finding — a count with no
+clause attached can't be audited later.
 
 Say which cited clauses were deterministic. Those never crossed at all:
 compose-brief.py drops them before the brief is written, so the second opinion
 covered the judgment clauses only and the counts above are read against that
 shorter list.
 
-A second opinion that never landed goes here too, with the reason: denied,
-blocked, or skipped because the task cited no judgment clause at all and there
-was nothing to cross. An absence recorded is data; an absence unrecorded reads
-later as agreement.
+A crossing you dispatched that never landed goes here too, with the reason.
+An absence recorded is data; an absence unrecorded reads later as agreement.
 
 This section never reaches the vendor: compose-brief.py extracts only the spec
 excerpt and rework diagnosis.

@@ -26,7 +26,6 @@ import tempfile
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(SCRIPTS_DIR, "check-job-spec.py")
-REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPTS_DIR))
 
 sys.path.insert(0, SCRIPTS_DIR)
 from _corpus import ARCHIVE_117 as ARCHIVE_DIR, add_owns  # noqa: E402
@@ -409,7 +408,8 @@ with tempfile.TemporaryDirectory() as d:
 # --------------------------------------------- corpus: baseline + mutations
 if not os.path.isdir(ARCHIVE_DIR):
     print(f"note: corpus archive not found at {ARCHIVE_DIR} — skipping corpus-based "
-          f"cases (the archive ships via copytree into user projects, where it won't exist)")
+          f"cases. This suite ships into user projects; the archive under state/ does "
+          f"not, so the skip is expected there.")
 else:
     with tempfile.TemporaryDirectory() as fixture_root:
         prose_heading_line = build_fixture_repo_root(fixture_root)

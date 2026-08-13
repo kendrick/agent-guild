@@ -7,6 +7,7 @@ script.
 
 Run: python3 .agent-guild/scripts/test_ready_set.py
 """
+import hashlib
 import json
 import os
 import re
@@ -575,8 +576,9 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
 # no hosts, no agents, no vendor calls.
 if not os.path.isdir(ARCHIVE_117):
     print(f"note: corpus archive not found at {ARCHIVE_117} — skipping the "
-          f"replay (the archive ships via copytree into user projects, where "
-          f"it won't exist)")
+          f"replay. This suite ships into user projects; the archive under "
+          f"state/ does not, so the skip is expected there and the remaining "
+          f"cases still cover the script.")
 else:
     print("replaying the archived #117 graph takes fewer waves than the run did")
 
@@ -615,15 +617,34 @@ else:
         with open(path, "w", encoding="utf-8") as f:
             f.write(re.sub(r"^status:.*$", f"status: {status}", text, count=1, flags=re.M))
 
+    def archive_digest():
+        """A fingerprint of the archived tasks, so "the fixture works on a
+        copy" is checked rather than asserted. add_owns mutates on disk by
+        contract, and pointing it one directory to the left would rewrite the
+        run this suite exists to preserve—a slip only `git status` would
+        otherwise catch, and only if someone looked."""
+        h = hashlib.sha256()
+        tasks = os.path.join(ARCHIVE_117, "tasks")
+        for name in sorted(os.listdir(tasks)):
+            h.update(name.encode())
+            with open(os.path.join(tasks, name), "rb") as f:
+                h.update(f.read())
+        return h.hexdigest()
+
+    before = archive_digest()
+
     with tempfile.TemporaryDirectory(prefix="ready-set-replay-") as d:
         state = os.path.join(d, "state")
         os.makedirs(state)
         shutil.copytree(os.path.join(ARCHIVE_117, "tasks"), os.path.join(state, "tasks"))
 
-        # The archive holds the job as it finished. Rewind it: every task back
-        # to pending, and T-006's retry count cleared so a task that burned a
-        # retry in the real run doesn't defer on budget here. The archived
-        # files themselves are never touched—this is a copy.
+        # The archive holds the job as it finished. Rewind it to the state the
+        # orchestrator faced at the start: every task pending, no retries
+        # spent. T-006's `retries: 1` wouldn't have deferred it on budget
+        # anyway (the ladder defers at retries >= max_retries, and its max is
+        # 2), so clearing it changes no wave here—it's rewound because a
+        # replay that starts mid-run isn't replaying the run. The archived
+        # files themselves are never touched; this is a copy.
         for name in sorted(os.listdir(os.path.join(state, "tasks"))):
             path = os.path.join(state, "tasks", name)
             with open(path, encoding="utf-8") as f:
@@ -670,7 +691,7 @@ else:
 
         # The thesis. Fewer waves than serial dispatches, with the count named
         # so a regression in grouping fails here instead of passing quietly.
-        check(f"replay: {len(waves)} waves against {len(serial)} serial dispatches",
+        check(f"replay: {len(waves)} waves against {len(serial)} serially dispatched tasks",
               len(waves) < len(serial), f"waves={waves}")
         check("replay: takes exactly 6 waves", len(waves) == 6, f"waves={waves}")
 
@@ -696,13 +717,21 @@ else:
         # composition reads as a consequence rather than a snapshot.
         check(
             "replay: T-004 defers on malformed owns, splitting it from T-002",
-            any(e["id"] == "T-004" and e["kind"] == "owns-malformed"
+            len(deferrals) > 1 and any(
+                e["id"] == "T-004" and e["kind"] == "owns-malformed"
                 for e in deferrals[1]),
-            deferrals[1],
+            deferrals,
         )
 
         # No wave may contain a task whose dep hasn't already landed.
         deps = corpus_deps()
+        # corpus_deps reads only the inline `deps: [...]` shape, which is what
+        # the corpus uses. ready-set.py also accepts a block sequence, so a
+        # task respelled that way would drop out of this dict and its
+        # constraint would go unchecked while everything still reported green.
+        # Parsing has to be complete before the comparison means anything.
+        check("replay: parsed deps for every replayed task",
+              set(deps) == covered, f"parsed={sorted(deps)} replayed={sorted(covered)}")
         wave_of = {tid: i for i, wave in enumerate(waves) for tid in wave}
         violations = [
             (tid, dep) for tid, dep_ids in deps.items() for dep in dep_ids
@@ -710,6 +739,9 @@ else:
         ]
         check("replay: no task waves at or before one of its deps",
               violations == [], f"violations={violations}")
+
+    check("replay: the archived corpus is left untouched",
+          archive_digest() == before, "the replay wrote to the archive")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

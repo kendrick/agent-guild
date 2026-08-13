@@ -28,12 +28,16 @@ ARTIFACTS_LIST_ITEM_RE = re.compile(r"^\s*-\s+.*$")
 def add_owns(state_dir):
     """Give every task in `state_dir/tasks/` an `owns:` frontmatter field
     cloned from its own `artifacts:`—the #117 corpus predates #133, so
-    `owns` doesn't exist in it yet, and every declared artifact is already
-    a valid owns entry (an exact file path; T-003's three are directory
-    prefixes already ending in `/`). Mirrors `artifacts:`'s own two shapes
+    `owns` doesn't exist in it yet. Mirrors `artifacts:`'s own two shapes
     (flat `[a, b]` or a block `- path` sequence) rather than normalizing
     to one, so the cloned `owns:` reads exactly like the field it copied.
-    Mutates the task files on disk."""
+    Mutates the task files on disk.
+
+    A clone, not a repair: most entries are exact file paths and T-003's
+    three are directory prefixes already ending in `/`, but T-004 declares
+    `~/repos/skills/...`, which `owns_entry_problem` refuses as a shell
+    expansion. Normalizing that away here would hide it from the wave
+    replay, where it is the difference between six waves and five."""
     tasks_dir = os.path.join(state_dir, "tasks")
     for name in sorted(os.listdir(tasks_dir)):
         path = os.path.join(tasks_dir, name)

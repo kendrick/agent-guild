@@ -89,6 +89,14 @@ def _log(agent, task, model):
         # dispatches.log is compared against those timestamps to establish
         # ordering, and a local-time stamp is silently wrong by the machine's offset.
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Concurrent since waves (#164): every member of a wave dispatches in
+        # one message, so several copies of this hook append here in the same
+        # instant. Safe by deliberate reliance on O_APPEND, which "a" mode
+        # opens with: one short line, one write(2), well under PIPE_BUF, so
+        # the kernel doesn't interleave it with a sibling's. No lock, because
+        # fcntl buys correctness this file doesn't need at the price of NFS
+        # failure modes in a best-effort logger. A torn or interleaved row in
+        # here is this assumption breaking, not a hook misbehaving.
         with open(_lib.state_path("log", "dispatches.log"), "a", encoding="utf-8") as f:
             f.write(f"{ts} | {agent} | {task} | {model}\n")
     except Exception:
@@ -105,6 +113,7 @@ def _log_gate_gap(ident, timeout_s):
     try:
         os.makedirs(_lib.state_path("log"), exist_ok=True)
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # Same concurrent-append reliance as _log above (#164).
         with open(_lib.state_path("log", "gate-gaps.log"), "a", encoding="utf-8") as f:
             f.write(
                 f"{ts} | check-job-spec | {ident} | timed out after "

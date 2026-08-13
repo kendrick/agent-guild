@@ -109,8 +109,8 @@ def write_constitution(proj, text="# Constitution\n\n- C-1: a clause.\n"):
 
 
 def stamp_con_audit(proj, round_n=0):
-    """What subagent-return writes when an auditor returns a CON verdict: the
-    digest of the constitution that round judged."""
+    """What dispatch-guard writes when a CON auditor is dispatched: the digest
+    of the constitution that round was commissioned against."""
     cpath = os.path.join(proj, ".agent-guild", "state", "constitution.md")
     with open(cpath, "rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()
@@ -1622,6 +1622,46 @@ rc, err = worker_rc(proj_codex)
 check("orchestrator persists the verdict afterward → gate opens",
       rc == 0, f"rc={rc} err={err}")
 
+# Two auditors commissioned for one round. Only one of them files a verdict,
+# and the gate has no way to know which, so the second dispatch must not
+# relabel the round with the document the first auditor never saw.
+proj_two = fresh_proj()
+write_constitution(proj_two, "# Constitution\n\n- C-1: audited.\n")
+run_hook("dispatch-guard.py", AUDIT_CON, proj_two)
+first_digest = digest_of(proj_two)
+write_constitution(proj_two, "# Constitution\n\n- C-1: never audited.\n")
+run_hook("dispatch-guard.py", AUDIT_CON, proj_two)
+check("second CON dispatch while the first is in flight → stamp unchanged",
+      stamp_of(proj_two, 0) == first_digest, f"stamp={stamp_of(proj_two, 0)}")
+write_verdict(proj_two, "CON-audit-r0.md", "PASS")
+dec_pass(proj_two)
+write_task(proj_two, "T-001", status="assigned")
+rc, err = worker_rc(proj_two)
+check("the un-audited revision does not ride the first auditor's PASS",
+      rc == 2 and "changed since" in err, f"rc={rc} err={err}")
+
+# The stamp is best-effort, like every other write on a legal dispatch path.
+# Archiving a finished job moves verdicts/ away, and the next job's first act
+# is dispatching a CON auditor into a state dir that no longer has one.
+proj_novdir = fresh_proj()
+write_constitution(proj_novdir)
+shutil.rmtree(os.path.join(proj_novdir, ".agent-guild", "state", "verdicts"))
+rc, out, err = run_hook("dispatch-guard.py", AUDIT_CON, proj_novdir)
+check("CON dispatch with verdicts/ absent → exit 0, no HOOK ERROR",
+      rc == 0 and "HOOK ERROR" not in err, f"rc={rc} err={err}")
+
+# DEC-audit carries no stamp. Asserted against the hook that does the
+# stamping, so the check still means something if stamping ever moves again.
+proj_decstamp = fresh_proj()
+write_constitution(proj_decstamp)
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: DEC-audit"}}, proj_decstamp)
+vdir = os.path.join(proj_decstamp, ".agent-guild", "state", "verdicts")
+check("DEC auditor dispatch writes no stamp",
+      rc == 0 and not any(n.endswith(".sha256") for n in os.listdir(vdir)),
+      f"rc={rc} listing={os.listdir(vdir)}")
+
 # ------------------------------------------- dispatch-guard: structured id field
 # Issue #71: Codex encrypts the dispatch message before any hook runs, so the id
 # arrives in a field instead of a prompt line. The gate is host-neutral and takes
@@ -2170,11 +2210,7 @@ write_verdict(proj_dec_return, "DEC-audit-r0.md", "PASS")
 tx = transcript(proj_dec_return, "Audit-ID: DEC-audit")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "auditor", "transcript_path": tx}, proj_dec_return)
-dec_stamp = os.path.join(proj_dec_return, ".agent-guild", "state", "verdicts",
-                         "DEC-audit-r0.md.sha256")
 check("auditor returns valid DEC verdict → exit 0", rc == 0, f"rc={rc} err={err}")
-check("DEC verdict gets no stamp (tasks/ mutates; digest would be a lie)",
-      not os.path.exists(dec_stamp))
 
 # --------------------------------- subagent-return: in-flight markers (#111)
 print("subagent-return.py: in-flight markers (#111)")

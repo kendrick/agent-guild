@@ -711,7 +711,8 @@ def audit_gate(audit_id, artifact_path=None):
     workers (#110, observed on the #97 run).
 
     artifact_path binds the PASS to the bytes it judged, via the sidecar
-    subagent-return stamps at return. Without it the gate asks only whether the
+    dispatch-guard stamps when the audit is commissioned. Without it the gate
+    asks only whether the
     latest round passed—which is all a decomposition can be asked today, since
     task files change status throughout a job and would invalidate a digest on
     the first transition."""

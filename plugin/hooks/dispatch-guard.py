@@ -230,14 +230,37 @@ def _stamp_audited_content():
 
     DEC-audit gets no stamp. Task files change status all job long, so a digest
     over tasks/ would go stale on the first transition; decomposition staleness
-    needs a normalized digest nobody has specified yet."""
+    needs a normalized digest nobody has specified yet.
+
+    Best-effort, like _log and mark_in_flight above: a write that fails leaves
+    the round unstamped, which refuses the next worker with a message naming
+    the missing stamp. Raising instead would wedge the job, since this runs on
+    the one dispatch that can reopen both gates—and `verdicts/` genuinely can
+    be absent here, because archiving a finished job moves it."""
     digest = _lib.file_sha256(_lib.state_path("constitution.md"))
     if digest is None:
         return
     n = _lib.next_audit_round("CON-audit")
     stamp = _lib.audit_stamp_path(_lib.state_path("verdicts", f"CON-audit-r{n}.md"))
-    with open(stamp, "w", encoding="utf-8") as f:
-        f.write(digest + "\n")
+
+    # Two auditors commissioned for the same round read different documents if
+    # the constitution moved between them, and only one of them files the
+    # verdict. Overwriting would let the second dispatch's bytes vouch for the
+    # first auditor's PASS, so the earlier stamp stands and whichever verdict
+    # lands is measured against the text that was audited first. Wrong-but-
+    # closed: if the later auditor is the one that files, its PASS reads as
+    # stale and costs another round.
+    if os.path.exists(stamp) and any(
+        marker.startswith("CON-audit--") for marker in _lib.in_flight()
+    ):
+        return
+
+    try:
+        os.makedirs(os.path.dirname(stamp), exist_ok=True)
+        with open(stamp, "w", encoding="utf-8") as f:
+            f.write(digest + "\n")
+    except OSError:
+        pass
 
 
 def main(data):

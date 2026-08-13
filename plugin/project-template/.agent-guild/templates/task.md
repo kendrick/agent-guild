@@ -65,4 +65,28 @@ was nothing to cross. An absence recorded is data; an absence unrecorded reads
 later as agreement.
 
 This section never reaches the vendor: compose-brief.py extracts only the spec
-excerpt and rework diagnosis. -->
+excerpt and rework diagnosis.
+
+Lead with the YAML below, then the prose. docs/courier-comparison.md is the
+schema of record and explains every field; the two worth knowing before you
+start are brief_framing, which has to be recorded from the dispatch you are
+about to send because nothing persists it afterward, and verdict_pair, whose
+filenames come from the ledger's artifacts field. -->
+
+```yaml
+repo:
+job:
+task:
+verdict_pair: [{of_record: , lane: }]
+clause_types_sampled:   # judgment | deterministic | mixed
+brief_framing:          # confirm | attack | open | unknown | null
+courier_outcome:        # pass | fail | blocked | denied
+agreement_on_outcome:   # agree | disagree | null
+disagreement_kind:      # substantive | evidence_packet | null
+unique_courier: {defect: 0, inference: 0, evidence_quality: 0, coverage: 0}
+unique_checker: 0
+unique_checker_access_derived: 0
+overlap: 0
+changed_verdict: no
+cost: {wall_s: , tokens_in: , tokens_cached: , tokens_out: , brief_tokens: , vendor_calls: }
+```

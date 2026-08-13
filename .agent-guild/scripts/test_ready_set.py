@@ -9,12 +9,17 @@ Run: python3 .agent-guild/scripts/test_ready_set.py
 """
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(SCRIPTS_DIR, "ready-set.py")
+
+sys.path.insert(0, SCRIPTS_DIR)
+from _corpus import ARCHIVE_117, add_owns  # noqa: E402
 
 passed = failed = 0
 
@@ -555,6 +560,156 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         ids(result["attention"]) == ["T-001"],
         result["attention"],
     )
+
+# ------------------------------------------- replay: the archived #117 graph
+# Everything above is a fixture built to exercise one rule. This section is the
+# only case driven by a job that actually ran (#169). The wave path's headline
+# claim is that grouping beats the serial dispatch it replaced, and until this
+# existed nothing would have failed if a change to the grouping quietly
+# serialized the whole thing again.
+#
+# #134 carried this criterion and was closed without it, because the driver it
+# specified turned out to be infeasible—guild hooks don't fire for
+# workflow-spawned agents. The criterion never needed that driver. ready-set.py
+# is a pure function of task files plus --running, so the replay runs offline:
+# no hosts, no agents, no vendor calls.
+if not os.path.isdir(ARCHIVE_117):
+    print(f"note: corpus archive not found at {ARCHIVE_117} — skipping the "
+          f"replay (the archive ships via copytree into user projects, where "
+          f"it won't exist)")
+else:
+    print("replaying the archived #117 graph takes fewer waves than the run did")
+
+    def corpus_deps():
+        """Each task's declared deps, read from the archive itself so the
+        dependency-order assertion can't drift from the graph it checks."""
+        deps = {}
+        for name in sorted(os.listdir(os.path.join(ARCHIVE_117, "tasks"))):
+            with open(os.path.join(ARCHIVE_117, "tasks", name), encoding="utf-8") as f:
+                for line in f:
+                    m = re.match(r"^deps:\s*\[(.*)\]\s*$", line)
+                    if m:
+                        deps[name[:-3]] = [d.strip() for d in m.group(1).split(",") if d.strip()]
+                        break
+        return deps
+
+    def dispatched_tasks():
+        """The tasks the real run actually sent workers to. Read from the
+        run's own log rather than hardcoded, so "covers the same work" is
+        anchored to what happened. Every line in this log appears twice—the
+        run predates #41's double-registration fix—and T-006 was genuinely
+        dispatched twice after a FAIL, so dedupe by task rather than by line
+        and count tasks, not dispatches."""
+        seen = set()
+        with open(os.path.join(ARCHIVE_117, "log", "dispatches.log"), encoding="utf-8") as f:
+            for line in f:
+                fields = [p.strip() for p in line.split("|")]
+                if len(fields) >= 3 and "worker-" in fields[1]:
+                    seen.add(fields[2])
+        return seen
+
+    def set_status(state_dir, tid, status):
+        path = os.path.join(state_dir, "tasks", f"{tid}.md")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(re.sub(r"^status:.*$", f"status: {status}", text, count=1, flags=re.M))
+
+    with tempfile.TemporaryDirectory(prefix="ready-set-replay-") as d:
+        state = os.path.join(d, "state")
+        os.makedirs(state)
+        shutil.copytree(os.path.join(ARCHIVE_117, "tasks"), os.path.join(state, "tasks"))
+
+        # The archive holds the job as it finished. Rewind it: every task back
+        # to pending, and T-006's retry count cleared so a task that burned a
+        # retry in the real run doesn't defer on budget here. The archived
+        # files themselves are never touched—this is a copy.
+        for name in sorted(os.listdir(os.path.join(state, "tasks"))):
+            path = os.path.join(state, "tasks", name)
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            text = re.sub(r"^status:.*$", "status: pending", text, count=1, flags=re.M)
+            text = re.sub(r"^retries:.*$", "retries: 0", text, count=1, flags=re.M)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+
+        # The corpus predates #133 and carries no `owns`. Replayed as-is every
+        # pair reads as owns-undeclared, every wave holds one task, and the
+        # replay reproduces exactly the serial behavior it exists to disprove
+        # while appearing to pass. Same derivation the linter suite proves
+        # against, imported rather than repeated.
+        add_owns(state)
+
+        waves = []
+        deferrals = []
+        remaining = set(corpus_deps())
+        # A cap, not a loop bound: an empty wave with work left means the
+        # grouping stalled, and that has to fail loudly rather than spin.
+        for _ in range(12):
+            if not remaining:
+                break
+            rc, result, err = run_and_parse(state)
+            if rc != 0 or result is None or not result["wave"]:
+                check("replay: every call yields a non-empty wave",
+                      False, f"rc={rc} err={err} result={result}")
+                break
+            members = sorted(ids(result["wave"]))
+            waves.append(members)
+            deferrals.append(result["deferred"])
+            for tid in members:
+                set_status(state, tid, "complete")
+                remaining.discard(tid)
+
+        check("replay: every task was dispatched", not remaining, f"left={sorted(remaining)}")
+
+        # What the real run did: seven tasks, dispatched one at a time.
+        serial = dispatched_tasks()
+        covered = {tid for wave in waves for tid in wave}
+        check("replay: covers exactly the tasks the run dispatched workers for",
+              covered == serial, f"replayed={sorted(covered)} run={sorted(serial)}")
+
+        # The thesis. Fewer waves than serial dispatches, with the count named
+        # so a regression in grouping fails here instead of passing quietly.
+        check(f"replay: {len(waves)} waves against {len(serial)} serial dispatches",
+              len(waves) < len(serial), f"waves={waves}")
+        check("replay: takes exactly 6 waves", len(waves) == 6, f"waves={waves}")
+
+        # Composition, not just count: a change that holds the number while
+        # shuffling membership is still a change to the grouping.
+        check(
+            "replay: wave composition is unchanged",
+            waves == [
+                ["T-001", "T-005"],
+                ["T-002"],
+                ["T-004"],
+                ["T-006"],
+                ["T-007"],
+                ["T-003"],
+            ],
+            waves,
+        )
+
+        # T-004 is why this is six waves and not five. Its lone artifact is
+        # `~/repos/skills/...`, so the cloned owns entry is a tilde path, which
+        # owns_entry_problem refuses—an unreadable claim is an unknown one, so
+        # it rides alone instead of pairing with T-002. Asserted so the pinned
+        # composition reads as a consequence rather than a snapshot.
+        check(
+            "replay: T-004 defers on malformed owns, splitting it from T-002",
+            any(e["id"] == "T-004" and e["kind"] == "owns-malformed"
+                for e in deferrals[1]),
+            deferrals[1],
+        )
+
+        # No wave may contain a task whose dep hasn't already landed.
+        deps = corpus_deps()
+        wave_of = {tid: i for i, wave in enumerate(waves) for tid in wave}
+        violations = [
+            (tid, dep) for tid, dep_ids in deps.items() for dep in dep_ids
+            if tid in wave_of and dep in wave_of and wave_of[dep] >= wave_of[tid]
+        ]
+        check("replay: no task waves at or before one of its deps",
+              violations == [], f"violations={violations}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

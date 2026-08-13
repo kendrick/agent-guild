@@ -74,11 +74,11 @@ break that promise on purpose. A task deferred because its dependency is
 still running has no move available to it, as the gate's own message says, so
 counting a blocked turn against it would stall a task nobody could have
 advanced. A task in the `deferred` bucket therefore holds its counter, but
-only for `kind: "deps"` and `kind: "owns"`. The other two kinds would each
-wedge the backstop instead of protecting it, for reasons _deferral_held
-spells out; `owns-undeclared` in particular reproduces #163's own bug,
-because `owns: []` is the shipped template default. The buckets still never
-touch WHETHER the gate blocks, only how fast a counter climbs.
+only for `kind: "deps"` and `kind: "owns"`. Every other kind would wedge the
+backstop instead of protecting it, for reasons _deferral_held spells out;
+`owns-undeclared` in particular reproduces #163's own bug, because `owns: []`
+is the shipped template default. The buckets still never touch WHETHER the
+gate blocks, only how fast a counter climbs.
 
 Everything else stays eligible: wave and `checks` entries have a dispatch
 available now, `attention` entries need a ruling now, and a task in no
@@ -127,8 +127,11 @@ STALL_LIMIT = 3
 
 # ready-set.py `deferred` kinds that hold a task's stall counter (#163): the
 # orchestrator has no move to make on either until something else finishes.
-# "budget" and "owns-undeclared" are the two deliberately left out—see
-# _deferral_held for why each one would wedge the backstop.
+# An allowlist rather than a denylist, so a kind ready-set grows later
+# advances the counter until someone here decides otherwise—advancing is the
+# safe default, since a counter that only ever holds is a backstop that never
+# fires. "budget", "owns-undeclared", and "owns-malformed" are the three
+# outside it today; see _deferral_held for why each would wedge the backstop.
 DEFERRAL_HOLD_KINDS = frozenset({"deps", "owns"})
 
 # Reason-string prefixes for those same two kinds, used only when a task's
@@ -426,8 +429,8 @@ def _deferral_held(tid, dispositions):
     cannot act on right now: an unmet dep, or an `owns` collision with a peer
     that genuinely claims the same paths.
 
-    Two of the four deferral kinds are deliberately outside that set, both
-    because waiting can never resolve them.
+    Three deferral kinds are deliberately outside that set, all because
+    waiting can never resolve them.
 
     `budget`—a spent retry budget is retry-ladder step 4 (escalate a tier,
     re-decompose, or surface the task). Holding it would leave a job whose
@@ -440,7 +443,11 @@ def _deferral_held(tid, dispositions):
     review caught it here with a reproduction. The remedy ready-set names in
     its reason string ("declare it on both to run them together") is an
     orchestrator action, which puts this alongside `budget` rather than
-    alongside a real wait."""
+    alongside a real wait.
+
+    `owns-malformed`—same shape as `owns-undeclared` (#162). A typo in an
+    `owns` entry is fixed by editing the task file, which nobody will do
+    while the gate reports the task as legitimately waiting."""
     d = dispositions.get(tid)
     if not d or d[0] != "deferred":
         return False

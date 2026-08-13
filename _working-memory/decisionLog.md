@@ -14,6 +14,36 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-12: Guild Hooks Do Not Fire For Workflow-Spawned Agents
+
+**Source:** #134 step 0 spike on `fanout-driver-and-gate-fixes`; comment recorded on #134
+
+**Context:** #134 proposed driving Phase 2 from a `Workflow` script on a Claude host, with the script-and-prose driver as the shared baseline on both. The plan made the spike a hard gate: verify the guild's gates observe a workflow-spawned dispatch before building anything on top of it.
+
+**The probe.** `dispatch-guard` refuses any dispatch to a `GUILD_AGENTS` member carrying no `Task-ID`, whether or not a job is active, so an id-less guild dispatch is a clean yes/no test that needs no job state. Dispatched `worker-bulk` with no id line from a workflow: it ran and returned. The identical dispatch through the Agent path was refused. No `dispatches.log` line, no in-flight marker: nothing ran, rather than something running and allowing.
+
+**Decision:** The Workflow driver is not built. The script-and-prose driver is the sole driver on both hosts, and `.agent-guild/CLAUDE.md` now says so at the point where it tells you to dispatch a wave.
+
+**Why this is worth writing down rather than retrying:** the failure mode is silent in the worst way. Such a driver would bypass `Task-ID` identity, the `executor_model` tier match, `reserve_crossing`, and the in-flight markers, and every gate would report green by never running. That is the same shape as #94 and #141, where work returned that no dispatch gate had authorized. Nothing about the wave depends on the Workflow tool: what was lost is an automatic executor, not the concurrency the milestone exists for.
+
+**What would reopen it:** a way for hooks to observe workflow-spawned dispatches, or a documented statement from the harness that they are meant to. Until then this is unsafe, not merely unbuilt.
+
+**Alternatives considered:** shipping the Workflow driver with the gates re-implemented inside the script, rejected because a second copy of the enforcement is the thing this repo's one-source build exists to prevent, and it would drift; treating the negative as a harness bug to work around, rejected because nothing here can distinguish "not yet supported" from "deliberately out of scope".
+
+## 2026-08-12: An Adversarial Review Found Four Blockers A Green Suite Could Not
+
+**Source:** opus review of `fanout-driver-and-gate-fixes` after all five Lane B commits landed; fixes in `c34bb85`; follow-ups #162, #163, #164
+
+**Context:** Six suites passed at every commit and each lane's own agent verified its work. A review was run anyway, told to assume the branch was broken.
+
+**What it found.** Every finding was in a state no test covered. The stop gate consumed only `ready-set.py`'s `wave` bucket and discarded `deferred`, `attention`, and `checks`, so a task with an unmet dep was told to dispatch its executor and a task with an abandoned dep was never surfaced at all. A `rework` task in the wave lost both mandatory steps of the retry ladder, because wave membership suppressed the per-task line. #108's ambiguity block fired on ids quoted inside pasted documentation while two ids of the same kind passed silently and resolved by position, which is the likelier mistake and the one that dispatches the wrong task.
+
+**Decision:** Fix the four in the branch; file the three that are design decisions (#162, #163, #164) rather than improvise answers into it. The review also refuted one standing suspicion (the transcript-size hold is sound), which is worth as much as a finding.
+
+**The lesson, which is about verification and not about this branch:** a green suite proves the states it covers, and every one of these defects lived in a state nobody had thought to write a test for. The two that mattered most came from the seam between two components that were each correct alone. Neither lane's agent could have caught them, because neither owned both sides. That seam is where an adversarial pass earns its cost, and it is the argument for running one against integration points specifically rather than against whole diffs.
+
+**Alternatives considered:** shipping and letting the next real job surface them, rejected because the wave defects produce advice a well-behaved orchestrator would follow into a dependency violation; fixing all seven findings in-branch, rejected because `owns` enforcement changes whether archived corpora stay green, which is a decision to make deliberately rather than under momentum.
+
 ## 2026-08-12: Bound The Constitution, Not The Audit Loop
 
 **Source:** #120 and #123 built together on `feat/audit-budget-job-weight`; three adversarial review rounds; PR #159

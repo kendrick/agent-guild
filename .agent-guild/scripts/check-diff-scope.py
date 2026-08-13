@@ -45,11 +45,15 @@ repo, or a git command itself failed).
 paths overlap" semantics—check-job-spec.py's R13 ownership-overlap rule
 imports it via the `_load_module` importlib idiom (see that script's own
 docstring), rather than re-deriving the same exact/prefix logic a second
-time.
+time. `owns_entry_problem(entry)` lives beside it for the same reason:
+overlap is only meaningful between two entries that are actually one of
+the two shapes, so the shape predicate belongs where the shapes are
+defined. R15 and ready-set.py both import it.
 
 Stdlib only, so the kit stays copy-in portable.
 """
 import argparse
+import os
 import subprocess
 import sys
 
@@ -137,6 +141,51 @@ def paths_overlap(a, b):
     if b_is_dir:
         return a.startswith(b)
     return a == b
+
+
+def owns_entry_problem(entry, repo_root=None):
+    """A short reason an `owns:` entry is malformed, or None if it's one of
+    the two shapes paths_overlap above understands.
+
+    Shape is load-bearing rather than cosmetic: a directory written without
+    its trailing slash reads as a file claim, and a file claim never
+    collides with anything under that directory. `owns: ['src/lib']` and
+    `owns: ['src/lib/']` on two tasks therefore pass R13 and ride the same
+    wave while writing the same tree (#162). Every check here exists to
+    catch a spelling that would silently answer "no overlap" for territory
+    that does overlap.
+
+    Existence is never required—a task's whole job is often to create the
+    file it owns. The repo_root checks fire only when the path DOES exist
+    and its kind contradicts its spelling. Pass repo_root=None for the
+    textual checks alone, which is what ready-set.py does to stay a pure
+    function of the task files."""
+    if not isinstance(entry, str) or not entry.strip():
+        return "empty entry"
+    if entry != entry.strip():
+        return "leading or trailing whitespace"
+    if "\\" in entry:
+        return "backslash; entries use '/' separators"
+    if entry.startswith("/"):
+        return "absolute path; entries are repo-relative"
+    core = entry[:-1] if entry.endswith("/") else entry
+    if not core:
+        return "bare '/'"
+    parts = core.split("/")
+    if "" in parts:
+        return "empty path segment ('//')"
+    if "." in parts:
+        return "'.' segment; write the path without './'"
+    if ".." in parts:
+        return "'..' segment; entries stay inside the repo"
+    if repo_root is not None:
+        full = os.path.join(repo_root, core)
+        if entry.endswith("/"):
+            if os.path.isfile(full):
+                return "ends with '/' but exists as a file"
+        elif os.path.isdir(full):
+            return "exists as a directory but lacks the trailing '/'"
+    return None
 
 
 def in_scope(path, allowed_files, allowed_dirs, ignored):

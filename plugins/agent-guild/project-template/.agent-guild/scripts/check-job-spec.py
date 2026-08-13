@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Lint `.agent-guild/state/constitution.md` and `state/tasks/*.md` for the
 defects an opus auditor would otherwise have to find by reading—the
-mechanical eleven-rules-deep sweep #132 exists to take off an auditor's
-plate before it ever gets dispatched.
+mechanical sweep #132 exists to take off an auditor's plate before it ever
+gets dispatched.
 
     .agent-guild/scripts/check-job-spec.py [STATE] [--repo-root PATH]
                                             [--audit-id CON-audit|DEC-audit]
@@ -16,17 +16,26 @@ corpus copy while citations still need to resolve against a real tree.
 Rules run in this order—proofs before heuristics, so a heuristic never
 masks something provable—and only the FIRST violation found is reported:
 
-    R6 clause wiring         R5 check runnable        R2 citation anchor
-    R7 dependency DAG        R1 citation resolves     R9 verdict contradiction
-    R13 ownership overlap    R3 citation shape        R10 count vs list
-    R14 dep rationale        R8 build ordering        R12' cross-artifact count
-    R4 check form
+    R6 clause wiring         R4 check form            R2 citation anchor
+    R7 dependency DAG        R5 check runnable        R9 verdict contradiction
+    R15 owns shape           R1 citation resolves     R10 count vs list
+    R13 ownership overlap    R3 citation shape        R12' cross-artifact count
+    R14 dep rationale        R8 build ordering
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
-depend on, order, or own yet), so R6, R7, R13, R14, and R8 are skipped;
-every other rule runs over constitution.md alone. `--audit-id DEC-audit`:
-everything runs, and an empty `tasks/` is itself an R6 failure—a
-decomposition that produced no tasks decomposed nothing.
+depend on, order, or own yet), so R6, R7, R15, R13, R14, and R8 are
+skipped; every other rule runs over constitution.md alone. `--audit-id
+DEC-audit`: everything runs, and an empty `tasks/` is itself an R6
+failure—a decomposition that produced no tasks decomposed nothing.
+
+R15 runs immediately before R13 because R13's question—do these two owns
+entries overlap—only has a meaningful answer once both entries are one of
+the two documented shapes. A directory spelled without its trailing slash
+reads as a file claim and collides with nothing, so an unvalidated pair
+like `src/lib` and `src/lib/` passes R13 while naming the same tree
+(#162). R15 is opt-in on the same terms as R13 and R14: it checks the
+entries a task declares and has nothing to say about a task that declares
+none.
 
 R13 sits right after R7 because it needs R7's acyclic-DAG guarantee before
 it can walk a `deps` chain looking for a path between two owners—the same
@@ -126,9 +135,12 @@ except Exception:
 # crash); main()'s own load below still turns a real failure into exit 3
 # for the CLI path.
 try:
-    paths_overlap = _load_module("check_diff_scope_module_scope", "check-diff-scope.py").paths_overlap
+    _diff_scope_module_scope = _load_module("check_diff_scope_module_scope", "check-diff-scope.py")
+    paths_overlap = _diff_scope_module_scope.paths_overlap
+    owns_entry_problem = _diff_scope_module_scope.owns_entry_problem
 except Exception:
     paths_overlap = None
+    owns_entry_problem = None
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +829,38 @@ def rule_R7(ctx, audit_id):
 
 
 # ---------------------------------------------------------------------------
+# R15: owns shape. Closes #162's validation half. R13 below asks whether two
+# entries overlap; that question only has a meaningful answer when both
+# entries are one of the two shapes the field documents. A directory
+# spelled without its trailing slash reads as a file claim and collides
+# with nothing, so `src/lib` and `src/lib/` on two tasks pass R13 and enter
+# the same wave over the same tree. R15 runs first so a malformed entry is
+# reported as itself rather than as R13 finding nothing.
+#
+# Opt-in the same way R13 and R14 are, and for the same reason: an absent
+# or empty `owns:` is not a violation, only a task with no entries to
+# check. That keeps every archived corpus green (none of them has the
+# field) while still refusing a bad entry in any job that does declare one.
+# ---------------------------------------------------------------------------
+
+def rule_R15(ctx, audit_id, repo_root):
+    if audit_id == "CON-audit":
+        return None  # no tasks yet to own anything
+    if owns_entry_problem is None:
+        return None  # check-diff-scope.py wasn't importable; see rule_R13
+    for task in ctx.tasks:
+        for entry in task.owns:
+            problem = owns_entry_problem(entry, repo_root)
+            if problem:
+                return (
+                    f"R15 owns-shape: {task.label} owns entry {entry!r} is malformed: "
+                    f"{problem}. An entry is an exact file path or a directory prefix "
+                    "ending in '/'"
+                )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # R13: ownership overlap. Closes #133—two tasks dispatched concurrently can
 # silently lose one task's write to the other's if they touch the same
 # file, so any two tasks whose `owns` overlap have to be forced into
@@ -1454,6 +1498,7 @@ def run_rules(ctx, audit_id, repo_root):
     steps = (
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
+        lambda: rule_R15(ctx, audit_id, repo_root),
         lambda: rule_R13(ctx, audit_id),
         lambda: rule_R14(ctx, audit_id),
         lambda: rule_R4(ctx, audit_id),
@@ -1756,9 +1801,10 @@ def main():
         sys.stderr.write(f"job-spec: cannot import a kit script this linter depends on: {e}\n")
         return 3
 
-    global DEFECT_SEVERITIES, paths_overlap
+    global DEFECT_SEVERITIES, paths_overlap, owns_entry_problem
     DEFECT_SEVERITIES = validate_verdict.DEFECT_SEVERITIES
     paths_overlap = diff_scope.paths_overlap
+    owns_entry_problem = diff_scope.owns_entry_problem
 
     ctx, err = load_context(args.state, compose_brief)
     if err:

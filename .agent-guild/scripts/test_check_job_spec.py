@@ -617,6 +617,105 @@ else:
                 check("P4: R10 named", rule_hit(err, "R10"), f"err={err!r}")
                 check("P4: no traceback", "Traceback" not in err, f"err={err!r}")
 
+        # -------------------------------------------------- R15: owns shape (#162)
+        # A one-task fixture rather than the corpus, because what's under
+        # test is a single entry's spelling and the corpus has no bad ones.
+        # Each case names the whole entry back to the reader, since "your
+        # owns is malformed" without the offending string is a scavenger
+        # hunt through a decomposition.
+        print("R15: owns shape (#162)")
+
+        def write_owns_fixture(state, owns_entries):
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(
+                os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines()
+            )
+            owns_block = "\n".join(f"  - {e}" for e in owns_entries)
+            write_lines(
+                os.path.join(state, "tasks", "T-001.md"),
+                f"""---
+id: T-001
+title: Sole task
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: []
+dep_rationale: []
+escalations: []
+artifacts:
+  - out.txt
+owns:
+{owns_block}
+---
+
+## Spec excerpt
+
+Produces out.txt.
+""".splitlines(),
+            )
+
+        for entry, label in [
+            ("./out.txt", "'./' prefix"),
+            ("/abs/out.txt", "absolute path"),
+            ("../sibling/out.txt", "'..' segment"),
+            ("src//out.txt", "empty segment"),
+            ("src\\\\out.txt", "backslash separator"),
+            ('""', "empty entry"),
+        ]:
+            with tempfile.TemporaryDirectory() as d:
+                state = os.path.join(d, "state")
+                write_owns_fixture(state, [entry])
+                rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+                check(f"R15 {label}: exit 1", rc == 1, f"rc={rc} err={err}")
+                check(f"R15 {label}: R15 named", rule_hit(err, "R15"), f"err={err!r}")
+                check(f"R15 {label}: task named", "T-001" in err, f"err={err!r}")
+                check(f"R15 {label}: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # The two spellings #162 demonstrated. Both need the entry to exist
+        # on disk for the shape to be provably wrong, which is why R15 takes
+        # repo_root and ready-set.py (which has none) can't catch this pair.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(d, "src", "lib"))
+            write_owns_fixture(state, ["src/lib"])
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("R15 directory without trailing slash: exit 1", rc == 1, f"rc={rc} err={err}")
+            check("R15 directory without trailing slash: entry quoted back", "src/lib" in err, err)
+            check("R15 directory without trailing slash: R15 named", rule_hit(err, "R15"), f"err={err!r}")
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(d, "src"))
+            write_lines(os.path.join(d, "src", "a.py"), ["x = 1"])
+            write_owns_fixture(state, ["src/a.py/"])
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("R15 file with trailing slash: exit 1", rc == 1, f"rc={rc} err={err}")
+            check("R15 file with trailing slash: R15 named", rule_hit(err, "R15"), f"err={err!r}")
+
+        # Owning a file the task hasn't created yet is the normal case, so
+        # existence is never what R15 asks about.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            write_owns_fixture(state, ["src/not-yet-written.py", "docs/generated/"])
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("R15 entries naming paths that don't exist yet: exit 0", rc == 0, f"rc={rc} err={err}")
+
+        # The migration decision (#162): `owns` stays optional, so a corpus
+        # that predates the field is not retroactively in violation. The
+        # unmutated corpus below carries no `owns:` at all.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+            check("R15 corpus with no owns field anywhere: exit 0", rc == 0, f"rc={rc} err={err}")
+
         # -------------------------------------------------- R13: ownership overlap (#133)
         # `owns` postdates this corpus, so add_owns() has to inject it before
         # R13 has anything to check. Every real overlap in the corpus—T-001

@@ -6,6 +6,7 @@ test_ledger_append.py's approach for ledger-append.py.
 
 Run: python3 .agent-guild/scripts/test_check_diff_scope.py
 """
+import importlib.util
 import os
 import subprocess
 import sys
@@ -198,6 +199,61 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
         "T-007-writes-plugin/: offending path named",
         "plugin/skills/retrospective/SKILL.md" in err,
         err,
+    )
+
+# ------------------------------------------- 7. owns_entry_problem (#162)
+# The one predicate here that isn't reachable through the CLI: R13 and
+# ready-set.py both import it, so it gets tested in-process.
+print("owns_entry_problem: the two shapes, and what isn't one of them")
+
+_spec = importlib.util.spec_from_file_location("check_diff_scope_under_test", SCRIPT)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+owns_entry_problem = _mod.owns_entry_problem
+paths_overlap = _mod.paths_overlap
+
+for good in ["src/a.py", "src/", "a.py", "docs/guide/index.md", "plugin/"]:
+    check(f"well-formed entry {good!r}: no problem", owns_entry_problem(good) is None)
+
+for bad, label in [
+    ("./src/a.py", "'./' prefix"),
+    ("/etc/passwd", "absolute"),
+    ("../outside/a.py", "'..' segment"),
+    ("src//a.py", "empty segment"),
+    ("src\\a.py", "backslash"),
+    (" src/a.py", "leading space"),
+    ("", "empty string"),
+    ("/", "bare slash"),
+]:
+    check(f"malformed entry ({label}): a problem is reported", owns_entry_problem(bad) is not None)
+
+# The pair #162 opened with. paths_overlap answers False for both, which is
+# correct for the shapes it's given and useless for what the author meant;
+# the entries are refused before overlap is ever asked about.
+check(
+    "'src/lib' vs 'src/lib/': paths_overlap says no...",
+    paths_overlap("src/lib", "src/lib/") is False,
+)
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, "src", "lib"))
+    check(
+        "...and the slashless spelling is refused as malformed instead",
+        owns_entry_problem("src/lib", d) is not None,
+    )
+check(
+    "'./src/a.py' vs 'src/a.py': paths_overlap says no...",
+    paths_overlap("./src/a.py", "src/a.py") is False,
+)
+check(
+    "...and the './' spelling is refused with no filesystem lookup at all",
+    owns_entry_problem("./src/a.py") is not None,
+)
+
+# Existence is never required: a task's job is often to create what it owns.
+with tempfile.TemporaryDirectory() as d:
+    check(
+        "an entry naming a path that doesn't exist yet: no problem",
+        owns_entry_problem("src/brand-new.py", d) is None,
     )
 
 print(f"\n{passed} passed, {failed} failed")

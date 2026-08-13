@@ -26,9 +26,14 @@ dep_rationale: []
 # auditor's call, not R14's.
 owns: []
 # Each entry is an exact file path, or a directory prefix ending in `/`
-# (covers everything under it). Tasks whose `owns` entries overlap must be
-# connected by a dep path—one transitively depending on the other—because
-# overlapping owners must never run concurrently.
+# (covers everything under it). Repo-relative, forward slashes, no `./` or
+# `..`—R15 refuses anything else, because a directory written without its
+# trailing slash reads as a file claim and then collides with nothing.
+# Tasks whose `owns` entries overlap must be connected by a dep path—one
+# transitively depending on the other—because overlapping owners must never
+# run concurrently. Leaving this empty is not a claim that the task writes
+# nothing; it's the absence of a claim, and the wave reads it that way, so
+# an owns-less task always dispatches alone.
 escalations: []
 artifacts: []
 ---

@@ -975,7 +975,20 @@ BUILD_INPUT_PREFIXES = (
     "docs/plugin-readme.md",
     "CHANGELOG.md",
 )
-GENERATED_TREE_PREFIXES = ("plugin/", "plugins/", ".claude/")
+# The two marketplace files are outputs too (build-plugin.py's
+# write_marketplaces), and neither sits under one of the three tree
+# prefixes above—`.claude-plugin/` is a different directory from
+# `.claude/`, and `.agents/` matches nothing here at all. Left out, a task
+# whose only generated artifact is a marketplace file reads as a task that
+# regenerates nothing, and R8 and R16 both go quiet on the job it belongs
+# to. _is_generated uses startswith, so an exact-file entry works.
+GENERATED_TREE_PREFIXES = (
+    "plugin/",
+    "plugins/",
+    ".claude/",
+    ".claude-plugin/marketplace.json",
+    ".agents/plugins/marketplace.json",
+)
 
 
 def _is_build_input(path):

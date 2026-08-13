@@ -260,6 +260,47 @@ MINIMAL_CONSTITUTION = """# Constitution: CLI fixture
 """
 
 
+def write_synthetic_state(d, tasks):
+    """A minimal state dir: MINIMAL_CONSTITUTION plus one task file per
+    entry in `tasks`, each `{"id", "artifacts", "deps"}`. For the build
+    rules (R8, R16), where what matters is which paths a task claims and
+    who depends on whom, and the corpus is the wrong instrument because
+    its own build graph is the thing under test elsewhere. No `owns`, so
+    R13/R14/R15 have nothing to say about these fixtures."""
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+    for t in tasks:
+        artifacts_block = "\n".join(f"  - {a}" for a in t["artifacts"])
+        write_lines(
+            os.path.join(state, "tasks", f"{t['id']}.md"),
+            f"""---
+id: {t['id']}
+title: Synthetic {t['id']}
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: [{', '.join(t.get('deps', []))}]
+escalations: []
+artifacts:
+{artifacts_block}
+---
+
+## Spec excerpt
+
+Writes {', '.join(t['artifacts'])}.
+""".splitlines(),
+        )
+    return state
+
+
 def raw_shell_constitution(check_line):
     return f"""# Constitution: R4 fixture
 
@@ -895,6 +936,32 @@ dep_rationale.
             )
             rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
             check("owns-less task with a dep and no rationale: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------ generated trees: the marketplace files
+# Both marketplace files are build-plugin.py outputs, and neither sits under
+# `plugin/`, `plugins/`, or `.claude/`. While they were missing from
+# GENERATED_TREE_PREFIXES, a task whose only generated artifact was one of
+# them read as a task that regenerates nothing, and R8 went quiet on the
+# whole job. Each case below passes for the wrong reason without the fix.
+print("generated trees: a marketplace file counts as a regeneration")
+
+for marketplace in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
+    with tempfile.TemporaryDirectory() as d:
+        state = write_synthetic_state(d, [
+            {"id": "T-001", "artifacts": ["guild-core/roles/worker-bulk.md"]},
+            {"id": "T-002", "artifacts": [marketplace]},  # no dep on T-001
+        ])
+        rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+        check(f"{marketplace} regenerated before the edit it captures: exit 1", rc == 1, f"rc={rc} err={err}")
+        check(f"{marketplace}: R8 named", rule_hit(err, "R8"), f"err={err!r}")
+
+    with tempfile.TemporaryDirectory() as d:
+        state = write_synthetic_state(d, [
+            {"id": "T-001", "artifacts": ["guild-core/roles/worker-bulk.md"]},
+            {"id": "T-002", "artifacts": [marketplace], "deps": ["T-001"]},
+        ])
+        rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+        check(f"{marketplace} regenerated downstream of the edit: exit 0", rc == 0, f"rc={rc} err={err}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

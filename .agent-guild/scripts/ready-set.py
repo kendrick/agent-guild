@@ -19,7 +19,10 @@ reintroduce exactly the host-specific drift this script exists to remove.
 Emits one JSON object on stdout with four keys, in this order:
 
     wave      — tasks to dispatch as executors right now, each
-                {"id", "agent" (the task's `executor`), "reason"}.
+                {"id", "agent" (the task's `executor`), "reason",
+                "speculative_on"}. `speculative_on` is present only when
+                non-empty (see below), and always comes after `reason` so
+                key order stays deterministic.
     checks    — checker fan-outs due now: every task at `needs-check`, each
                 {"id", "agent" (the task's `checker`), "reason"}.
     deferred  — tasks held back, each {"id", "reason", "kind"}. A reason is
@@ -43,7 +46,13 @@ Emits one JSON object on stdout with four keys, in this order:
                 against EVERY id in --running, and `owns: []` is what
                 templates/task.md ships, so holding either would let one live
                 subagent freeze every other pending task's counter—the same
-                crowding-out #163 was filed to remove.
+                crowding-out #163 was filed to remove. A "deps" reason always
+                keeps the exact prefix "unmet deps: " and `kind` "deps"—
+                stop-gate.py matches both (its DEFERRAL_HOLD_KINDS set and,
+                for an older copied-in kit's deferred entries with no `kind`
+                at all, a prefix fallback)—even though the status fragments
+                inside that prefix now cover more than "not complete" (see
+                the speculative dispatch predicate below).
 
 Two tasks share a wave only if BOTH declare `owns` and both declarations
 are well-formed. An empty `owns` is the absence of a claim, not a claim to
@@ -57,10 +66,78 @@ undeclared or malformed task still dispatches, alone, which is the pre-wave
 behavior; every peer defers with a reason naming what to fix. Deferring the
 task itself instead would deadlock a decomposition that declares none.
     attention — tasks needing a human/orchestrator judgment call, each
-                {"id", "reason"}: a `disputed` task, or a task whose `deps`
+                {"id", "reason"}: a `disputed` task, a task whose `deps`
                 names an `abandoned` task (waiting it out can never
                 resolve, so it's never just "unmet"—it's escalated
-                straight past `deferred`).
+                straight past `deferred`), or an INVALIDATED task—one at
+                `needs-check`/`checking`/`complete` (not in --running) whose
+                own dep has regressed to a status outside
+                {complete, needs-check, checking}. That task could only have
+                legally dispatched while the dep satisfied the predicate
+                below, so the dep regressing under an already-built child is
+                the signal that the child's artifact (and any verdict on it)
+                may no longer be trustworthy. The reason names both tasks and
+                the move to make: for a dep back at `rework`/`assigned`/
+                `pending`, copy an invalidation note into the child's
+                `## Rework diagnosis`, set it `assigned`, bump `retries`
+                (voiding this round's verdict), and re-dispatch once the dep
+                is ready to build on again; for a dep at `disputed`, rule the
+                dispute first and only invalidate if it lands as rework.
+
+Speculative dispatch (#135): a dep `d` of task `t` satisfies as a build
+input—lets `t` into the wave—under either of two clauses:
+
+    1. `d.status == "complete"`, the pre-#135 rule, or
+    2. `d.status` is `needs-check` or `checking` AND every one of `d`'s OWN
+       deps is `complete`.
+
+`dep_unmet_reason(dep_id, tasks)` and `unmet_deps(task, tasks)` are the pure
+functions that decide this (frozen exports—dispatch-guard.py imports them by
+path, same idiom as `paths_overlap`/`owns_entry_problem` above).
+`compute_ready_set` has no private copy of the logic; it calls `unmet_deps`.
+A dep id absent from `tasks` fails closed under either clause (rendered
+"(unknown)", as before).
+
+Clause 2 is deliberately narrow. `pending`/`assigned` are excluded because no
+artifact exists yet to build on. `rework` is excluded because the artifact is
+known bad. `disputed` is excluded because the artifact is contested—neither
+side has settled whether it's good. `abandoned` is excluded because the
+existing attention rule above already escalates it past ordinary waiting.
+What's left, `needs-check`/`checking`, is exactly "a worker returned
+something, nobody has said it's wrong yet"—speculative enough to build on,
+not speculative enough to build ON TOP OF an already-speculative input. That
+second half is what caps speculation depth at one level: on a chain
+A→B→C, requiring B's own deps (i.e. A) to be `complete`—not merely
+satisfied—means C cannot dispatch while both A and B are still unverified.
+Nothing here treats a chain specially; each dep is evaluated independently
+against its own deps, so the one-level cap and the chain's progressive
+collapse (A completes → B now satisfies clause 2 → C's dep B satisfies →
+C waves) both fall out of the plain per-dep predicate. Diamonds need no
+special code either, for the same reason: two children sharing one
+speculative parent are just two independent evaluations of the same clause.
+
+A wave entry whose deps are ALL `complete` is byte-identical to the
+pre-#135 output: no `speculative_on` key, and `reason` is still exactly
+"deps complete, owns checked against every wave peer, retry budget
+available" (or the undeclared/malformed-owns variant of it). A wave entry
+with at least one dep satisfied only via clause 2 carries
+`"speculative_on": [...]`—the sorted ids of those unverified deps—and its
+`reason` opens with "deps satisfied (T-NNN unverified at STATUS, ...)"
+instead of "deps complete", naming exactly what was speculated on. The
+"owns checked against every wave peer" / "alone because owns is
+undeclared/malformed" half of the sentence is unchanged either way: a
+reason must never certify a property that wasn't checked (#162), and here
+the owns check genuinely did run the same way regardless of speculation.
+
+No `owns` check runs between a speculative child and the dep it's
+speculating on, and that's not an oversight: `_pairing_blocked` (and the
+`owns`/`--running` checks generally) exist to keep two concurrent WRITERS
+off overlapping territory. A dep at `needs-check`/`checking` has a worker
+that already returned—its only live agent from here is a checker, which
+never edits the artifact—so there is no concurrent writer on that side to
+collide with. The child is still checked against every wave peer and
+everything in `--running`, exactly as before; only the parent/child pairing
+inside a single dependency edge is exempt, because nothing writes there.
 
 A task counted in --running is excluded from `wave` and from every other
 bucket—the caller already knows it's in flight, so it would be redundant
@@ -387,6 +464,50 @@ def _pairing_blocked(task_a, task_b):
     return None
 
 
+# Statuses whose deps are worth trusting enough to build ON: a worker has
+# returned something (needs-check/checking) and nobody has said it's wrong
+# (that's what excludes rework/disputed), or the whole thing is settled
+# (complete). See the module docstring's "Speculative dispatch" section for
+# why each excluded status is excluded.
+_SPECULATIVE_STATUSES = frozenset({"needs-check", "checking"})
+
+
+def dep_unmet_reason(dep_id, tasks):
+    """None if `dep_id` satisfies as a build input for some other task's
+    dep list, else the "T-00X (status)" fragment the deferred/attention
+    reasons are built from.
+
+    Satisfies means: `dep_id`'s status is `complete`, OR it's `needs-check`/
+    `checking` AND every one of ITS OWN deps is `complete`. A dep id absent
+    from `tasks` fails closed—reported as "(unknown)"—same as before #135.
+    Frozen export: dispatch-guard.py imports this by path, so it stays a
+    pure function of its two arguments with no side effects.
+    """
+    if dep_id not in tasks:
+        return f"{dep_id} (unknown)"
+    d = tasks[dep_id]
+    if d["status"] == "complete":
+        return None
+    if d["status"] in _SPECULATIVE_STATUSES:
+        own_deps_complete = all(
+            dd in tasks and tasks[dd]["status"] == "complete" for dd in d["deps"]
+        )
+        if own_deps_complete:
+            return None
+    return f"{dep_id} ({d['status']})"
+
+
+def unmet_deps(task, tasks):
+    """[fragment, ...]—dep_unmet_reason's output—for every dep of `task`
+    that doesn't satisfy. Empty means every dep clears the bar. Frozen
+    export, same contract as dep_unmet_reason."""
+    return [
+        frag
+        for frag in (dep_unmet_reason(d, tasks) for d in task["deps"])
+        if frag is not None
+    ]
+
+
 def compute_ready_set(tasks, running):
     """The four buckets, computed from `tasks` ({id: task dict}, as
     load_tasks() returns) and `running` (an iterable of task ids the
@@ -406,6 +527,41 @@ def compute_ready_set(tasks, running):
                     "the task to complete or rework",
                 )
             )
+
+        # Invalidation: X could only have legally dispatched (as a wave
+        # member itself, or by riding a speculative dep) while its own deps
+        # satisfied the predicate above. A dep that has since regressed
+        # behind X is the signal that X's artifact—and any verdict already
+        # filed on it—may no longer be trustworthy. Collected into ONE
+        # attention entry per tid, not one per violating dep: stop-gate.py
+        # keys its own reason lookup by id (`{a["id"]: a["reason"] ...}`), so
+        # a second entry for the same tid would silently overwrite the
+        # first's advice rather than add to it.
+        if tasks[tid]["status"] in ("needs-check", "checking", "complete"):
+            invalidations = []
+            for dep_id in tasks[tid]["deps"]:
+                if dep_id not in tasks:
+                    continue
+                dep_status = tasks[dep_id]["status"]
+                if dep_status in ("complete", "needs-check", "checking"):
+                    continue
+                if dep_status == "disputed":
+                    invalidations.append(
+                        f"built on {dep_id}, which is disputed: rule the "
+                        "dispute first, and invalidate only if it lands "
+                        "as rework"
+                    )
+                else:
+                    invalidations.append(
+                        f"built on {dep_id}, which has gone back to "
+                        f"{dep_status!r}: invalidate — copy an invalidation "
+                        f"note naming {dep_id}'s diagnosis into ## Rework "
+                        "diagnosis, set assigned, increment retries "
+                        f"(voiding this round's verdict), and re-dispatch "
+                        f"once {dep_id} is ready to build on again"
+                    )
+            if invalidations:
+                attention.append((tid, "; ".join(invalidations)))
 
     wave = []
     wave_members = []  # [(tid, task)] already placed, in placement order
@@ -444,14 +600,19 @@ def compute_ready_set(tasks, running):
             )
             continue
 
-        unmet = [
-            f"{d} ({tasks[d]['status'] if d in tasks else 'unknown'})"
-            for d in t["deps"]
-            if d not in tasks or tasks[d]["status"] != "complete"
-        ]
+        unmet = unmet_deps(t, tasks)
         if unmet:
             deferred.append((tid, f"unmet deps: {', '.join(unmet)}", "deps"))
             continue
+
+        # Every dep satisfies (unmet is empty). Any dep that isn't itself
+        # `complete` got in via clause 2 of dep_unmet_reason—needs-check or
+        # checking, with ITS OWN deps complete—which is exactly what
+        # `speculative_on` reports.
+        speculative_on = sorted(
+            (d for d in t["deps"] if tasks[d]["status"] != "complete"),
+            key=_sort_key,
+        )
 
         collision = blocked = None
         for other_tid, other_task in wave_members:
@@ -479,19 +640,31 @@ def compute_ready_set(tasks, running):
 
         # The reason names what was actually compared. Claiming "no owns
         # overlap" for a task nobody could check was #162's sharpest edge:
-        # the gate certified a property it had skipped.
+        # the gate certified a property it had skipped—and a speculative
+        # entry must never claim "deps complete" for a dep it never saw
+        # finish, the same lesson applied to the new clause.
+        if speculative_on:
+            deps_clause = "deps satisfied (" + ", ".join(
+                f"{d} unverified at {tasks[d]['status']}" for d in speculative_on
+            ) + ")"
+        else:
+            deps_clause = "deps complete"
+
         if t["owns_problem"]:
             entry, problem = t["owns_problem"]
-            reason = ("deps complete, retry budget available; alone in this "
+            reason = (f"{deps_clause}, retry budget available; alone in this "
                       f"wave because its `owns` entry {entry!r} is malformed "
                       f"({problem})")
         elif t["owns"]:
-            reason = ("deps complete, owns checked against every wave peer, "
+            reason = (f"{deps_clause}, owns checked against every wave peer, "
                       "retry budget available")
         else:
-            reason = ("deps complete, retry budget available; alone in this "
+            reason = (f"{deps_clause}, retry budget available; alone in this "
                       "wave because its `owns` is undeclared")
-        wave.append({"id": tid, "agent": t["executor"], "reason": reason})
+        wave_entry = {"id": tid, "agent": t["executor"], "reason": reason}
+        if speculative_on:
+            wave_entry["speculative_on"] = speculative_on
+        wave.append(wave_entry)
         wave_members.append((tid, t))
 
     checks = [

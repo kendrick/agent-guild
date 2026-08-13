@@ -562,6 +562,248 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         result["attention"],
     )
 
+# --------------------------------------------- S1/S2: speculative dispatch
+# #135: a dep at needs-check/checking, with all of ITS OWN deps complete,
+# satisfies as a build input. A pending child gets to speculative-dispatch
+# rather than wait for the dep's checker.
+print("S1: a needs-check dep with no deps of its own lets a pending child speculative-wave")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="needs-check")
+    write_task(d, "T-002", deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("S1: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("S1: T-002 lands in the wave", ids(result["wave"]) == ["T-002"], result)
+    check(
+        "S1: speculative_on names the unverified dep",
+        result["wave"][0].get("speculative_on") == ["T-001"],
+        result["wave"],
+    )
+    check(
+        "S1: reason says unverified and never claims deps complete",
+        "unverified" in result["wave"][0]["reason"]
+        and "deps complete" not in result["wave"][0]["reason"],
+        result["wave"],
+    )
+
+print("S2: same, with the dep at checking instead of needs-check")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="checking")
+    write_task(d, "T-002", deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("S2: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("S2: T-002 lands in the wave", ids(result["wave"]) == ["T-002"], result)
+    check(
+        "S2: speculative_on names the unverified dep",
+        result["wave"][0].get("speculative_on") == ["T-001"],
+        result["wave"],
+    )
+    check(
+        "S2: reason says unverified and never claims deps complete",
+        "unverified" in result["wave"][0]["reason"]
+        and "deps complete" not in result["wave"][0]["reason"],
+        result["wave"],
+    )
+
+# -------------------------------------- S3/S4: a chain caps speculation at
+# one level, then collapses progressively as the head resolves
+print("S3: on an unresolved chain, the tail still defers—unmet-deps prefix intact")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="needs-check")
+    write_task(d, "T-002", status="needs-check", deps=["T-001"])
+    write_task(d, "T-003", deps=["T-002"])
+    rc, result, err = run_and_parse(d)
+    check("S3: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("S3: T-003 defers", ids(result["deferred"]) == ["T-003"], result)
+    reason = result["deferred"][0]["reason"]
+    # stop-gate.py falls back to this exact prefix for an older copied-in
+    # kit's deferred entries carrying no `kind`—see ready-set.py:139-142 in
+    # the plugin copy. A change to this literal breaks that fallback.
+    check("S3: reason keeps the exact 'unmet deps: ' prefix",
+          reason.startswith("unmet deps: "), reason)
+    check("S3: reason names T-002 and its status",
+          "T-002 (needs-check)" in reason, reason)
+    check("S3: kind is deps", result["deferred"][0]["kind"] == "deps", result["deferred"])
+
+    print("S4: completing the head collapses the chain one link")
+    write_task(d, "T-001", status="complete")
+    rc, result, err = run_and_parse(d)
+    check("S4: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("S4: T-003 now waves", ids(result["wave"]) == ["T-003"], result)
+    check(
+        "S4: speculative_on names T-002, the now-satisfied middle link",
+        result["wave"][0].get("speculative_on") == ["T-002"],
+        result["wave"],
+    )
+
+# ------------------------------------------------------ S5: a diamond needs
+# no special-case code—each dep is evaluated independently
+print("S5: a diamond's two children both speculative-wave off one shared parent")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="needs-check")
+    # owns declared and disjoint on both, so #162's owns-undeclared rule
+    # doesn't strand one of them alone—this fixture is about the diamond,
+    # not about owns pairing.
+    write_task(d, "T-002", deps=["T-001"], owns=["file-b.py"])
+    write_task(d, "T-003", deps=["T-001"], owns=["file-c.py"])
+    rc, result, err = run_and_parse(d)
+    check("S5: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "S5: both children land in the wave",
+        ids(result["wave"]) == ["T-002", "T-003"],
+        result,
+    )
+    check(
+        "S5: both name T-001 as their speculative dep",
+        all(e.get("speculative_on") == ["T-001"] for e in result["wave"]),
+        result["wave"],
+    )
+
+    print("S5b: once both children reach needs-check, the grandchild waves on both")
+    write_task(d, "T-001", status="complete")
+    write_task(d, "T-002", status="needs-check", deps=["T-001"])
+    write_task(d, "T-003", status="needs-check", deps=["T-001"])
+    write_task(d, "T-004", deps=["T-002", "T-003"])
+    rc, result, err = run_and_parse(d)
+    check("S5b: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("S5b: T-004 waves", ids(result["wave"]) == ["T-004"], result)
+    check(
+        "S5b: speculative_on names both unverified deps, sorted",
+        result["wave"][0].get("speculative_on") == ["T-002", "T-003"],
+        result["wave"],
+    )
+
+# ------------------------------- S6: everything but complete/needs-check/
+# checking is excluded from satisfying a dep
+print("S6: rework/assigned/pending/disputed deps never satisfy—only complete/needs-check/checking do")
+
+for dep_status in ("rework", "assigned", "pending", "disputed"):
+    with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+        write_task(d, "T-001", status=dep_status)
+        write_task(d, "T-002", deps=["T-001"])
+        rc, result, err = run_and_parse(d)
+        check(f"S6 ({dep_status}): exit 0", rc == 0, f"rc={rc} err={err}")
+        check(
+            f"S6 ({dep_status}): T-002 defers",
+            ids(result["deferred"]) == ["T-002"],
+            result,
+        )
+        check(
+            f"S6 ({dep_status}): kind is deps",
+            result["deferred"][0]["kind"] == "deps",
+            result["deferred"],
+        )
+        check(
+            f"S6 ({dep_status}): reason names the dep and its status",
+            f"T-001 ({dep_status})" in result["deferred"][0]["reason"],
+            result["deferred"],
+        )
+
+# --------------------------------------------------- S7: the non-speculative
+# case is untouched, byte for byte
+print("S7: a fully-complete dep produces the pre-#135 wave entry, byte-identical")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="complete")
+    write_task(d, "T-002", deps=["T-001"], owns=["file-b.py"])
+    rc, result, err = run_and_parse(d)
+    check("S7: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("S7: T-002 waves", ids(result["wave"]) == ["T-002"], result)
+    check(
+        "S7: no speculative_on key at all",
+        "speculative_on" not in result["wave"][0],
+        result["wave"],
+    )
+    check(
+        "S7: reason is byte-equal to the current non-speculative string",
+        result["wave"][0]["reason"]
+        == "deps complete, owns checked against every wave peer, "
+           "retry budget available",
+        result["wave"],
+    )
+
+# ------------------------------------------------------- S8: determinism
+# holds for a speculative wave too, not just the plain case #6 already covers
+print("S8: determinism holds for a speculative wave too")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="needs-check")
+    write_task(d, "T-002", deps=["T-001"])
+    write_task(d, "T-003", status="checking")
+    write_task(d, "T-004", deps=["T-003"], owns=["file-x.py"])
+    outputs = set()
+    for _ in range(5):
+        rc, out, err = run_script(d)
+        check("S8: each run exits 0", rc == 0, f"rc={rc} err={err}")
+        outputs.add(out)
+    check(
+        "S8: every run produced byte-identical stdout",
+        len(outputs) == 1,
+        outputs,
+    )
+
+# --------------------------------------- S9: invalidation—a built task whose
+# dep regresses behind it needs a human/orchestrator call, not silent waiting
+print("S9: a built task's dep regressing behind it lands the task in attention")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="rework", retries=1)
+    write_task(d, "T-002", status="needs-check", deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("S9a: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "S9a: T-002 lands in attention, naming T-001, its status, and 'invalidate'",
+        ids(result["attention"]) == ["T-002"]
+        and "T-001" in result["attention"][0]["reason"]
+        and "rework" in result["attention"][0]["reason"]
+        and "invalidate" in result["attention"][0]["reason"],
+        result["attention"],
+    )
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="assigned")
+    write_task(d, "T-002", status="complete", deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("S9b: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "S9b: an already-complete T-002 is flagged too, not just needs-check/checking",
+        ids(result["attention"]) == ["T-002"]
+        and "T-001" in result["attention"][0]["reason"]
+        and "assigned" in result["attention"][0]["reason"],
+        result["attention"],
+    )
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="disputed")
+    write_task(d, "T-002", status="checking", deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("S9c: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "S9c: T-001's own disputed entry and T-002's invalidation entry both appear",
+        ids(result["attention"]) == ["T-001", "T-002"],
+        result["attention"],
+    )
+    t002_entry = next(e for e in result["attention"] if e["id"] == "T-002")
+    check(
+        "S9c: a disputed dep gets the rule-first variant, naming T-001",
+        "T-001" in t002_entry["reason"] and "rule the dispute" in t002_entry["reason"],
+        t002_entry,
+    )
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="rework", retries=1)
+    write_task(d, "T-002", status="needs-check", deps=["T-001"])
+    rc, result, err = run_and_parse(d, "--running", "T-002")
+    check("S9d: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "S9d: a running T-002 is excluded from the invalidation rule too",
+        result["attention"] == [],
+        result["attention"],
+    )
+
 # ------------------------------------------- replay: the archived #117 graph
 # Everything above is a fixture built to exercise one rule. This section is the
 # only case driven by a job that actually ran (#169). The wave path's headline

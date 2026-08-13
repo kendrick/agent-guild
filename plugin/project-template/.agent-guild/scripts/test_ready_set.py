@@ -996,5 +996,190 @@ else:
     check("replay: the archived corpus is left untouched",
           archive_digest() == before, "the replay wrote to the archive")
 
+    # ------------------------------------- replay: the same graph, speculating
+    # The leg above marks a wave's members straight to `complete` between
+    # calls, which measures the OLD rule (a dep must be complete) and can
+    # never exercise speculative dispatch (#135)—a dep is never sitting at
+    # needs-check/checking when the next call happens, because it's already
+    # complete. This leg models the real pipeline instead: a wave's members
+    # land at `needs-check` (their workers returned) and stay there for one
+    # full call before the orchestrator's next call marks them `complete`
+    # (their checks passed). That needs-check window is exactly what
+    # speculation is for.
+    print("replaying the same graph with a needs-check window between dispatch and completion")
+
+    with tempfile.TemporaryDirectory(prefix="ready-set-replay-spec-") as d:
+        state = os.path.join(d, "state")
+        os.makedirs(state)
+        shutil.copytree(os.path.join(ARCHIVE_117, "tasks"), os.path.join(state, "tasks"))
+
+        # Same rewind as the leg above: pending, retries cleared, owns cloned
+        # onto a corpus that predates it.
+        for name in sorted(os.listdir(os.path.join(state, "tasks"))):
+            path = os.path.join(state, "tasks", name)
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            text = re.sub(r"^status:.*$", "status: pending", text, count=1, flags=re.M)
+            text = re.sub(r"^retries:.*$", "retries: 0", text, count=1, flags=re.M)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        add_owns(state)
+
+        deps = corpus_deps()
+        waves = []
+        speculative_entries = []  # (tid, speculative_on) for every wave entry that carried it
+        dispatch_snapshots = []   # (tid, speculative deps, what was complete at dispatch)
+        complete_set = set()      # what's actually `complete` on disk as of the CURRENT call
+        # tid -> turns remaining before it reads `complete`. A worker's return
+        # is not the end of the lifecycle: the contract's step 2 has the
+        # orchestrator set `checking` and dispatch the checker, and only a
+        # later turn accepts the verdict. So a task dispatched this turn is
+        # `needs-check` now, `checking` next turn, `complete` the turn after.
+        # That gap is the thing speculation spends, and a harness that
+        # completes a wave the moment the next call runs doesn't have one.
+        countdown = {}
+        ticks = 0
+        hit_cap = True
+
+        for _ in range(12):
+            ticks += 1
+            for tid in sorted(countdown):
+                countdown[tid] -= 1
+                if countdown[tid] == 1:
+                    set_status(state, tid, "checking")
+                elif countdown[tid] == 0:
+                    set_status(state, tid, "complete")
+                    complete_set.add(tid)
+            countdown = {t: n for t, n in countdown.items() if n > 0}
+
+            rc, result, err = run_and_parse(state)
+            if rc != 0 or result is None:
+                check("spec-replay: every call parses", False, f"rc={rc} err={err}")
+                break
+            entries = result["wave"]
+            if not entries:
+                # An empty wave is not the end unless nothing is in flight
+                # either. Under the old rule this is where the run would sit
+                # and wait for a checker, which is the wall clock speculation
+                # is trying to reclaim, so a waiting turn still costs a tick.
+                if not countdown:
+                    hit_cap = False
+                    break
+                continue
+
+            # Depth cap, checked against ready-set's own claim rather than
+            # trusted: a wave entry may speculate on a dep sitting at
+            # needs-check/checking, but that dep's OWN deps must already be
+            # complete—never themselves needs-check/checking. complete_set
+            # here is the state exactly as ready-set.py saw it for this call,
+            # captured before this iteration's advance step runs.
+            for e in entries:
+                for dep in e.get("speculative_on", []):
+                    dep_own_deps = deps.get(dep, [])
+                    check(
+                        f"spec-replay: {dep}'s own deps were complete when "
+                        f"{e['id']} speculated on it (depth cap holds)",
+                        all(dd in complete_set for dd in dep_own_deps),
+                        f"dep_own_deps={dep_own_deps} complete_set={sorted(complete_set)}",
+                    )
+
+            members = sorted(ids(entries))
+            waves.append(members)
+            speculative_entries.extend(
+                (e["id"], e["speculative_on"]) for e in entries if e.get("speculative_on")
+            )
+            dispatch_snapshots.extend(
+                (e["id"], e.get("speculative_on", []), frozenset(complete_set))
+                for e in entries
+            )
+
+            for tid in members:
+                set_status(state, tid, "needs-check")
+                countdown[tid] = 2
+
+        check("spec-replay: terminates before the 12-call cap", not hit_cap, f"waves={waves}")
+
+        covered = {tid for wave in waves for tid in wave}
+        serial = dispatched_tasks()
+        check("spec-replay: covers exactly the tasks the run dispatched workers for",
+              covered == serial, f"replayed={sorted(covered)} run={sorted(serial)}")
+
+        # Wave COUNT is not what speculation improves, and asserting it
+        # against the leg above would measure the wrong quantity. Both legs
+        # cross one dependency layer per wave because the graph decides that,
+        # not the rule: this replay and the non-speculative one produce the
+        # same six waves, in the same order. What changes is the turns spent
+        # waiting between them. Driving this same pipeline against a copy of
+        # ready-set.py with clause 2 removed takes 12 turns for that identical
+        # composition, against 8 here, because a dependent that waits for
+        # `complete` waits two turns past its dep's worker returning instead
+        # of one. Pin the count so a regression reinstating the wait shows up
+        # as a number rather than as a wave shape nobody can tell apart.
+        check(f"spec-replay: drains the graph in {ticks} turns",
+              ticks == 8, f"ticks={ticks} waves={waves}")
+
+        # The mechanism itself, asserted rather than inferred from a count:
+        # at least one task went out while the dep it needed had not yet been
+        # checked. That dispatch is precisely the one the old rule refused.
+        check(
+            "spec-replay: a task dispatched while its dep was still unchecked",
+            any(dep not in complete_at_dispatch
+                for _tid, dep_list, complete_at_dispatch in dispatch_snapshots
+                for dep in dep_list),
+            dispatch_snapshots,
+        )
+
+        check(
+            "spec-replay: wave composition",
+            waves == [
+                ["T-001", "T-005"],
+                ["T-002"],
+                ["T-004"],
+                ["T-006"],
+                ["T-007"],
+                ["T-003"],
+            ],
+            waves,
+        )
+
+# The weaker property speculation leaves intact. The strict-ordering
+        # check on the leg above holds only because that leg's deps are never
+        # satisfied except by `complete`, which is always further back than
+        # the task itself. Here a dep can satisfy while still at
+        # needs-check—but needs-check itself requires the dep to have been
+        # dispatched on a STRICTLY earlier call (ready-set.py reads each
+        # dep's status from the snapshot loaded before this call's wave was
+        # computed, so a task can never observe its own dep as a peer in the
+        # same call). So a task and its dep still can never land in the same
+        # wave, and the dep's wave index is still always the smaller one—the
+        # same comparison as the leg above, just no longer implying the dep
+        # had fully passed its check by the time its dependent waved.
+        wave_of = {tid: i for i, wave in enumerate(waves) for tid in wave}
+        violations = [
+            (tid, dep) for tid, dep_ids in deps.items() for dep in dep_ids
+            if tid in wave_of and dep in wave_of and wave_of[dep] >= wave_of[tid]
+        ]
+        check("spec-replay: no task waves in the same wave as, or before, one of its deps",
+              violations == [], f"violations={violations}")
+
+        check(
+            "spec-replay: at least one wave entry carries speculative_on",
+            len(speculative_entries) > 0,
+            speculative_entries,
+        )
+        check(
+            "spec-replay: speculative_on names the exact task/dep pairs this graph produces",
+            sorted(speculative_entries) == [
+                ("T-002", ["T-001"]),
+                ("T-003", ["T-007"]),
+                ("T-006", ["T-004"]),
+                ("T-007", ["T-006"]),
+            ],
+            speculative_entries,
+        )
+
+    check("spec-replay: the archived corpus is left untouched",
+          archive_digest() == before, "the replay wrote to the archive")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

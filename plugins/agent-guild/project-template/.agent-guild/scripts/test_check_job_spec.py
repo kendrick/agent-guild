@@ -748,6 +748,47 @@ Produces out.txt.
             rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
             check("R15 entries naming paths that don't exist yet: exit 0", rc == 0, f"rc={rc} err={err}")
 
+        # R13 has to catch the same pair the wave does, on the strings alone
+        # and with neither path on disk. Two well-formed entries, one
+        # directory, and R15 has nothing to say about either of them.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+            for tid, entry in (("T-001", "src/lib"), ("T-002", "src/lib/")):
+                write_lines(
+                    os.path.join(state, "tasks", f"{tid}.md"),
+                    f"""---
+id: {tid}
+title: Task {tid}
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: []
+dep_rationale: []
+escalations: []
+artifacts:
+  - out.txt
+owns:
+  - {entry}
+---
+
+## Spec excerpt
+
+Writes under src/lib.
+""".splitlines(),
+                )
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("'src/lib' vs 'src/lib/' with neither on disk: exit 1", rc == 1, f"rc={rc} err={err}")
+            check("'src/lib' vs 'src/lib/': R13 named, not R15", rule_hit(err, "R13"), f"err={err!r}")
+
         # The migration decision (#162): `owns` stays optional, so a corpus
         # that predates the field is not retroactively in violation. The
         # unmutated corpus below carries no `owns:` at all.
@@ -942,7 +983,9 @@ dep_rationale.
 # `plugin/`, `plugins/`, or `.claude/`. While they were missing from
 # GENERATED_TREE_PREFIXES, a task whose only generated artifact was one of
 # them read as a task that regenerates nothing, and R8 went quiet on the
-# whole job. Each case below passes for the wrong reason without the fix.
+# whole job: an illegal decomposition lints clean. Each marketplace file gets
+# a fire-then-pass pair, since the passing half on its own goes green against
+# the old prefix list too and would prove nothing.
 print("generated trees: a marketplace file counts as a regeneration")
 
 for marketplace in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):

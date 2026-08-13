@@ -249,6 +249,37 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         result["wave"],
     )
 
+# #162's opening reproduction, end to end and with nothing on disk. Two
+# tasks name one directory, one of them without its trailing slash. The
+# linter refuses that spelling when the directory already exists, which it
+# usually doesn't when the task's job is to create it, so the wave has to
+# catch this pair on the strings alone.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["src/lib"])
+    write_task(d, "T-002", owns=["src/lib/"])
+    rc, result, err = run_and_parse(d)
+    check(
+        "'src/lib' and 'src/lib/' never share a wave",
+        ids(result["wave"]) == ["T-001"] and ids(result["deferred"]) == ["T-002"],
+        result,
+    )
+    check(
+        "'src/lib' vs 'src/lib/': deferred as a real overlap, not as a typo",
+        result["deferred"][0]["kind"] == "owns",
+        result["deferred"],
+    )
+
+# A file and the directory above it are the same territory too.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["src/foo"])
+    write_task(d, "T-002", owns=["src/foo/bar.py"])
+    rc, result, err = run_and_parse(d)
+    check(
+        "a file claim under another task's slashless directory claim defers",
+        ids(result["wave"]) == ["T-001"] and ids(result["deferred"]) == ["T-002"],
+        result,
+    )
+
 # A malformed entry outranks an undeclared peer: same wave refusal either
 # way, and naming the typo is the more actionable of the two reasons.
 with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:

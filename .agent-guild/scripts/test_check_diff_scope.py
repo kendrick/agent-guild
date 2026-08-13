@@ -224,29 +224,57 @@ for bad, label in [
     (" src/a.py", "leading space"),
     ("", "empty string"),
     ("/", "bare slash"),
+    ("src/*.py", "glob"),
+    ("~/a.py", "home expansion"),
+    ("$OUT/a.py", "variable expansion"),
+    ("​src/a.py", "zero-width space"),
+    (None, "not a string at all"),
 ]:
     check(f"malformed entry ({label}): a problem is reported", owns_entry_problem(bad) is not None)
 
-# The pair #162 opened with. paths_overlap answers False for both, which is
-# correct for the shapes it's given and useless for what the author meant;
-# the entries are refused before overlap is ever asked about.
+# The three pairs #162 opened with, none of which may answer a silent False.
+# Two of them are the same territory spelled differently, so overlap is the
+# honest answer and no filesystem lookup is involved in giving it.
 check(
-    "'src/lib' vs 'src/lib/': paths_overlap says no...",
-    paths_overlap("src/lib", "src/lib/") is False,
+    "'src/lib' vs 'src/lib/' overlap, whether or not src/lib exists yet",
+    paths_overlap("src/lib", "src/lib/") is True,
 )
-with tempfile.TemporaryDirectory() as d:
-    os.makedirs(os.path.join(d, "src", "lib"))
-    check(
-        "...and the slashless spelling is refused as malformed instead",
-        owns_entry_problem("src/lib", d) is not None,
-    )
 check(
-    "'./src/a.py' vs 'src/a.py': paths_overlap says no...",
+    "'src/foo/bar.py' vs 'src/foo' overlap: one contains the other",
+    paths_overlap("src/foo/bar.py", "src/foo") is True,
+)
+# The third is a spelling no comparison can rescue, so it's refused instead.
+check(
+    "'./src/a.py' vs 'src/a.py' can't be reconciled by comparison...",
     paths_overlap("./src/a.py", "src/a.py") is False,
 )
 check(
-    "...and the './' spelling is refused with no filesystem lookup at all",
+    "...so the './' spelling is refused, with no filesystem lookup at all",
     owns_entry_problem("./src/a.py") is not None,
+)
+# A directory that already exists is still refused when spelled slashless,
+# even though overlap now catches it: the entry is wrong on its own terms
+# and the reader of the task file deserves to be told.
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, "src", "lib"))
+    check(
+        "an existing directory spelled without its slash: still malformed",
+        owns_entry_problem("src/lib", d) is not None,
+    )
+
+# The lookalike sibling must survive the looser overlap rule: a parent
+# relationship is tested at a separator, not by raw string prefix.
+check(
+    "'plugin/' does not swallow 'plugin-extra/file.py'",
+    paths_overlap("plugin/", "plugin-extra/file.py") is False,
+)
+check(
+    "'plugin/' does cover 'plugin/hooks/hooks.json'",
+    paths_overlap("plugin/", "plugin/hooks/hooks.json") is True,
+)
+check(
+    "two different files under one directory don't overlap",
+    paths_overlap("src/a.py", "src/b.py") is False,
 )
 
 # Existence is never required: a task's job is often to create what it owns.

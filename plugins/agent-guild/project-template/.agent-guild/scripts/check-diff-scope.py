@@ -125,47 +125,73 @@ def collect_changed_paths():
 def paths_overlap(a, b):
     """True if ownership paths `a` and `b` denote overlapping territory.
     Each is either an exact file path or a directory prefix ending in
-    '/'—the same two shapes ALLOWED and `owns:` entries both take. Two
-    directories overlap if either is nested inside (or equal to) the
-    other; a directory and a file overlap if the file sits under it; two
-    files overlap only if they're the same path. `a` and `b` are
+    '/'—the same two shapes ALLOWED and `owns:` entries both take.
+
+    The comparison is on the path itself, with the trailing slash treated
+    as notation rather than as part of the name, so `src/lib` and
+    `src/lib/` are the same territory spelled two ways. #162 found the
+    earlier version answering False there: it compared a file claim
+    against a directory claim, correctly for the shapes it was handed and
+    uselessly for what the author meant, and two tasks writing one tree
+    rode the same wave on the strength of that answer. R15 refuses the
+    slashless spelling of a directory that already exists, but a task's
+    whole job is often to create the tree it owns, and this predicate is
+    the only thing standing between that case and a lost write.
+
+    So: two paths overlap when they name the same node, or when either is
+    a parent directory of the other. A trailing slash still carries
+    meaning for anyone reading the file, and `plugin/` still does not
+    swallow `plugin-extra/`, because a parent relationship is tested at a
+    separator rather than by raw string prefix. `a` and `b` are
     interchangeable—the check is symmetric—which matters to a caller like
     R13 comparing two tasks' owns lists pairwise without caring which one
     it read first."""
-    a_is_dir = a.endswith("/")
-    b_is_dir = b.endswith("/")
-    if a_is_dir and b_is_dir:
-        return a.startswith(b) or b.startswith(a)
-    if a_is_dir:
-        return b.startswith(a)
-    if b_is_dir:
-        return a.startswith(b)
-    return a == b
+    a_core = a.rstrip("/")
+    b_core = b.rstrip("/")
+    if a_core == b_core:
+        return True
+    return a_core.startswith(b_core + "/") or b_core.startswith(a_core + "/")
 
 
 def owns_entry_problem(entry, repo_root=None):
     """A short reason an `owns:` entry is malformed, or None if it's one of
     the two shapes paths_overlap above understands.
 
-    Shape is load-bearing rather than cosmetic: a directory written without
-    its trailing slash reads as a file claim, and a file claim never
-    collides with anything under that directory. `owns: ['src/lib']` and
-    `owns: ['src/lib/']` on two tasks therefore pass R13 and ride the same
-    wave while writing the same tree (#162). Every check here exists to
-    catch a spelling that would silently answer "no overlap" for territory
-    that does overlap.
+    Shape is load-bearing rather than cosmetic. `paths_overlap` above
+    answers "same territory?" for the two documented shapes; hand it a
+    third thing and its answer is meaningless rather than wrong, and a
+    meaningless "no overlap" is what puts two tasks on one file in the
+    same wave (#162). Every check here catches a spelling that would
+    produce one: `./src/a.py` never matches `src/a.py`, a glob never
+    matches the files it was meant to stand for, an invisible character
+    makes a path that matches nothing at all.
 
     Existence is never required—a task's whole job is often to create the
     file it owns. The repo_root checks fire only when the path DOES exist
     and its kind contradicts its spelling. Pass repo_root=None for the
     textual checks alone, which is what ready-set.py does to stay a pure
     function of the task files."""
-    if not isinstance(entry, str) or not entry.strip():
+    if not isinstance(entry, str):
+        return f"not a string ({type(entry).__name__})"
+    if not entry.strip():
         return "empty entry"
     if entry != entry.strip():
         return "leading or trailing whitespace"
+    invisible = next((c for c in entry if c in "​‌‍﻿\xa0"), None)
+    if invisible is not None:
+        # Survives .strip(), reads as an ordinary path, matches nothing.
+        # Usually arrived by paste rather than by typing.
+        return f"invisible character U+{ord(invisible):04X}"
     if "\\" in entry:
         return "backslash; entries use '/' separators"
+    glob_char = next((c for c in entry if c in "*?[]"), None)
+    if glob_char is not None:
+        return (
+            f"glob character {glob_char!r}; an entry is a literal path, and a "
+            "pattern here would own nothing"
+        )
+    if entry.startswith("~") or entry.startswith("$"):
+        return "shell expansion; entries are literal repo-relative paths"
     if entry.startswith("/"):
         return "absolute path; entries are repo-relative"
     core = entry[:-1] if entry.endswith("/") else entry

@@ -44,8 +44,9 @@ like `src/lib` and `src/lib/` passes R13 while naming the same tree
 entries a task declares and has nothing to say about a task that declares
 none.
 
-R13 sits right after R7 because it needs R7's acyclic-DAG guarantee before
-it can walk a `deps` chain looking for a path between two owners—the same
+R13 sits after R7 (with R15 in between) because it needs R7's acyclic-DAG
+guarantee before it can walk a `deps` chain looking for a path between two
+owners—the same
 reason R8 (which walks the same chain) runs after R7 too. R13 is opt-in at
 the linter (#133): a task with no `owns:` field, or an empty one, is never
 an R13 violation—only a task this rule has nothing to check. The field
@@ -273,9 +274,9 @@ class TaskFile:
     `spec_excerpt_start_line` describe the verbatim `## Spec excerpt`
     section and the physical line its first character sits on, so a rule
     that finds an offset within it can add a newline count to get a real
-    line number. `owns` is R13's input alone (#133)—parsed the same way as
-    `artifacts` (see load_task_file) but empty by default, since the field
-    is opt-in and predates every archived corpus. `dep_rationale` is R14's
+    line number. `owns` is what R13 and R15 both read (#133, #162)—parsed the same
+    way as `artifacts` (see load_task_file) but empty by default, since the
+    field is opt-in and predates every archived corpus. `dep_rationale` is R14's
     input the same way (#125): a list of `(task_id_or_None, text)` pairs,
     empty by default for the same reason `owns` is.
     """
@@ -871,9 +872,10 @@ def rule_R15(ctx, audit_id, repo_root):
 # R13: ownership overlap. Closes #133—two tasks dispatched concurrently can
 # silently lose one task's write to the other's if they touch the same
 # file, so any two tasks whose `owns` overlap have to be forced into
-# sequence by a dep edge. Placed right here, immediately after R7, because
-# walking a `deps` chain to look for that edge needs R7's acyclic-DAG
-# guarantee first—the same reason R8 (below) waits for R7 too.
+# sequence by a dep edge. Placed right after R7 (R15 goes between them,
+# proving the entries are readable first), because walking a `deps` chain to
+# look for that edge needs R7's acyclic-DAG guarantee—the same reason R8
+# (below) waits for R7 too.
 # ---------------------------------------------------------------------------
 
 def rule_R13(ctx, audit_id):
@@ -1078,9 +1080,9 @@ def rule_R16(ctx, audit_id):
             + ", ".join(inputs)
             + (" edits" if len(inputs) == 1 else " edit")
             + " a build input, but no task declares a generated tree among "
-            "its artifacts; add one terminal task that regenerates and owns "
-            "that output, or every worker is left to run the build itself "
-            "and two of them can race"
+            "its artifacts; add one terminal task that regenerates and names "
+            "those trees in its own artifacts, or every worker is left to run "
+            "the build itself and two of them can race"
         )
     for i, ta in enumerate(generated):
         for tb in generated[i + 1:]:

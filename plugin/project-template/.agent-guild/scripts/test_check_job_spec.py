@@ -963,5 +963,82 @@ for marketplace in (".claude-plugin/marketplace.json", ".agents/plugins/marketpl
         rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
         check(f"{marketplace} regenerated downstream of the edit: exit 0", rc == 0, f"rc={rc} err={err}")
 
+# ------------------------------------------- R16: build serialization (#164)
+# The case that reproduces today: two tasks editing disjoint paths under
+# guild-core/. Nothing about their file ownership overlaps, so the wave
+# dispatches both, and both then have to run build-plugin.py over the same
+# output trees. R16 refuses the decomposition until one task owns the
+# regeneration.
+print("R16: build serialization (#164)")
+
+GUILD_CORE_A = "guild-core/roles/auditor.md"
+GUILD_CORE_B = "guild-core/workflows/decompose/SKILL.md"
+
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": [GUILD_CORE_B]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 two build-input editors and no regenerator: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R16 no regenerator: R16 named", rule_hit(err, "R16"), f"err={err!r}")
+    check("R16 no regenerator: both editors named", "T-001" in err and "T-002" in err, err)
+    check("R16 no regenerator: no traceback", "Traceback" not in err, f"err={err!r}")
+
+# The fix the rule is asking for: one terminal task, downstream of both
+# edits, declaring the generated trees. Both editors still share a wave;
+# the regenerator waits on its deps, which is where the serialization the
+# issue asked for becomes visible in the wave's own output.
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": [GUILD_CORE_B]},
+        {"id": "T-003", "artifacts": ["plugin/", "plugins/", ".claude/"],
+         "deps": ["T-001", "T-002"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 one terminal regenerator downstream of both: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# Two regenerators with no dep path between them. R8 passes this, because
+# some generated task (T-004) is downstream of everything—which is why R8
+# alone was never enough.
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": ["plugin/"], "deps": ["T-001"]},
+        {"id": "T-003", "artifacts": ["plugins/"], "deps": ["T-001"]},
+        {"id": "T-004", "artifacts": [".claude/"], "deps": ["T-002", "T-003"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 two unordered regenerators: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R16 two unordered regenerators: R16 named, not R8", rule_hit(err, "R16"), f"err={err!r}")
+    check("R16 two unordered regenerators: both named", "T-002" in err and "T-003" in err, err)
+
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": ["plugin/"], "deps": ["T-001"]},
+        {"id": "T-003", "artifacts": ["plugins/", ".claude/"], "deps": ["T-002"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 two regenerators on a dep path: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# A job that touches no build input owes nothing to the build step.
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": ["docs/some-guide.md"]},
+        {"id": "T-002", "artifacts": ["README.md"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 no build inputs anywhere in the job: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# CON-audit has no tasks to serialize.
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R16 CON-audit with an empty tasks/: exit 0", rc == 0, f"rc={rc} err={err}")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

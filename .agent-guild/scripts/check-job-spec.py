@@ -21,12 +21,19 @@ masks something provable—and only the FIRST violation found is reported:
     R15 owns shape           R1 citation resolves     R10 count vs list
     R13 ownership overlap    R3 citation shape        R12' cross-artifact count
     R14 dep rationale        R8 build ordering
+                             R16 build serialization
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
-depend on, order, or own yet), so R6, R7, R15, R13, R14, and R8 are
+depend on, order, or own yet), so R6, R7, R15, R13, R14, R8, and R16 are
 skipped; every other rule runs over constitution.md alone. `--audit-id
 DEC-audit`: everything runs, and an empty `tasks/` is itself an R6
 failure—a decomposition that produced no tasks decomposed nothing.
+
+R16 runs immediately after R8 and reads the same two path sets. R8 puts the
+regeneration last; R16 asks how many regenerations there are, and whether a
+job that edits build inputs modeled the build step at all. Both gaps only
+became reachable under waves (#125)—one task at a time made two concurrent
+regenerations impossible by construction.
 
 R15 runs immediately before R13 because R13's question—do these two owns
 entries overlap—only has a meaningful answer once both entries are one of
@@ -1038,6 +1045,57 @@ def rule_R8(ctx, audit_id):
 
 
 # ---------------------------------------------------------------------------
+# R16: build serialization. Closes #164. R8 puts the regeneration last; it
+# says nothing about how many tasks regenerate, or about a job where nobody
+# does and every worker is left to run the build on its own. Both gaps are
+# live only under waves (#125): before them the loop dispatched one task at
+# a time, so two concurrent regenerations were impossible by construction.
+#
+# The collision is the build RUN, not the build-input EDIT. Reading it the
+# other way—two tasks that both edit inputs can't share a wave—would
+# serialize essentially every wave in a repo that dogfoods its own kit,
+# since nearly every task there edits `guild-core/` or `.agent-guild/`.
+# Editing an input writes nothing under the generated trees. Only running
+# the build does, and a task that runs it says so by declaring those trees
+# among its artifacts.
+#
+# So: exactly one regenerating task, downstream of the edits (R8's half),
+# and nobody else regenerating (this rule's second half). What no linter
+# can prove is that a worker didn't run the build anyway without declaring
+# it; the worker roles carry that instruction, and R8's ordering is what
+# makes the declared regeneration the one that wins.
+# ---------------------------------------------------------------------------
+
+def rule_R16(ctx, audit_id):
+    if audit_id == "CON-audit" or not ctx.tasks:
+        return None
+    by_id = {t.id: t for t in ctx.tasks}
+    inputs = sorted(t.id for t in ctx.tasks if any(_is_build_input(a) for a in t.artifacts))
+    generated = sorted(t.id for t in ctx.tasks if any(_is_generated(a) for a in t.artifacts))
+    if inputs and not generated:
+        return (
+            "R16 build-serialization: "
+            + ", ".join(inputs)
+            + (" edits" if len(inputs) == 1 else " edit")
+            + " a build input, but no task declares a generated tree among "
+            "its artifacts; add one terminal task that regenerates and owns "
+            "that output, or every worker is left to run the build itself "
+            "and two of them can race"
+        )
+    for i, ta in enumerate(generated):
+        for tb in generated[i + 1:]:
+            if tb in _transitive_deps(ta, by_id) or ta in _transitive_deps(tb, by_id):
+                continue
+            return (
+                f"R16 build-serialization: {ta} and {tb} both declare a "
+                "generated tree, with no dep path connecting them, so both "
+                "can regenerate at once and one build's output overwrites "
+                "the other's"
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Section scope for the remaining prose rules (R9, R10, R12'): every region
 # R1/R2/R3 already scan, reused so the "what counts as paperwork" boundary
 # lives in one place.
@@ -1519,6 +1577,7 @@ def run_rules(ctx, audit_id, repo_root):
         lambda: check_citation_rules(regions, repo_root, "R1"),
         lambda: check_citation_rules(regions, repo_root, "R3"),
         lambda: rule_R8(ctx, audit_id),
+        lambda: rule_R16(ctx, audit_id),
         lambda: check_citation_rules(regions, repo_root, "R2"),
         lambda: rule_R9(ctx),
         lambda: rule_R10(ctx),

@@ -404,14 +404,10 @@ def _codex_inline_verdict_ok(message, task_id, agent):
 
 
 def _latest_audit_verdict(audit_id):
-    vdir = _lib.state_path("verdicts")
-    if not os.path.isdir(vdir):
-        return None
-    matches = sorted(
-        n for n in os.listdir(vdir)
-        if n.startswith(audit_id + "-r") and n.endswith(".md")
-    )
-    return os.path.join(vdir, matches[-1]) if matches else None
+    """The verdict this return has to validate. Shares dispatch-guard's notion
+    of "latest" deliberately: a round this gate accepts but the gate reads
+    differently is a round nothing actually checked."""
+    return _lib.latest_audit_round(audit_id)[1]
 
 
 def _unidentifiable(reason):

@@ -12,6 +12,7 @@ contract; if a CC release changes it and subagent-return starts failing closed
 on real dispatches, update `transcript()` here to match the new shape, confirm
 the tests pass, and the hook follows.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -100,8 +101,43 @@ def write_verdict(proj, name, verdict="PASS", diagnosis=False):
         f.write(body)
 
 
+def write_constitution(proj, text="# Constitution\n\n- C-1: a clause.\n"):
+    path = os.path.join(proj, ".agent-guild", "state", "constitution.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
+
+
+def stamp_con_audit(proj, round_n=0):
+    """What dispatch-guard writes when a CON auditor is dispatched: the digest
+    of the constitution that round was commissioned against."""
+    cpath = os.path.join(proj, ".agent-guild", "state", "constitution.md")
+    with open(cpath, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    stamp = os.path.join(proj, ".agent-guild", "state", "verdicts",
+                         f"CON-audit-r{round_n}.md.sha256")
+    with open(stamp, "w", encoding="utf-8") as f:
+        f.write(digest + "\n")
+    return digest
+
+
 def con_pass(proj):
+    """A constitution, a PASS on it, and the stamp binding the two. All three
+    are required now—a PASS with no stamp is a PASS about unknown bytes."""
+    if not os.path.exists(os.path.join(proj, ".agent-guild", "state", "constitution.md")):
+        write_constitution(proj)
     write_verdict(proj, "CON-audit-r0.md", "PASS")
+    stamp_con_audit(proj, 0)
+
+
+def dec_pass(proj):
+    write_verdict(proj, "DEC-audit-r0.md", "PASS")
+
+
+def audits_pass(proj):
+    """Both worker gates open. What a job at Phase 2 looks like."""
+    con_pass(proj)
+    dec_pass(proj)
 
 
 def write_fake_linter(proj, exit_code, stderr_line="job-spec: fake finding at T-001.md:1",
@@ -1140,7 +1176,7 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-001"}}, proj)
 check("worker before CON-audit PASS → exit 2", rc == 2 and "constitution audit" in err, err)
 
-con_pass(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="pending")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-001"}}, proj)
@@ -1259,7 +1295,7 @@ rc, out, err = run_hook("dispatch-guard.py",
                         proj_worker_linter)
 check("worker w/ failing linter, no CON-audit → exit 2 on CON-audit, not job-spec",
       rc == 2 and "constitution audit" in err and "job-spec" not in err, err)
-con_pass(proj_worker_linter)
+audits_pass(proj_worker_linter)
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-900"}},
                         proj_worker_linter)
@@ -1371,6 +1407,261 @@ rc, out, err = run_hook("dispatch-guard.py",
 check("cites clauses, no check_method → checker blocked too",
       rc == 2 and "check_method is empty" in err, f"rc={rc} err={err}")
 
+# ------------------------------------------- dispatch-guard: DEC-audit gate
+# Issue #161: the decomposition audit used to be a memo. It is the only check
+# in the system that can see a spec section no task covers, and that hole is
+# invisible downstream—no task means no checker, so the job runs green and
+# builds the wrong scope.
+print("dispatch-guard.py: DEC-audit gate (#161)")
+
+
+def worker_rc(proj, tid="T-001"):
+    rc, _, err = run_hook("dispatch-guard.py",
+                          {"tool_input": {"subagent_type": "worker-standard",
+                                          "prompt": f"Task-ID: {tid}"}}, proj)
+    return rc, err
+
+
+proj_dec = fresh_proj()
+con_pass(proj_dec)
+write_task(proj_dec, "T-001", status="assigned")
+rc, err = worker_rc(proj_dec)
+check("tasks exist, no DEC-audit verdict → exit 2",
+      rc == 2 and "DEC-audit" in err, f"rc={rc} err={err}")
+
+dec_pass(proj_dec)
+rc, err = worker_rc(proj_dec)
+check("DEC-audit PASS → exit 0", rc == 0, f"rc={rc} err={err}")
+
+write_verdict(proj_dec, "DEC-audit-r1.md", "FAIL", diagnosis=True)
+rc, err = worker_rc(proj_dec)
+check("newer DEC FAIL beats older PASS → exit 2 naming r1",
+      rc == 2 and "r1" in err and "FAIL" in err, f"rc={rc} err={err}")
+
+write_verdict(proj_dec, "DEC-audit-r2.md", "PASS")
+rc, err = worker_rc(proj_dec)
+check("fresh DEC PASS reopens the gate → exit 0", rc == 0, f"rc={rc} err={err}")
+
+write_verdict(proj_dec, "DEC-audit-r10.md", "FAIL", diagnosis=True)
+rc, err = worker_rc(proj_dec)
+check("DEC r10 FAIL beats r2 PASS → exit 2 naming r10",
+      rc == 2 and "r10" in err, f"rc={rc} err={err}")
+
+# The deadlock case. A gate that blocks the audit that opens it is a job with
+# no way out, so both non-worker paths have to stay clear of it.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: DEC-audit"}}, proj_dec)
+check("DEC gate closed → auditor still dispatches (no deadlock)",
+      rc == 0, f"rc={rc} err={err}")
+
+write_task(proj_dec, "T-002", status="checking")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-deterministic",
+                                        "prompt": "Task-ID: T-002"}}, proj_dec)
+check("DEC gate closed → checker still dispatches (worker-only gate)",
+      rc == 0, f"rc={rc} err={err}")
+
+# --------------------------------------- dispatch-guard: CON-audit staleness
+# Issue #110: the gate used to answer "did some constitution pass once," which
+# a job discovers only after workers have built against a document nothing
+# approved. These pin the two halves of the repair—latest round wins, and the
+# PASS is about specific bytes.
+print("dispatch-guard.py: CON-audit staleness (#110)")
+
+proj_stale = fresh_proj()
+con_pass(proj_stale)
+dec_pass(proj_stale)
+write_task(proj_stale, "T-001", status="assigned")
+rc, err = worker_rc(proj_stale)
+check("stamped CON PASS + DEC PASS → exit 0", rc == 0, f"rc={rc} err={err}")
+
+write_constitution(proj_stale, "# Constitution\n\n- C-1: a revised clause.\n")
+rc, err = worker_rc(proj_stale)
+check("constitution revised after PASS → exit 2 naming the round",
+      rc == 2 and "changed since" in err and "r0" in err, f"rc={rc} err={err}")
+
+# Byte-identical rewrite: mtime moves, content doesn't. A gate keyed on mtime
+# would block here, which would make every no-op save cost an audit round.
+write_constitution(proj_stale, "# Constitution\n\n- C-1: a revised clause.\n")
+stamp_con_audit(proj_stale, 0)
+rc, err = worker_rc(proj_stale)
+check("fresh stamp on revised text → exit 0", rc == 0, f"rc={rc} err={err}")
+write_constitution(proj_stale, "# Constitution\n\n- C-1: a revised clause.\n")
+rc, err = worker_rc(proj_stale)
+stamp_r0 = os.path.join(proj_stale, ".agent-guild", "state", "verdicts",
+                        "CON-audit-r0.md.sha256")
+with open(os.path.join(proj_stale, ".agent-guild", "state", "constitution.md"), "rb") as f:
+    live_digest = hashlib.sha256(f.read()).hexdigest()
+check("byte-identical rewrite → exit 0 (content, not mtime)",
+      rc == 0 and open(stamp_r0, encoding="utf-8").read().strip() == live_digest,
+      f"rc={rc} err={err}")
+
+write_verdict(proj_stale, "CON-audit-r1.md", "FAIL", diagnosis=True)
+rc, err = worker_rc(proj_stale)
+check("newer CON FAIL beats older PASS → exit 2 naming r1",
+      rc == 2 and "r1" in err and "FAIL" in err, f"rc={rc} err={err}")
+
+write_verdict(proj_stale, "CON-audit-r2.md", "PASS")
+stamp_con_audit(proj_stale, 2)
+rc, err = worker_rc(proj_stale)
+check("fresh CON PASS reopens the gate → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# r10 vs r2: the lexicographic sort this replaced read r2 as the latest for
+# every round after the ninth.
+write_verdict(proj_stale, "CON-audit-r10.md", "FAIL", diagnosis=True)
+rc, err = worker_rc(proj_stale)
+check("CON r10 FAIL beats r2 PASS → exit 2 naming r10",
+      rc == 2 and "r10" in err, f"rc={rc} err={err}")
+
+# A PASS from before stamping existed. Fail closed: nothing distinguishes it
+# from a stamp somebody deleted.
+proj_legacy = fresh_proj()
+write_constitution(proj_legacy)
+write_verdict(proj_legacy, "CON-audit-r0.md", "PASS")
+dec_pass(proj_legacy)
+write_task(proj_legacy, "T-001", status="assigned")
+rc, err = worker_rc(proj_legacy)
+check("CON PASS with no stamp → exit 2, asks for a fresh PASS",
+      rc == 2 and "approved-content stamp" in err, f"rc={rc} err={err}")
+
+proj_noc = fresh_proj()
+con_pass(proj_noc)
+dec_pass(proj_noc)
+os.remove(os.path.join(proj_noc, ".agent-guild", "state", "constitution.md"))
+write_task(proj_noc, "T-001", status="assigned")
+rc, err = worker_rc(proj_noc)
+check("stamped CON PASS, constitution deleted → exit 2",
+      rc == 2 and "does not exist" in err, f"rc={rc} err={err}")
+
+# Missing constitution AND missing stamp. Reporting the stamp here would send
+# the reader to re-audit, and an audit of a document that isn't there writes no
+# stamp either, so the message has to name the half that can actually be fixed.
+proj_neither = fresh_proj()
+write_verdict(proj_neither, "CON-audit-r0.md", "PASS")
+dec_pass(proj_neither)
+write_task(proj_neither, "T-001", status="assigned")
+rc, err = worker_rc(proj_neither)
+check("no constitution and no stamp → names the missing file, not the stamp",
+      rc == 2 and "does not exist" in err and "stamp" not in err, f"rc={rc} err={err}")
+
+# The gate is worker-only. An auditor dispatched to reopen it must get through,
+# or a stale constitution is a job that can never be repaired.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: CON-audit"}}, proj_legacy)
+check("CON gate closed → auditor still dispatches (no deadlock)",
+      rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------- dispatch-guard: the content stamp (#110)
+# The stamp is written when the audit is commissioned, not when it comes back.
+# Both defects below were found by adversarial review of the return-time
+# version and are the reason it moved.
+print("dispatch-guard.py: CON-audit content stamp (#110)")
+
+
+def stamp_of(proj, round_n):
+    path = os.path.join(proj, ".agent-guild", "state", "verdicts",
+                        f"CON-audit-r{round_n}.md.sha256")
+    return open(path, encoding="utf-8").read().strip() if os.path.exists(path) else None
+
+
+def digest_of(proj):
+    with open(os.path.join(proj, ".agent-guild", "state", "constitution.md"), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+AUDIT_CON = {"tool_input": {"subagent_type": "auditor", "prompt": "Audit-ID: CON-audit"}}
+
+proj_cs = fresh_proj()
+write_constitution(proj_cs)
+rc, out, err = run_hook("dispatch-guard.py", AUDIT_CON, proj_cs)
+check("CON auditor dispatched with no prior round → stamps r0",
+      rc == 0 and stamp_of(proj_cs, 0) == digest_of(proj_cs), f"rc={rc} err={err}")
+
+write_verdict(proj_cs, "CON-audit-r0.md", "FAIL", diagnosis=True)
+write_constitution(proj_cs, "# Constitution\n\n- C-1: revised.\n")
+rc, out, err = run_hook("dispatch-guard.py", AUDIT_CON, proj_cs)
+check("CON auditor re-dispatched → stamps the next round, not the last one",
+      rc == 0 and stamp_of(proj_cs, 1) == digest_of(proj_cs)
+      and stamp_of(proj_cs, 0) != stamp_of(proj_cs, 1), f"rc={rc} err={err}")
+
+# An auditor that returns having written nothing used to relabel the previous
+# round with whatever was on disk, which turned the gate into "an auditor
+# round-tripped" instead of "this text was approved."
+proj_launder = fresh_proj()
+write_constitution(proj_launder)
+run_hook("dispatch-guard.py", AUDIT_CON, proj_launder)
+write_verdict(proj_launder, "CON-audit-r0.md", "PASS")
+dec_pass(proj_launder)
+write_task(proj_launder, "T-001", status="assigned")
+rc, err = worker_rc(proj_launder)
+check("stamped at dispatch, verdict written after → exit 0", rc == 0, f"rc={rc} err={err}")
+
+write_constitution(proj_launder, "# Constitution\n\n- C-1: never audited.\n")
+tx = transcript(proj_launder, "Audit-ID: CON-audit")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_launder)
+rc_worker, err_worker = worker_rc(proj_launder)
+check("auditor returns without writing a verdict → gate stays shut",
+      rc_worker == 2 and "changed since" in err_worker,
+      f"return rc={rc} worker rc={rc_worker} err={err_worker}")
+
+# The Codex flow: the auditor is read-only there and returns its verdict for
+# the orchestrator to persist, so a stamp that waited for the subagent's return
+# would never be written and the gate could never open on that host.
+proj_codex = fresh_proj()
+write_constitution(proj_codex)
+run_hook("dispatch-guard.py", AUDIT_CON, proj_codex)
+check("stamp exists before any verdict does (read-only auditor hosts)",
+      stamp_of(proj_codex, 0) == digest_of(proj_codex))
+write_verdict(proj_codex, "CON-audit-r0.md", "PASS")
+dec_pass(proj_codex)
+write_task(proj_codex, "T-001", status="assigned")
+rc, err = worker_rc(proj_codex)
+check("orchestrator persists the verdict afterward → gate opens",
+      rc == 0, f"rc={rc} err={err}")
+
+# Two auditors commissioned for one round. Only one of them files a verdict,
+# and the gate has no way to know which, so the second dispatch must not
+# relabel the round with the document the first auditor never saw.
+proj_two = fresh_proj()
+write_constitution(proj_two, "# Constitution\n\n- C-1: audited.\n")
+run_hook("dispatch-guard.py", AUDIT_CON, proj_two)
+first_digest = digest_of(proj_two)
+write_constitution(proj_two, "# Constitution\n\n- C-1: never audited.\n")
+run_hook("dispatch-guard.py", AUDIT_CON, proj_two)
+check("second CON dispatch while the first is in flight → stamp unchanged",
+      stamp_of(proj_two, 0) == first_digest, f"stamp={stamp_of(proj_two, 0)}")
+write_verdict(proj_two, "CON-audit-r0.md", "PASS")
+dec_pass(proj_two)
+write_task(proj_two, "T-001", status="assigned")
+rc, err = worker_rc(proj_two)
+check("the un-audited revision does not ride the first auditor's PASS",
+      rc == 2 and "changed since" in err, f"rc={rc} err={err}")
+
+# The stamp is best-effort, like every other write on a legal dispatch path.
+# Archiving a finished job moves verdicts/ away, and the next job's first act
+# is dispatching a CON auditor into a state dir that no longer has one.
+proj_novdir = fresh_proj()
+write_constitution(proj_novdir)
+shutil.rmtree(os.path.join(proj_novdir, ".agent-guild", "state", "verdicts"))
+rc, out, err = run_hook("dispatch-guard.py", AUDIT_CON, proj_novdir)
+check("CON dispatch with verdicts/ absent → exit 0, no HOOK ERROR",
+      rc == 0 and "HOOK ERROR" not in err, f"rc={rc} err={err}")
+
+# DEC-audit carries no stamp. Asserted against the hook that does the
+# stamping, so the check still means something if stamping ever moves again.
+proj_decstamp = fresh_proj()
+write_constitution(proj_decstamp)
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: DEC-audit"}}, proj_decstamp)
+vdir = os.path.join(proj_decstamp, ".agent-guild", "state", "verdicts")
+check("DEC auditor dispatch writes no stamp",
+      rc == 0 and not any(n.endswith(".sha256") for n in os.listdir(vdir)),
+      f"rc={rc} listing={os.listdir(vdir)}")
+
 # ------------------------------------------- dispatch-guard: structured id field
 # Issue #71: Codex encrypts the dispatch message before any hook runs, so the id
 # arrives in a field instead of a prompt line. The gate is host-neutral and takes
@@ -1379,7 +1670,7 @@ check("cites clauses, no check_method → checker blocked too",
 # translation of it.
 print("dispatch-guard.py: structured dispatch_id (issue #71)")
 proj_id = fresh_proj()
-con_pass(proj_id)
+audits_pass(proj_id)
 write_task(proj_id, "T-001", status="assigned")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1439,7 +1730,7 @@ check("dispatch_id carries an Audition-ID → exit 0", rc == 0, f"rc={rc} err={e
 # check, and escalate as T-001.
 print("dispatch-guard.py: per-dispatch task_name (issue #77)")
 proj_uniq = fresh_proj()
-con_pass(proj_uniq)
+audits_pass(proj_uniq)
 write_task(proj_uniq, "T-001", status="assigned")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1471,7 +1762,7 @@ check("a retry's distinct name still resolves → exit 0", rc == 0, f"rc={rc} er
 # against the gate itself, not only against the adapter that translates it.
 print("dispatch-guard.py: followup_task refusal (issue #77)")
 proj_fu = fresh_proj()
-con_pass(proj_fu)
+audits_pass(proj_fu)
 write_task(proj_fu, "T-001", status="checking")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1512,7 +1803,7 @@ check("namespaced worker w/o Task-ID → exit 2, blocked like bare form",
 # instead of normalized, and the executor comparison (`agent != executor`)
 # fails the same way against the task's bare `executor:` field. Both traps
 # only fire when the dispatch is otherwise legal enough to reach them.
-con_pass(proj_ns)
+audits_pass(proj_ns)
 write_task(proj_ns, "T-010", status="assigned", executor="worker-standard", executor_model="sonnet")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "agent-guild:worker-standard",
@@ -1542,7 +1833,7 @@ check("bare-name worker, fully legal (regression after normalization) → exit 0
 # fixtures pin its three extra denials on top of that already-legal path.
 print("dispatch-guard.py: checker-courier (issue #8)")
 proj_courier = fresh_proj()
-con_pass(proj_courier)
+audits_pass(proj_courier)
 write_task(proj_courier, "T-020", status="checking", checker="checker-judgment")
 
 rc, out, err = run_hook("dispatch-guard.py",
@@ -1588,7 +1879,7 @@ check("checker-courier dispatch once sentinel is cleared → exit 0", rc == 0, f
 # stop-gate.py can tell a genuinely running subagent apart from a stuck loop.
 print("dispatch-guard.py: in-flight markers (#111)")
 proj_dm = fresh_proj()
-con_pass(proj_dm)
+audits_pass(proj_dm)
 write_task(proj_dm, "T-040", status="assigned")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "worker-standard",
@@ -1844,7 +2135,7 @@ rc, out, err = run_hook("subagent-return.py",
 check("id resolves but no task file → exit 0 loud, no hang", rc == 0 and "could not identify" in err, err)
 
 # auditor return
-con_pass(proj)
+audits_pass(proj)
 tx = transcript(proj, "Audit-ID: CON-audit")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "auditor", "transcript_path": tx}, proj)
@@ -1897,6 +2188,29 @@ rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "checker-deterministic", "transcript_path": tx}, proj_scope)
 check("checker valid return on T-001 while T-002 has no verdict → exit 0, no T-002 demand",
       rc == 0 and "T-002" not in out and "T-002" not in err, f"rc={rc} out={out!r} err={err!r}")
+
+# --------------------------------- subagent-return: audit rounds (#110)
+print("subagent-return.py: audit rounds (#110)")
+
+# r10 vs r2 at the return gate too: both ends have to agree on which round is
+# latest, or the round dispatch-guard reads is a round nothing validated.
+proj_r10 = fresh_proj()
+write_constitution(proj_r10)
+write_verdict(proj_r10, "CON-audit-r2.md", "PASS")
+write_verdict(proj_r10, "CON-audit-r10.md", "MAYBE")
+tx = transcript(proj_r10, "Audit-ID: CON-audit")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_r10)
+check("auditor return validates r10, not r2 → exit 2",
+      rc == 2 and "not valid" in err, f"rc={rc} err={err}")
+
+proj_dec_return = fresh_proj()
+write_constitution(proj_dec_return)
+write_verdict(proj_dec_return, "DEC-audit-r0.md", "PASS")
+tx = transcript(proj_dec_return, "Audit-ID: DEC-audit")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_dec_return)
+check("auditor returns valid DEC verdict → exit 0", rc == 0, f"rc={rc} err={err}")
 
 # --------------------------------- subagent-return: in-flight markers (#111)
 print("subagent-return.py: in-flight markers (#111)")

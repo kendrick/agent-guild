@@ -58,3 +58,5 @@ Point every clause that guards protected content at `.agent-guild/scripts/check-
 ## 5. Send it to audit
 
 Tell the orchestrator to dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker, so the constitution is verified before anything is built against it. If the audit fails, revise the flagged clauses and re-submit; do not route around it.
+
+A PASS covers the text that was audited and nothing else. Edit a clause afterward and the gate closes again until another audit round passes on the current document, so batch late revisions into one round rather than trickling them in after the verdict.

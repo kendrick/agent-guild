@@ -16,11 +16,16 @@ dispatch, this blocks unless:
     a forgotten escalation;
   - a worker's dispatched model matches the task's current tier, catching a
     forgotten model override after an escalation;
-  - for workers, the constitution has a PASS audit—verification reaches the
-    orchestrator's own work before any worker builds against it;
+  - for workers, the latest CON-audit and DEC-audit rounds both PASS, and the
+    CON PASS names the constitution that's on disk now—verification reaches
+    the orchestrator's own work before any worker builds against it, and it
+    stays reached when that work is revised (#110, #161);
   - for an auditor, .agent-guild/scripts/check-job-spec.py doesn't reject the
     paperwork first—so an opus auditor is never spent on a defect a stdlib
     script could have proven in about two seconds (#132).
+
+Dispatching a CON-audit also fingerprints the constitution against the round
+the auditor is about to write, which is what a later worker's gate compares.
 
 A Codex followup, which re-tasks a running agent rather than spawning one, is
 refused outright when it targets a guild agent: it carries nothing left to
@@ -208,6 +213,56 @@ def _job_spec_block(ident):
     )
 
 
+def _stamp_audited_content():
+    """Fingerprint the constitution this audit is being sent to read, against
+    the round the auditor is about to write (#110).
+
+    Stamped at dispatch, which is the only moment both hosts share. A Codex
+    auditor runs read-only and returns its verdict for the orchestrator to
+    persist, so a stamp written when the subagent returns would never exist
+    there and the gate could never open. Predicting the round costs nothing if
+    the prediction is wrong: the stamp lands on a stem no verdict occupies, and
+    the gate keeps refusing.
+
+    It also means only a round that was actually commissioned carries a
+    digest—an auditor that returns without writing a verdict leaves the
+    previous round's stamp alone, instead of laundering unaudited text into it.
+
+    DEC-audit gets no stamp. Task files change status all job long, so a digest
+    over tasks/ would go stale on the first transition; decomposition staleness
+    needs a normalized digest nobody has specified yet.
+
+    Best-effort, like _log and mark_in_flight above: a write that fails leaves
+    the round unstamped, which refuses the next worker with a message naming
+    the missing stamp. Raising instead would wedge the job, since this runs on
+    the one dispatch that can reopen both gates—and `verdicts/` genuinely can
+    be absent here, because archiving a finished job moves it."""
+    digest = _lib.file_sha256(_lib.state_path("constitution.md"))
+    if digest is None:
+        return
+    n = _lib.next_audit_round("CON-audit")
+    stamp = _lib.audit_stamp_path(_lib.state_path("verdicts", f"CON-audit-r{n}.md"))
+
+    # Two auditors commissioned for the same round read different documents if
+    # the constitution moved between them, and only one of them files the
+    # verdict. Overwriting would let the second dispatch's bytes vouch for the
+    # first auditor's PASS, so the earlier stamp stands and whichever verdict
+    # lands is measured against the text that was audited first. Wrong-but-
+    # closed: if the later auditor is the one that files, its PASS reads as
+    # stale and costs another round.
+    if os.path.exists(stamp) and any(
+        marker.startswith("CON-audit--") for marker in _lib.in_flight()
+    ):
+        return
+
+    try:
+        os.makedirs(os.path.dirname(stamp), exist_ok=True)
+        with open(stamp, "w", encoding="utf-8") as f:
+            f.write(digest + "\n")
+    except OSError:
+        pass
+
+
 def main(data):
     # Intended scope: no in_subagent no-op here, and none is needed. Unlike
     # stop-gate or orchestrator-write-guard, this hook doesn't constrain the
@@ -342,6 +397,8 @@ def main(data):
         job_spec_msg = _job_spec_block(ident)
         if job_spec_msg:
             return _lib.block(job_spec_msg)
+        if ident == "CON-audit":
+            _stamp_audited_content()
         _log(raw, ident, override or _lib.DEFAULT_MODEL[agent])
         _lib.mark_in_flight(ident, agent)
         return 0
@@ -417,13 +474,21 @@ def main(data):
         _lib.mark_in_flight(tid, agent)
         return 0
 
-    # Worker path.
-    if not _lib.con_audit_passed():
-        return _lib.block(
-            "No PASS constitution audit yet. Run /constitution, then dispatch "
-            "the auditor (Audit-ID: CON-audit) and get a PASS before any worker "
-            "builds against the constitution. Verification applies to all ranks."
-        )
+    # Worker path. The auditor and checker paths returned above, so both gates
+    # below refuse workers only—an audit whose own gate is shut can still be
+    # dispatched to reopen it.
+    ok, reason = _lib.audit_gate(
+        "CON-audit", artifact_path=_lib.state_path("constitution.md")
+    )
+    if not ok:
+        return _lib.block(reason)
+
+    # No task-file check needed: the missing-task block above already refused
+    # a dispatch naming one that doesn't exist, so #161's "a job that has task
+    # files" precondition holds by construction here.
+    ok, reason = _lib.audit_gate("DEC-audit")
+    if not ok:
+        return _lib.block(reason)
 
     if status != "assigned":
         return _lib.block(

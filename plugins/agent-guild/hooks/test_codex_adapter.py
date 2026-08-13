@@ -8,6 +8,7 @@ project-root resolution, and exit-code behavior.
 
 Run: python3 .agent-guild/hooks/test_codex_adapter.py
 """
+import hashlib
 import json
 import os
 import shutil
@@ -122,18 +123,29 @@ def write_task(project, task_id, **overrides):
         stream.write("\n".join(body))
 
 
-def con_pass(project):
-    """dispatch-guard blocks every worker until the constitution has a PASS
-    audit, so any worker-dispatch fixture has to seed one first."""
+def audits_pass(project):
+    """Both worker gates open. dispatch-guard refuses every worker until the
+    constitution and the decomposition each carry a PASS, and the constitution's
+    PASS has to name the bytes on disk (#110, #161)—so a worker-dispatch fixture
+    has to seed a constitution, both verdicts, and the content stamp."""
+    state = os.path.join(project, ".agent-guild", "state")
+    constitution = os.path.join(state, "constitution.md")
+    with open(constitution, "w", encoding="utf-8") as stream:
+        stream.write("# Constitution\n\n- C-1: a clause.\n")
+
     body = (
         "---\ntask: T\ntier: sonnet\nretry: 0\n"
         "checker: checker-deterministic\nverdict: PASS\n---\n"
     )
-    path = os.path.join(
-        project, ".agent-guild", "state", "verdicts", "CON-audit-r0.md"
-    )
-    with open(path, "w", encoding="utf-8") as stream:
-        stream.write(body)
+    for name in ("CON-audit-r0.md", "DEC-audit-r0.md"):
+        with open(os.path.join(state, "verdicts", name), "w", encoding="utf-8") as stream:
+            stream.write(body)
+
+    with open(constitution, "rb") as stream:
+        digest = hashlib.sha256(stream.read()).hexdigest()
+    stamp = os.path.join(state, "verdicts", "CON-audit-r0.md.sha256")
+    with open(stamp, "w", encoding="utf-8") as stream:
+        stream.write(digest + "\n")
 
 
 # Session-scoped events carry no turn_id on a live host—there is no turn yet, or
@@ -416,7 +428,7 @@ class CodexAdapterTest(unittest.TestCase):
         # task_name. Any one of those left unhandled makes the host unusable,
         # every dispatch rejected for carrying no readable id.
         write_task(self.project, "T-001", status="assigned")
-        con_pass(self.project)
+        audits_pass(self.project)
 
         as_captured = self.run_adapter(
             "dispatch-guard", live_dispatch(self.project)
@@ -566,7 +578,7 @@ class CodexAdapterTest(unittest.TestCase):
         # `t_001`. Each carries its own name and all three still resolve to
         # T-001; that collision is what routed the model onto followup_task.
         write_task(self.project, "T-001", status="assigned")
-        con_pass(self.project)
+        audits_pass(self.project)
 
         worker = self.run_adapter(
             "dispatch-guard", live_dispatch(self.project, "t_001_r0_worker")

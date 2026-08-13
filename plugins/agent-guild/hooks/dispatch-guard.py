@@ -22,11 +22,6 @@ dispatch, this blocks unless:
     paperwork first—so an opus auditor is never spent on a defect a stdlib
     script could have proven in about two seconds (#132).
 
-A legal checker-courier dispatch also reserves its crossing (_lib.reserve_crossing)
-before returning—#141's fix for #100, where a courier dispatched for T-001 wrote
-T-002's verdict and nothing tied that file to any dispatch. subagent-return.py
-promotes the same reservation once the return validates.
-
 A Codex followup, which re-tasks a running agent rather than spawning one, is
 refused outright when it targets a guild agent: it carries nothing left to
 check (#77).
@@ -368,39 +363,23 @@ def main(data):
     effective_model = override or _lib.DEFAULT_MODEL[agent]
 
     if agent in _lib.CHECKER_AGENTS:
-        is_courier = agent == "checker-courier"
-        # A debt only relaxes the status check for the courier itself, and
-        # only when one is actually outstanding on this task—`complete` and
-        # `rework` are the two statuses second_opinion_debts() finds a task
-        # parked at with a crossing still owed, so this is what lets a debt
-        # survive a FAIL verdict rather than clearing on the next status
-        # change. checker-deterministic and checker-judgment never set this,
-        # so their branch below is untouched: they still require `checking`
-        # no matter what the debt ledger says.
-        owes_debt = is_courier and any(
-            d_tid == tid for d_tid, _stem, _lane in _lib.second_opinion_debts(data)
-        )
-        if status != "checking" and not owes_debt:
+        if status != "checking":
             return _lib.block(
                 f"{tid} is '{status}', not 'checking'. Set status to checking "
                 "and update the task before dispatching its checker."
             )
         # Deliberate: this branch never reads the task's `checker` field, so
         # a dispatch is legal on ANY checking-status task regardless of which
-        # in-family checker is named as checker of record. That's exactly
-        # what the second-opinion contract needs—checker-courier below rides
-        # this same allowance to run alongside the checker of record rather
-        # than in place of it.
+        # in-family checker is named as checker of record. That's what lets
+        # an opted-in checker-courier run alongside the checker of record
+        # rather than in place of it.
         #
-        # The courier is explicitly not a second gate—CLAUDE.md's dual-check
-        # section says the standard-stem verdict alone decides complete or
-        # rework—so its dispatch legality doesn't need to track the task's
-        # gate status the way an in-family checker's does. A debt is owed
-        # precisely because nothing reopened the task to collect it, so
-        # requiring `checking` here would make the debt permanently
-        # uncollectable on any task the orchestrator already moved on from.
-        # Every OTHER courier condition below—model override, workspace
-        # access, exhausted lane—still applies unconditionally.
+        # The courier used to be exempt from the `checking` requirement,
+        # because a crossing debt could outlive the status that created it
+        # and had to stay collectable on a task the orchestrator had already
+        # moved on from. #167 retired the debt, so the exemption has nothing
+        # left to protect and the courier is held to the same status as every
+        # other checker.
         if agent == "checker-courier":
             if override:
                 return _lib.block(
@@ -416,14 +395,6 @@ def main(data):
                 )
             lane = _lib.courier_lane(data)
             effective_model = lane
-            # Computed here, ahead of both denials below, so a `.skipped`
-            # check keyed on `stem` has something to key on before the
-            # crossing is ever reserved—tier/retries come from the task file
-            # at the moment authorization is legal to grant, not recomputed
-            # from a verdict filename later (the trust #100 exploited).
-            courier_tier = str(task.get("executor_model", "")).strip().lower()
-            courier_retries = str(task.get("retries", "0")).strip() or "0"
-            stem = _lib.crossing_stem(tid, courier_tier, courier_retries)
             if _lib.lane_exhausted(lane):
                 return _lib.block(
                     f"checker-courier's '{lane}' lane is exhausted "
@@ -433,24 +404,6 @@ def main(data):
                     "retry budget moves. The sentinel is user-cleared, like "
                     "PAUSED."
                 )
-            if os.path.exists(_lib.state_path("verdicts", f"{stem}-{lane}.skipped")):
-                return _lib.block(
-                    f"checker-courier's crossing for {stem} on the '{lane}' lane "
-                    f"was recorded skipped "
-                    f"(.agent-guild/state/verdicts/{stem}-{lane}.skipped exists). "
-                    f"{tid} cites only script-checked clauses, so compose-brief "
-                    "wrote no brief for a courier to cross with—a recorded skip "
-                    "is not crossable. Nothing is substituted."
-                )
-            # #141: reserve THIS dispatch's crossing before the courier ever
-            # runs, so subagent-return.py has something to promote a return
-            # against instead of trusting whatever filename shows up (#100,
-            # where a courier dispatched for T-001 wrote T-002's verdict and
-            # nothing tied that file to any dispatch). Denials above land
-            # before this point on purpose: reserving a crossing about to be
-            # refused would leave an authorization record for a dispatch that
-            # never happened.
-            _lib.reserve_crossing(tid, stem, lane)
         _log(raw, tid, effective_model)
         _lib.mark_in_flight(tid, agent)
         return 0

@@ -262,10 +262,8 @@ def in_flight(ttl=None):
 
     Staleness matters on purpose: nothing here suppresses stall detection
     permanently. A marker that can't be read or parsed is treated as absent
-    rather than crashing the gate—the same fail-open posture
-    second_opinion_debts() holds for a malformed record, because a wedged
-    marker file must never be able to jam the very livelock backstop it
-    exists to unblock.
+    rather than crashing the gate: a wedged marker file must never be able to
+    jam the very livelock backstop it exists to unblock.
     """
     if ttl is None:
         try:
@@ -315,14 +313,13 @@ def read_input():
 
 # A verdict of record's stem: T-<n>-<tier>-r<n>, no lane suffix. Anchored at
 # both ends so a lane sibling (…-r0-codex.json) can't match—its filename has
-# a segment past r<n> that this pattern has no room for—which matters because
-# a lane file matching here would owe a second opinion on its own second
-# opinion, a debt nothing could ever discharge.
+# a segment past r<n> that this pattern has no room for.
 _RECORD_STEM_RE = re.compile(r"^(T-\d+)-[A-Za-z0-9]+-r(\d+)$")
 
 # A lane-suffixed verdict filename, stem plus one of the two courier lanes.
 # Used only to find CANDIDATE foreign files (#141/#100); whether one is
-# actually foreign is decided by crossing_reserved(), not by this shape match.
+# actually foreign is decided by the dispatcher's in-flight marker, not by
+# this shape match.
 _LANE_VERDICT_RE = re.compile(
     r"^(T-\d+-[A-Za-z0-9]+-r\d+)-(" + "|".join(COURIER_LANES) + r")\.json$"
 )
@@ -338,142 +335,24 @@ def crossing_stem(tid, tier, retries):
     return f"{tid}-{tier}-r{retries}"
 
 
-def _authorization_path(stem, lane):
-    return state_path("verdicts", f"{stem}-{lane}.authorized")
-
-
-def reserve_crossing(tid, stem, lane):
-    """Record, at DISPATCH time, that a courier crossing for `stem`/`lane` is
-    about to happen. Called from dispatch-guard.py right before a legal
-    checker-courier dispatch is logged.
-
-    A stem that already has a verdict file sitting on it is left unreserved
-    on purpose: recording authorization for a path something already
-    occupies would launder a forged file the moment a legitimate dispatch
-    for the same round followed it—the exact anti-laundering requirement
-    C-1 names. The forge check (check-141-conformance.py) writes its forged
-    sibling with no dispatch at all, so this branch isn't what that script
-    exercises; it's here for the case a forged file predates a real retry.
-
-    Best-effort, same posture as dispatch-guard's own _log(): a write
-    failure here must never turn an otherwise-legal dispatch into a block.
-    It can only ever leave a stem unauthorized (an owed debt, still
-    clearable by a `.denied` waiver), never crash the gate that calls it.
-    """
-    try:
-        if os.path.exists(state_path("verdicts", f"{stem}-{lane}.json")):
-            return False
-        os.makedirs(state_path("verdicts"), exist_ok=True)
-        record = {
-            "task_id": tid,
-            "promoted": False,
-            "reserved_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        with open(_authorization_path(stem, lane), "w", encoding="utf-8") as f:
-            json.dump(record, f)
-        return True
-    except Exception:
-        return False
-
-
-def promote_crossing(tid, stem, lane):
-    """Record, at RETURN time, that the courier reserved for `stem`/`lane`
-    actually finished and its content validated. Called from
-    subagent-return.py once a checker-courier's return has passed schema and
-    identity validation—including the Codex read-only path, where the
-    courier itself never writes a file at all and the PARENT persists the
-    verdict afterward; promoting from the validated OUTCOME rather than from
-    a file on disk is what keeps every Codex-lane crossing from stranding.
-
-    Reserving at dispatch alone would leave a window between "dispatched"
-    and "returned" where anything else that landed a file at the reserved
-    stem would read as authorized. Requiring promotion ties authorization to
-    a SPECIFIC subagent's own SubagentStop, not merely to a Task/Agent call
-    having gone out.
-
-    A no-op (returns False) if nothing was ever reserved for this exact
-    (tid, stem, lane)—the #100 shape, where the courier that wrote the file
-    was dispatched for a DIFFERENT task and reserved a different stem, so
-    its promotion (keyed to ITS OWN ident) never touches this one. Never
-    raises, same contract as reserve_crossing.
-    """
-    path = _authorization_path(stem, lane)
-    try:
-        with open(path, encoding="utf-8") as f:
-            record = json.load(f)
-    except Exception:
-        return False
-    if not isinstance(record, dict) or record.get("task_id") != tid:
-        return False
-    try:
-        record["promoted"] = True
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(record, f)
-        return True
-    except Exception:
-        return False
-
-
-def crossing_authorized(stem, lane):
-    """True if the gate's own record shows `stem`/`lane` was both reserved
-    AND promoted—see reserve_crossing/promote_crossing. This is the ONLY
-    thing second_opinion_debts() trusts to grant discharge via a
-    lane-suffixed verdict; the file's own existence proves nothing (#100).
-    Never raises: an unreadable or malformed authorization record reads as
-    unauthorized, the same fail-closed posture second_opinion_debts() itself
-    holds to, and matches two of C-5's four malformed-input cases (a missing
-    authorization record, and a truncated or non-JSON one)."""
-    try:
-        with open(_authorization_path(stem, lane), encoding="utf-8") as f:
-            record = json.load(f)
-    except Exception:
-        return False
-    return isinstance(record, dict) and record.get("promoted") is True
-
-
-def crossing_reservation(stem, lane):
-    """The reservation record reserve_crossing() wrote for `stem`/`lane`, or
-    None if none exists or it can't be read/parsed.
-
-    The record carries `task_id`, `promoted`, and `reserved_at`—that last
-    field is what lets a caller (stop-gate.py's staleness partition) work
-    out how long ago the crossing started, which crossing_reserved()'s bare
-    bool can't answer. Never raises: an unreadable or malformed record reads
-    as no reservation, the same fail-closed posture every other reader in
-    this module holds to."""
-    try:
-        with open(_authorization_path(stem, lane), encoding="utf-8") as f:
-            record = json.load(f)
-    except Exception:
-        return None
-    return record if isinstance(record, dict) else None
-
-
-def crossing_reserved(stem, lane):
-    """True if a reservation exists for `stem`/`lane`, whether or not it was
-    ever promoted—used by foreign_stem_writes() to tell a legitimately
-    in-flight crossing (reserved, courier still running, not yet returned)
-    apart from one nobody ever dispatched at all. Never raises.
-
-    Built on crossing_reservation() so the two can't drift: this is just
-    that record's existence, narrowed to "and it actually names a task"."""
-    record = crossing_reservation(stem, lane)
-    return record is not None and bool(record.get("task_id"))
-
-
 def foreign_stem_writes(owner_tid, lane):
     """Lane-suffixed verdict files in verdicts/ that belong to some task
-    OTHER than `owner_tid` and carry no reservation of their own (C-2)—the
-    #100 shape verbatim: a courier dispatched for T-001 also wrote
+    OTHER than `owner_tid` and had no courier dispatched against them (C-2)—
+    the #100 shape verbatim: a courier dispatched for T-001 also wrote
     T-002-...-codex.json, and nothing had ever authorized that crossing.
     Called from subagent-return.py's checker-courier success path, so
     `owner_tid` is the Task-ID the RETURNING courier was dispatched under.
 
-    A file whose own stem IS reserved (crossing_reserved) is excluded even
-    if not yet promoted: that's a concurrent, legitimately dispatched
-    crossing for its own task mid-flight, not a foreign write, and C-2
-    requires exactly that concurrency not be mistaken for the incident it
-    names. Already-flagged files (a sibling `.flagged` marker, written by
+    #167 made the second opinion opt-in and retired the crossing debt, which
+    took the reservation records this used to read. The in-flight marker is
+    the substitute and the better fit: it already records one live dispatch
+    per (task, agent), dispatch-guard writes it on the same legal-dispatch
+    path that used to reserve, and it ages out on its own. A file whose own
+    task has a FRESH checker-courier marker is a concurrent legitimate
+    crossing mid-flight, not a foreign write, and C-2 requires exactly that
+    concurrency not be mistaken for the incident it names.
+
+    Already-flagged files (a sibling `.flagged` marker, written by
     surface_foreign_stem_write) are skipped so repeated courier returns
     don't grow the log without bound. Never raises: a scan failure on a
     subagent's success path must not turn a legal return into a block.
@@ -483,6 +362,7 @@ def foreign_stem_writes(owner_tid, lane):
         names = set(os.listdir(vdir))
     except OSError:
         return []
+    live = set(in_flight())
     found = []
     for name in sorted(names):
         m = _LANE_VERDICT_RE.match(name)
@@ -497,7 +377,7 @@ def foreign_stem_writes(owner_tid, lane):
             continue  # our own crossing, handled by the normal validation path
         if f"{name}.flagged" in names:
             continue  # already surfaced once
-        if crossing_reserved(stem, lane):
+        if f"{file_tid}--checker-courier" in live:
             continue  # a legitimate dispatch of its own, just not this one
         found.append((file_tid, stem, name))
     return found
@@ -524,128 +404,6 @@ def surface_foreign_stem_write(owner_tid, file_tid, name):
         open(state_path("verdicts", f"{name}.flagged"), "w").close()
     except Exception:
         pass
-
-
-def second_opinion_debts(data=None):
-    """List of outstanding second-opinion debts, one per unresolved verdict
-    of record, as (task_id, stem, lane).
-
-    The dual-check regime (a courier crossing after every checker of record)
-    is contract, not code: nothing previously read the verdicts directory to
-    confirm a crossing actually landed, so a Claude-host run reached
-    `complete` on 2026-08-02 without one and no gate noticed. This is the
-    predicate stop-gate.py and dispatch-guard.py read to close that hole.
-
-    Discharge is generous—an AUTHORIZED courier response either way (see
-    crossing_authorized; #141 stopped a lane file's mere presence from being
-    enough, after #100 showed a forged one could pass for it), the quota
-    sentinel, an orchestrator waiver, a recorded skip on a stem citing only
-    script-checked clauses (#128—compose-brief's exit 3 wrote no brief for a
-    courier to cross with, so nothing was ever dispatchable), or a blocked
-    verdict of record all clear a debt, since a `blocked` in-family check has
-    nothing yet for a crossing to compare against. An unreadable verdict of
-    record forecloses only that last route, since `blocked` can't be
-    established from a file that won't parse; the first four still stand. A
-    courier response IS one of them, so declaring a record corrupt without
-    first looking for one would strand a debt no future dispatch could
-    clear: the file the next courier would write is already on disk.
-
-    Never raises, the same contract paused() and lane_exhausted() hold to:
-    stop-gate.py calls this every turn, so a crash here is a hook crash on
-    whatever verdict happens to be malformed that turn.
-    """
-    lane = courier_lane(data)
-    try:
-        vdir = state_path("verdicts")
-        names = set(os.listdir(vdir))
-    except OSError:
-        return []
-
-    debts = []
-    for name in sorted(names):
-        if not name.endswith(".json"):
-            continue
-        stem = name[: -len(".json")]
-        m = _RECORD_STEM_RE.match(stem)
-        if not m:
-            continue
-        task_id = m.group(1)
-
-        if any(
-            f"{stem}-{l}.json" in names and crossing_authorized(stem, l)
-            for l in COURIER_LANES
-        ):
-            # routes 1/2: an AUTHORIZED courier response landed, either lane.
-            # #141: the file's mere presence used to be enough (#100—a
-            # courier dispatched for T-001 wrote T-002's verdict and nothing
-            # noticed); now discharge requires the gate's own dispatch/return
-            # record, not just a filename that happens to match.
-            continue
-
-        if lane_exhausted(lane):
-            # Route 3, pinned to THIS host's lane and no other. A predicate
-            # that also accepted the far lane's sentinel would discharge a
-            # Codex host's debts off exhausted/codex, its own lane never
-            # having to exist—deadlocking it forever instead.
-            continue
-
-        if os.path.exists(os.path.join(vdir, f"{stem}-{lane}.denied")):
-            # Route 4: the orchestrator's hand-written record that no crossing
-            # is coming—a host that refused the dispatch outright (#94), and
-            # since #141 also a stem the gate never recorded as authorized.
-            # That second case splits on whether a reservation was ever made.
-            # A courier that died after a legal dispatch left one behind, and
-            # promote_crossing keys on the record's task_id rather than on
-            # which dispatch reserved it, so a re-dispatch still discharges
-            # that stem the honest way—prefer that, since it yields real #34
-            # comparison data. Nothing rescues a stem with no reservation at
-            # all: reserve_crossing skips a stem that already carries a file
-            # (the anti-laundering rule), so the waiver is the only exit
-            # before the debt rides to STALLED.md.
-            continue
-
-        if os.path.exists(os.path.join(vdir, f"{stem}-{lane}.skipped")):
-            # Route 5 (#128): the orchestrator's record that this stem cites
-            # only script-checked clauses—compose-brief's exit 3 wrote no
-            # brief for a courier to cross with, so no crossing was ever
-            # dispatchable in the first place. Pinned to THIS host's lane,
-            # same as route 4's waiver: a marker filed under the far lane
-            # discharges nothing, because dispatch-guard.py denies a courier
-            # dispatch keyed on lane, not on task, and a debt this predicate
-            # clears on the wrong lane would be a debt the far host's own
-            # gate never actually retired.
-            continue
-
-        # Routes 1-5 settle before the file is ever opened, on purpose:
-        # routes 1/2 ARE the file a courier writes, so an unreadable record
-        # treated as owing regardless would strand a debt no dispatch could
-        # clear—the next courier writes a path that is already there.
-        # Unreadable forecloses route 6 (below) and nothing above it.
-        record = None
-        try:
-            with open(os.path.join(vdir, name), encoding="utf-8") as f:
-                record = json.load(f)
-        except Exception:
-            record = None
-
-        if not isinstance(record, dict):
-            # Can't read it, can't parse it, or it's valid JSON that isn't an
-            # object—any of those means route 5 can't be established, so it
-            # owes (routes 1-4 already had their shot above).
-            debts.append((task_id, stem, lane))
-            continue
-
-        if record.get("verdict") == "blocked":
-            # checker-courier's own contract (guild-core/roles/checker-
-            # courier.md:28) turns auth failure, timeout, a missing CLI, and
-            # twice-malformed vendor output all into a blocked verdict at the
-            # lane stem—but a blocked verdict OF RECORD means the in-family
-            # check itself never ran, so there is nothing yet for a crossing
-            # to compare against.
-            continue
-
-        debts.append((task_id, stem, lane))
-    return debts
 
 
 def in_subagent(data):

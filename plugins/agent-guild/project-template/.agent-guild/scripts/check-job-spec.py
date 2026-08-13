@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Lint `.agent-guild/state/constitution.md` and `state/tasks/*.md` for the
 defects an opus auditor would otherwise have to find by reading—the
-mechanical eleven-rules-deep sweep #132 exists to take off an auditor's
-plate before it ever gets dispatched.
+mechanical sweep #132 exists to take off an auditor's plate before it ever
+gets dispatched.
 
     .agent-guild/scripts/check-job-spec.py [STATE] [--repo-root PATH]
                                             [--audit-id CON-audit|DEC-audit]
@@ -16,21 +16,38 @@ corpus copy while citations still need to resolve against a real tree.
 Rules run in this order—proofs before heuristics, so a heuristic never
 masks something provable—and only the FIRST violation found is reported:
 
-    R6 clause wiring         R5 check runnable        R2 citation anchor
-    R7 dependency DAG        R1 citation resolves     R9 verdict contradiction
-    R13 ownership overlap    R3 citation shape        R10 count vs list
-    R14 dep rationale        R8 build ordering        R12' cross-artifact count
-    R4 check form
+    R6 clause wiring         R4 check form            R2 citation anchor
+    R7 dependency DAG        R5 check runnable        R9 verdict contradiction
+    R15 owns shape           R1 citation resolves     R10 count vs list
+    R13 ownership overlap    R3 citation shape        R12' cross-artifact count
+    R14 dep rationale        R8 build ordering
+                             R16 build serialization
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
-depend on, order, or own yet), so R6, R7, R13, R14, and R8 are skipped;
-every other rule runs over constitution.md alone. `--audit-id DEC-audit`:
-everything runs, and an empty `tasks/` is itself an R6 failure—a
-decomposition that produced no tasks decomposed nothing.
+depend on, order, or own yet), so R6, R7, R15, R13, R14, R8, and R16 are
+skipped; every other rule runs over constitution.md alone. `--audit-id
+DEC-audit`: everything runs, and an empty `tasks/` is itself an R6
+failure—a decomposition that produced no tasks decomposed nothing.
 
-R13 sits right after R7 because it needs R7's acyclic-DAG guarantee before
-it can walk a `deps` chain looking for a path between two owners—the same
-reason R8 (which walks the same chain) runs after R7 too. R13 is opt-in at
+R16 runs immediately after R8 and reads the same two path sets. R8 puts the
+regeneration last; R16 asks how many regenerations there are, and whether a
+job that edits build inputs modeled the build step at all. Both gaps only
+became reachable under waves (#125)—one task at a time made two concurrent
+regenerations impossible by construction.
+
+R15 runs immediately before R13 because R13's question—do these two owns
+entries overlap—only has a meaningful answer once both entries are one of
+the two documented shapes. A directory spelled without its trailing slash
+reads as a file claim and collides with nothing, so an unvalidated pair
+like `src/lib` and `src/lib/` passes R13 while naming the same tree
+(#162). R15 is opt-in on the same terms as R13 and R14: it checks the
+entries a task declares and has nothing to say about a task that declares
+none.
+
+R13 sits after R7 (with R15 in between) because it needs R7's acyclic-DAG
+guarantee before it can walk a `deps` chain looking for a path between two
+owners—the same reason R8 (which walks the same chain) runs after R7 too.
+R13 is opt-in at
 the linter (#133): a task with no `owns:` field, or an empty one, is never
 an R13 violation—only a task this rule has nothing to check. The field
 postdates every archived corpus, so treating its absence as a violation
@@ -126,9 +143,12 @@ except Exception:
 # crash); main()'s own load below still turns a real failure into exit 3
 # for the CLI path.
 try:
-    paths_overlap = _load_module("check_diff_scope_module_scope", "check-diff-scope.py").paths_overlap
+    _diff_scope_module_scope = _load_module("check_diff_scope_module_scope", "check-diff-scope.py")
+    paths_overlap = _diff_scope_module_scope.paths_overlap
+    owns_entry_problem = _diff_scope_module_scope.owns_entry_problem
 except Exception:
     paths_overlap = None
+    owns_entry_problem = None
 
 
 # ---------------------------------------------------------------------------
@@ -254,9 +274,9 @@ class TaskFile:
     `spec_excerpt_start_line` describe the verbatim `## Spec excerpt`
     section and the physical line its first character sits on, so a rule
     that finds an offset within it can add a newline count to get a real
-    line number. `owns` is R13's input alone (#133)—parsed the same way as
-    `artifacts` (see load_task_file) but empty by default, since the field
-    is opt-in and predates every archived corpus. `dep_rationale` is R14's
+    line number. `owns` is what R13 and R15 both read (#133, #162)—parsed the same
+    way as `artifacts` (see load_task_file) but empty by default, since the
+    field is opt-in and predates every archived corpus. `dep_rationale` is R14's
     input the same way (#125): a list of `(task_id_or_None, text)` pairs,
     empty by default for the same reason `owns` is.
     """
@@ -817,12 +837,45 @@ def rule_R7(ctx, audit_id):
 
 
 # ---------------------------------------------------------------------------
+# R15: owns shape. Closes #162's validation half. R13 below asks whether two
+# entries overlap; that question only has a meaningful answer when both
+# entries are one of the two shapes the field documents. A directory
+# spelled without its trailing slash reads as a file claim and collides
+# with nothing, so `src/lib` and `src/lib/` on two tasks pass R13 and enter
+# the same wave over the same tree. R15 runs first so a malformed entry is
+# reported as itself rather than as R13 finding nothing.
+#
+# Opt-in the same way R13 and R14 are, and for the same reason: an absent
+# or empty `owns:` is not a violation, only a task with no entries to
+# check. That keeps every archived corpus green (none of them has the
+# field) while still refusing a bad entry in any job that does declare one.
+# ---------------------------------------------------------------------------
+
+def rule_R15(ctx, audit_id, repo_root):
+    if audit_id == "CON-audit":
+        return None  # no tasks yet to own anything
+    if owns_entry_problem is None:
+        return None  # check-diff-scope.py wasn't importable; see rule_R13
+    for task in ctx.tasks:
+        for entry in task.owns:
+            problem = owns_entry_problem(entry, repo_root)
+            if problem:
+                return (
+                    f"R15 owns-shape: {task.label} owns entry {entry!r} is malformed: "
+                    f"{problem}. An entry is an exact file path or a directory prefix "
+                    "ending in '/'"
+                )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # R13: ownership overlap. Closes #133—two tasks dispatched concurrently can
 # silently lose one task's write to the other's if they touch the same
 # file, so any two tasks whose `owns` overlap have to be forced into
-# sequence by a dep edge. Placed right here, immediately after R7, because
-# walking a `deps` chain to look for that edge needs R7's acyclic-DAG
-# guarantee first—the same reason R8 (below) waits for R7 too.
+# sequence by a dep edge. Placed right after R7 (R15 goes between them,
+# proving the entries are readable first), because walking a `deps` chain to
+# look for that edge needs R7's acyclic-DAG guarantee—the same reason R8
+# (below) waits for R7 too.
 # ---------------------------------------------------------------------------
 
 def rule_R13(ctx, audit_id):
@@ -931,7 +984,20 @@ BUILD_INPUT_PREFIXES = (
     "docs/plugin-readme.md",
     "CHANGELOG.md",
 )
-GENERATED_TREE_PREFIXES = ("plugin/", "plugins/", ".claude/")
+# The two marketplace files are outputs too (build-plugin.py's
+# write_marketplaces), and neither sits under one of the three tree
+# prefixes above—`.claude-plugin/` is a different directory from
+# `.claude/`, and `.agents/` matches nothing here at all. Left out, a task
+# whose only generated artifact is a marketplace file reads as a task that
+# regenerates nothing, and R8 and R16 both go quiet on the job it belongs
+# to. _is_generated uses startswith, so an exact-file entry works.
+GENERATED_TREE_PREFIXES = (
+    "plugin/",
+    "plugins/",
+    ".claude/",
+    ".claude-plugin/marketplace.json",
+    ".agents/plugins/marketplace.json",
+)
 
 
 def _is_build_input(path):
@@ -978,6 +1044,57 @@ def rule_R8(ctx, audit_id):
         + "this job (" + ", ".join(sorted(universe)) + "); a regeneration "
         "could run before the last edit it needs to capture"
     )
+
+
+# ---------------------------------------------------------------------------
+# R16: build serialization. Closes #164. R8 puts the regeneration last; it
+# says nothing about how many tasks regenerate, or about a job where nobody
+# does and every worker is left to run the build on its own. Both gaps are
+# live only under waves (#125): before them the loop dispatched one task at
+# a time, so two concurrent regenerations were impossible by construction.
+#
+# The collision is the build RUN, not the build-input EDIT. Reading it the
+# other way—two tasks that both edit inputs can't share a wave—would
+# serialize essentially every wave in a repo that dogfoods its own kit,
+# since nearly every task there edits `guild-core/` or `.agent-guild/`.
+# Editing an input writes nothing under the generated trees. Only running
+# the build does, and a task that runs it says so by declaring those trees
+# among its artifacts.
+#
+# So: exactly one regenerating task, downstream of the edits (R8's half),
+# and nobody else regenerating (this rule's second half). What no linter
+# can prove is that a worker didn't run the build anyway without declaring
+# it; the worker roles carry that instruction, and R8's ordering is what
+# makes the declared regeneration the one that wins.
+# ---------------------------------------------------------------------------
+
+def rule_R16(ctx, audit_id):
+    if audit_id == "CON-audit" or not ctx.tasks:
+        return None
+    by_id = {t.id: t for t in ctx.tasks}
+    inputs = sorted(t.id for t in ctx.tasks if any(_is_build_input(a) for a in t.artifacts))
+    generated = sorted(t.id for t in ctx.tasks if any(_is_generated(a) for a in t.artifacts))
+    if inputs and not generated:
+        return (
+            "R16 build-serialization: "
+            + ", ".join(inputs)
+            + (" edits" if len(inputs) == 1 else " edit")
+            + " a build input, but no task declares a generated tree among "
+            "its artifacts; add one terminal task that regenerates and names "
+            "those trees in its own artifacts, or every worker is left to run "
+            "the build itself and two of them can race"
+        )
+    for i, ta in enumerate(generated):
+        for tb in generated[i + 1:]:
+            if tb in _transitive_deps(ta, by_id) or ta in _transitive_deps(tb, by_id):
+                continue
+            return (
+                f"R16 build-serialization: {ta} and {tb} both declare a "
+                "generated tree, with no dep path connecting them, so both "
+                "can regenerate at once and one build's output overwrites "
+                "the other's"
+            )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1454,6 +1571,7 @@ def run_rules(ctx, audit_id, repo_root):
     steps = (
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
+        lambda: rule_R15(ctx, audit_id, repo_root),
         lambda: rule_R13(ctx, audit_id),
         lambda: rule_R14(ctx, audit_id),
         lambda: rule_R4(ctx, audit_id),
@@ -1461,6 +1579,7 @@ def run_rules(ctx, audit_id, repo_root):
         lambda: check_citation_rules(regions, repo_root, "R1"),
         lambda: check_citation_rules(regions, repo_root, "R3"),
         lambda: rule_R8(ctx, audit_id),
+        lambda: rule_R16(ctx, audit_id),
         lambda: check_citation_rules(regions, repo_root, "R2"),
         lambda: rule_R9(ctx),
         lambda: rule_R10(ctx),
@@ -1756,9 +1875,10 @@ def main():
         sys.stderr.write(f"job-spec: cannot import a kit script this linter depends on: {e}\n")
         return 3
 
-    global DEFECT_SEVERITIES, paths_overlap
+    global DEFECT_SEVERITIES, paths_overlap, owns_entry_problem
     DEFECT_SEVERITIES = validate_verdict.DEFECT_SEVERITIES
     paths_overlap = diff_scope.paths_overlap
+    owns_entry_problem = diff_scope.owns_entry_problem
 
     ctx, err = load_context(args.state, compose_brief)
     if err:

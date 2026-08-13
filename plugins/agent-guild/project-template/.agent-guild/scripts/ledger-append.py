@@ -282,7 +282,16 @@ def append_line(line, ledger_path):
     creating the directory and file on demand. Deliberately never opens the
     file for reading first: append-only means append-only, even when the
     file already holds a malformed line that would trip a reader — this
-    call must not be the thing that notices or touches that line."""
+    call must not be the thing that notices or touches that line.
+
+    Concurrent since waves (#164): a wave can have several couriers in
+    flight, each writing its own row here, and this is the file #34 drew its
+    conclusions from, so a torn row costs more than a lost log line would.
+    Safe by deliberate reliance on O_APPEND (what "a" mode opens with) plus
+    one write(2) per row: a ledger row runs a few hundred bytes today, well
+    under PIPE_BUF, and the kernel won't interleave two writes that size. A
+    row that ever outgrows PIPE_BUF voids that, so keep them small. No lock:
+    fcntl would buy nothing here and cost NFS failure modes."""
     ledger_dir = os.path.dirname(ledger_path)
     if ledger_dir:
         os.makedirs(ledger_dir, exist_ok=True)

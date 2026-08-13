@@ -1032,6 +1032,22 @@ check("undeclared `owns` (the template default) doesn't hold a task's counter",
 check("the live sibling is still held by its own marker, not stalled",
       "T-001" not in text, text)
 
+# `owns-malformed` is the same shape as `owns-undeclared` (#162) and needs
+# the same answer: a typo in an `owns` entry is fixed by editing the task
+# file, and nobody edits a task the gate keeps reporting as legitimately
+# waiting on something else.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="assigned", deps="[]", owns="[b.py]")
+for tid in ("T-002", "T-003"):
+    write_task(proj, tid, status="pending", deps="[]", owns="[./a.py]")
+write_in_flight_marker(proj, "T-001", "worker-standard")
+for _ in range(3):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text = stalled_text(proj)
+check("a malformed `owns` entry doesn't hold a task's counter either",
+      "T-002" in text and "T-003" in text, text)
+
 # A ready-set.py that flickers healthy/degraded must not pin every counter.
 # The first version carried each task's ready-set disposition inside its
 # digest, so an alternating input changed every digest every firing and

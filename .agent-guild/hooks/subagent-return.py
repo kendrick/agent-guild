@@ -447,6 +447,8 @@ def _unidentifiable(reason):
         "shape probably changed—see id_from_transcript and its fixtures."
     )
     try:
+        # A wave's members return concurrently, so this append is too (#164);
+        # it rides the same O_APPEND reliance dispatch-guard._log documents.
         with open(_lib.state_path("log", "return-gate.log"), "a", encoding="utf-8") as f:
             f.write(msg + "\n")
     except Exception:

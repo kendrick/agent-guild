@@ -394,6 +394,9 @@ def surface_foreign_stem_write(owner_tid, file_tid, name):
     must never turn a legal return into a block."""
     try:
         os.makedirs(state_path("log"), exist_ok=True)
+        # Concurrent under a wave (#164): rides the same O_APPEND reliance
+        # dispatch-guard._log documents. This row is longer than most, still
+        # far under PIPE_BUF.
         with open(state_path("log", "foreign-stem-writes.log"), "a", encoding="utf-8") as f:
             f.write(
                 f"{name} names {file_tid}, but was found during a "

@@ -198,6 +198,100 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         result["wave"],
     )
 
+# --------------------------------------- 2c. a malformed owns entry rides alone
+# #162's other half. R15 refuses `./file-a.py` at DEC-audit, but nothing
+# stops a task file from being hand-edited after the audit passed, and this
+# script runs on every turn. `paths_overlap('./file-a.py', 'file-a.py')` is
+# False, so without this the two tasks below would ride together over one
+# file with the wave reporting a clean check.
+print("a task whose owns entry is malformed never shares a wave either")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["file-a.py"])
+    write_task(d, "T-002", owns=["./file-a.py"])
+    rc, result, err = run_and_parse(d)
+    check("malformed: exit 0, not a parse failure", rc == 0, f"rc={rc} err={err}")
+    check(
+        "malformed: the well-formed task dispatches, the other defers",
+        ids(result["wave"]) == ["T-001"] and ids(result["deferred"]) == ["T-002"],
+        result,
+    )
+    check(
+        "malformed: kind is owns-malformed",
+        result["deferred"][0]["kind"] == "owns-malformed",
+        result["deferred"],
+    )
+    check(
+        "malformed: the deferral quotes the offending entry back",
+        "./file-a.py" in result["deferred"][0]["reason"],
+        result["deferred"],
+    )
+
+# The malformed task itself still dispatches (deferring both sides would
+# deadlock a job whose every task carries a typo), and its wave reason says
+# why it's alone rather than claiming a check nobody could run.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["src/lib/", "../outside.py"])
+    rc, result, err = run_and_parse(d)
+    check(
+        "malformed alone: still dispatches",
+        ids(result["wave"]) == ["T-001"],
+        result,
+    )
+    check(
+        "malformed alone: the wave reason never claims owns was checked",
+        "owns checked" not in result["wave"][0]["reason"],
+        result["wave"],
+    )
+    check(
+        "malformed alone: the wave reason names the bad entry",
+        "../outside.py" in result["wave"][0]["reason"],
+        result["wave"],
+    )
+
+# #162's opening reproduction, end to end and with nothing on disk. Two
+# tasks name one directory, one of them without its trailing slash. The
+# linter refuses that spelling when the directory already exists, which it
+# usually doesn't when the task's job is to create it, so the wave has to
+# catch this pair on the strings alone.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["src/lib"])
+    write_task(d, "T-002", owns=["src/lib/"])
+    rc, result, err = run_and_parse(d)
+    check(
+        "'src/lib' and 'src/lib/' never share a wave",
+        ids(result["wave"]) == ["T-001"] and ids(result["deferred"]) == ["T-002"],
+        result,
+    )
+    check(
+        "'src/lib' vs 'src/lib/': deferred as a real overlap, not as a typo",
+        result["deferred"][0]["kind"] == "owns",
+        result["deferred"],
+    )
+
+# A file and the directory above it are the same territory too.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["src/foo"])
+    write_task(d, "T-002", owns=["src/foo/bar.py"])
+    rc, result, err = run_and_parse(d)
+    check(
+        "a file claim under another task's slashless directory claim defers",
+        ids(result["wave"]) == ["T-001"] and ids(result["deferred"]) == ["T-002"],
+        result,
+    )
+
+# A malformed entry outranks an undeclared peer: same wave refusal either
+# way, and naming the typo is the more actionable of the two reasons.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", owns=["/absolute/file-a.py"])
+    write_task(d, "T-002")  # no owns
+    rc, result, err = run_and_parse(d)
+    check(
+        "malformed beats undeclared: kind is owns-malformed",
+        result["deferred"][0]["kind"] == "owns-malformed",
+        result["deferred"],
+    )
+
 # ------------------------------------------------- 3. --running excludes a task
 print("--running excludes a task from the wave")
 

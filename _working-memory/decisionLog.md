@@ -14,6 +14,22 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-13: A Trailing Slash Is Notation, And The Build Is A Serialization Point
+
+**Source:** #162 and #164, closed together on `fix/162-164-owns-accuracy`
+
+**Context:** `owns` is what makes a wave safe, and half of #162 had already landed (`e6212da`): an undeclared `owns` rides alone. What remained was that nothing validated an entry's shape, and that `paths_overlap` answered False for `src/lib` against `src/lib/`. #164 was the neighbouring gap: the wave modeled file ownership and nothing else, so two tasks editing disjoint sources could both run the build over the same output trees.
+
+**Decision, #162.** `owns` stays optional at the linter. The wave-refusal mechanism already makes an absent claim safe, so requiring the field buys nothing and would retroactively fail all 40 archived task files, none of which carries it. R15 validates only the entries a task declares: `./`, `..`, absolute, `//`, backslash, globs, `~`/`$`, invisible characters, and (with a repo root) an entry whose spelling contradicts what's on disk. `paths_overlap` now treats the trailing slash as notation, so two entries overlap when they name the same node or when either is a parent of the other, tested at a separator. `ready-set.py` re-checks the textual half every turn under a new `owns-malformed` deferral kind, since a task file can be hand-edited after DEC-audit.
+
+**The fix went in the wrong place first.** The initial cut put it all in R15's filesystem check, which only fires once the owned directory exists—and a task's job is usually to create it. Adversarial review caught that with a reproduction: two tasks, nothing on disk, one wave, and the reason string still claiming owns had been checked. The lesson generalizes: a validator that needs the world to already contain the thing being validated is the weakest possible place to enforce a property about creation.
+
+**Decision, #164.** The collision is the build RUN, not the build-input EDIT. R16 requires one terminal regenerating task per job and refuses two regenerators with no dep path between them. The issue's literal wording (two build-input editors can't share a wave) was rejected outright: nearly every task in this repo edits `guild-core/` or `.agent-guild/`, so that rule would serialize every wave and give back what #125 bought. What no linter can prove—that a worker didn't run the build anyway—moved into the three worker roles as prose. The five concurrent append sites are documented as relying on O_APPEND rather than locked.
+
+**Where the line between normalizing and rejecting falls.** `paths_overlap` normalizes exactly one thing, the trailing slash, because that's the only difference where both spellings still name the same node and the comparison can say so from the strings alone. Everything else is refused upstream instead. `./src/a.py` could be normalized too, but half the malformed spellings (a directory missing its slash, a slash on a file) can only be judged against the tree, and a predicate that silently repaired some of its inputs while other callers refused the rest would be the harder thing to reason about.
+
+**Alternatives considered:** teaching `paths_overlap` to normalize every spelling difference (rejected, above); a sentinel spelling for "this task writes nothing" (rejected—an unverifiable promise, and it buys a wave seat for a task that blocks no peer's paths anyway); wiring `check-diff-scope.py --task-file` into a hook (rejected and the flag removed—under a wave the dirty tree mixes every in-flight task's writes and nothing can attribute one to a task, so a per-task run flags its peers).
+
 ## 2026-08-13: The Second Opinion Becomes Opt-In, And The Crossing Debt Goes
 
 **Source:** #167, implementing #34's closure; landed as #170 + #171

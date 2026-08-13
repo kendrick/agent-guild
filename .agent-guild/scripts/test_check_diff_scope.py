@@ -6,6 +6,7 @@ test_ledger_append.py's approach for ledger-append.py.
 
 Run: python3 .agent-guild/scripts/test_check_diff_scope.py
 """
+import importlib.util
 import os
 import subprocess
 import sys
@@ -172,93 +173,156 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-nogit-") as d:
         err,
     )
 
-# ---------------------------------------------------------- 6. --task-file
-print("--task-file: owns scopes the check (#133)")
-
-
-def write_task(d, rel, owns_lines):
-    """A minimal task fixture: just enough frontmatter for
-    check-diff-scope.py's own owns: parser to read—it never reads any
-    other task field, so nothing else about a real task.md is needed
-    here. Lands under `.agent-guild/state/tasks/`, the real location a
-    task file lives at, so the fixture task file itself doesn't also show
-    up as an out-of-scope diff path—the always-permitted `.agent-guild/state/`
-    carve-out covers it, same as it does for a real job's own bookkeeping."""
-    content = "---\nid: T-001\nowns:\n"
-    for line in owns_lines:
-        content += f"  - {line}\n"
-    content += "---\n\n## Spec excerpt\n\nFixture body.\n"
-    path = os.path.join(".agent-guild", "state", "tasks", rel)
-    return write(d, path, content)
-
-
-with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
-    init_repo(d)
-    task_path = write_task(d, "task.md", ["foo.py"])
-    write(d, "foo.py")
-    rc, out, err = run_script(d, "--task-file", os.path.relpath(task_path, d))
-    check("--task-file happy path: exit 0", rc == 0, f"rc={rc} err={err}")
-
-with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
-    init_repo(d)
-    task_path = write_task(d, "task.md", ["foo.py"])
-    write(d, "foo.py")
-    write(d, "bar.py")
-    rc, out, err = run_script(d, "--task-file", os.path.relpath(task_path, d))
-    check("--task-file violating path: nonzero exit", rc != 0, f"rc={rc}")
-    check("--task-file violating path: offender named", "bar.py" in err, err)
-    check(
-        "--task-file violating path: owned path not named as an offender",
-        "out of scope: foo.py" not in err,
-        err,
-    )
-
-with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
-    init_repo(d)
-    task_path = write_task(d, "task.md", [])  # owns: present but empty
-    write(d, "foo.py")
-    rc, out, err = run_script(d, "--task-file", os.path.relpath(task_path, d))
-    check("--task-file empty owns: exit 3", rc == 3, f"rc={rc} err={err}")
-    check("--task-file empty owns: message names owns", "owns" in err, err)
-
-with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
-    init_repo(d)
-    # No owns: key at all—missing, not just empty—same fail-closed exit.
-    task_path = write(
-        d,
-        os.path.join(".agent-guild", "state", "tasks", "task-no-owns.md"),
-        "---\nid: T-002\n---\n\nbody\n",
-    )
-    write(d, "foo.py")
-    rc, out, err = run_script(d, "--task-file", os.path.relpath(task_path, d))
-    check("--task-file missing owns key: exit 3", rc == 3, f"rc={rc} err={err}")
-
-# ---------------------------------------- 7. reconstruction: T-007 writes plugin/
+# ---------------------------------------- 6. reconstruction: T-007 writes plugin/
 # The real #117 corpus's T-007 listed generated-tree copies (e.g.
 # `plugin/skills/retrospective/SKILL.md`) among its `artifacts`, even
 # though its spec never has it touch `plugin/`—only the terminal
-# regeneration task (T-003) owns generated trees. Reconstruct T-007's real,
-# legitimate ownership (the five source files its spec excerpt names) and
-# confirm a write under `plugin/` is caught as out of scope.
-print("reconstruction: T-007's real owns catches a plugin/ write as out of scope")
+# regeneration task (T-003) owns generated trees. Allowlist the five source
+# files T-007's spec excerpt actually names and confirm a write under
+# `plugin/` is caught as out of scope.
+print("reconstruction: T-007's real scope catches a plugin/ write as out of scope")
 
 with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
     init_repo(d)
-    task_path = write_task(d, "T-007.md", [
+    write(d, os.path.join(".agent-guild", "state", "commit-message.md"))
+    write(d, os.path.join("plugin", "skills", "retrospective", "SKILL.md"))
+    rc, out, err = run_script(
+        d,
         ".agent-guild/state/commit-message.md",
         ".agent-guild/schemas/vendor-call.schema.json",
         ".agent-guild/scripts/ledger-append.py",
         "docs/vendor-ledger.md",
         "guild-core/workflows/retrospective/SKILL.md",
-    ])
-    write(d, os.path.join(".agent-guild", "state", "commit-message.md"))
-    write(d, os.path.join("plugin", "skills", "retrospective", "SKILL.md"))
-    rc, out, err = run_script(d, "--task-file", os.path.relpath(task_path, d))
+    )
     check("T-007-writes-plugin/: nonzero exit", rc != 0, f"rc={rc}")
     check(
         "T-007-writes-plugin/: offending path named",
         "plugin/skills/retrospective/SKILL.md" in err,
         err,
+    )
+
+# ---------------------------------- 7. an allowlist grant only flows down
+# A directory grant says nothing about a file at a node ABOVE it. That's
+# containment, and it is not the symmetric question two owners ask about
+# each other, which is why in_scope has its own predicate. Written against
+# the CLI because the distinction was briefly lost in a shared one.
+print("a directory grant doesn't admit a file above it")
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, "docs")  # a FILE at the node above the granted directory
+    rc, out, err = run_script(d, "docs/generated/")
+    check("a file at an ancestor of the granted directory: out of scope", rc == 1, f"rc={rc} err={err}")
+    check("ancestor file: named as the offender", "out of scope: docs" in err, err)
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, "plugin")  # a file where the grant names a directory
+    rc, out, err = run_script(d, "plugin/")
+    check("a file at the granted directory's own node: out of scope", rc == 1, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, os.path.join("docs", "generated", "api.md"))
+    rc, out, err = run_script(d, "docs/generated/")
+    check("a file inside the granted directory: in scope", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------------- 8. owns_entry_problem (#162)
+# The one predicate here that isn't reachable through the CLI: R13 and
+# ready-set.py both import it, so it gets tested in-process.
+print("owns_entry_problem: the two shapes, and what isn't one of them")
+
+_spec = importlib.util.spec_from_file_location("check_diff_scope_under_test", SCRIPT)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+owns_entry_problem = _mod.owns_entry_problem
+paths_overlap = _mod.paths_overlap
+
+for good in [
+    "src/a.py",
+    "src/",
+    "a.py",
+    "docs/guide/index.md",
+    "plugin/",
+    # Brackets are ordinary filename characters, and this is the most
+    # common path shape in half the frameworks a copied-in kit will meet.
+    # Refusing it would fail DEC-audit with no spelling the author could
+    # write instead, so the glob check is `*` and `?` only.
+    "app/[slug]/page.tsx",
+    "app/[...catchall]/route.ts",
+    "src/my file.py",
+    "lib/a~backup.js",
+]:
+    check(f"well-formed entry {good!r}: no problem", owns_entry_problem(good) is None)
+
+for bad, label in [
+    ("./src/a.py", "'./' prefix"),
+    ("/etc/passwd", "absolute"),
+    ("../outside/a.py", "'..' segment"),
+    ("src//a.py", "empty segment"),
+    ("src\\a.py", "backslash"),
+    (" src/a.py", "leading space"),
+    ("", "empty string"),
+    ("/", "bare slash"),
+    ("src/*.py", "glob star"),
+    ("src/a?.py", "glob question mark"),
+    ("~/a.py", "home expansion"),
+    ("$OUT/a.py", "variable expansion"),
+    ("​src/a.py", "zero-width space"),
+    (None, "not a string at all"),
+]:
+    check(f"malformed entry ({label}): a problem is reported", owns_entry_problem(bad) is not None)
+
+# The three pairs #162 opened with, none of which may answer a silent False.
+# Two of them are the same territory spelled differently, so overlap is the
+# honest answer and no filesystem lookup is involved in giving it.
+check(
+    "'src/lib' vs 'src/lib/' overlap, whether or not src/lib exists yet",
+    paths_overlap("src/lib", "src/lib/") is True,
+)
+check(
+    "'src/foo/bar.py' vs 'src/foo' overlap: one contains the other",
+    paths_overlap("src/foo/bar.py", "src/foo") is True,
+)
+# The third is a spelling no comparison can rescue, so it's refused instead.
+check(
+    "'./src/a.py' vs 'src/a.py' can't be reconciled by comparison...",
+    paths_overlap("./src/a.py", "src/a.py") is False,
+)
+check(
+    "...so the './' spelling is refused, with no filesystem lookup at all",
+    owns_entry_problem("./src/a.py") is not None,
+)
+# A directory that already exists is still refused when spelled slashless,
+# even though overlap now catches it: the entry is wrong on its own terms
+# and the reader of the task file deserves to be told.
+with tempfile.TemporaryDirectory() as d:
+    os.makedirs(os.path.join(d, "src", "lib"))
+    check(
+        "an existing directory spelled without its slash: still malformed",
+        owns_entry_problem("src/lib", d) is not None,
+    )
+
+# The lookalike sibling must survive the looser overlap rule: a parent
+# relationship is tested at a separator, not by raw string prefix.
+check(
+    "'plugin/' does not swallow 'plugin-extra/file.py'",
+    paths_overlap("plugin/", "plugin-extra/file.py") is False,
+)
+check(
+    "'plugin/' does cover 'plugin/hooks/hooks.json'",
+    paths_overlap("plugin/", "plugin/hooks/hooks.json") is True,
+)
+check(
+    "two different files under one directory don't overlap",
+    paths_overlap("src/a.py", "src/b.py") is False,
+)
+
+# Existence is never required: a task's job is often to create what it owns.
+with tempfile.TemporaryDirectory() as d:
+    check(
+        "an entry naming a path that doesn't exist yet: no problem",
+        owns_entry_problem("src/brand-new.py", d) is None,
     )
 
 print(f"\n{passed} passed, {failed} failed")

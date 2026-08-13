@@ -260,6 +260,47 @@ MINIMAL_CONSTITUTION = """# Constitution: CLI fixture
 """
 
 
+def write_synthetic_state(d, tasks):
+    """A minimal state dir: MINIMAL_CONSTITUTION plus one task file per
+    entry in `tasks`, each `{"id", "artifacts", "deps"}`. For the build
+    rules (R8, R16), where what matters is which paths a task claims and
+    who depends on whom, and the corpus is the wrong instrument because
+    its own build graph is the thing under test elsewhere. No `owns`, so
+    R13/R14/R15 have nothing to say about these fixtures."""
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+    for t in tasks:
+        artifacts_block = "\n".join(f"  - {a}" for a in t["artifacts"])
+        write_lines(
+            os.path.join(state, "tasks", f"{t['id']}.md"),
+            f"""---
+id: {t['id']}
+title: Synthetic {t['id']}
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: [{', '.join(t.get('deps', []))}]
+escalations: []
+artifacts:
+{artifacts_block}
+---
+
+## Spec excerpt
+
+Writes {', '.join(t['artifacts'])}.
+""".splitlines(),
+        )
+    return state
+
+
 def raw_shell_constitution(check_line):
     return f"""# Constitution: R4 fixture
 
@@ -617,6 +658,146 @@ else:
                 check("P4: R10 named", rule_hit(err, "R10"), f"err={err!r}")
                 check("P4: no traceback", "Traceback" not in err, f"err={err!r}")
 
+        # -------------------------------------------------- R15: owns shape (#162)
+        # A one-task fixture rather than the corpus, because what's under
+        # test is a single entry's spelling and the corpus has no bad ones.
+        # Each case names the whole entry back to the reader, since "your
+        # owns is malformed" without the offending string is a scavenger
+        # hunt through a decomposition.
+        print("R15: owns shape (#162)")
+
+        def write_owns_fixture(state, owns_entries):
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(
+                os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines()
+            )
+            owns_block = "\n".join(f"  - {e}" for e in owns_entries)
+            write_lines(
+                os.path.join(state, "tasks", "T-001.md"),
+                f"""---
+id: T-001
+title: Sole task
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: []
+dep_rationale: []
+escalations: []
+artifacts:
+  - out.txt
+owns:
+{owns_block}
+---
+
+## Spec excerpt
+
+Produces out.txt.
+""".splitlines(),
+            )
+
+        for entry, label in [
+            ("./out.txt", "'./' prefix"),
+            ("/abs/out.txt", "absolute path"),
+            ("../sibling/out.txt", "'..' segment"),
+            ("src//out.txt", "empty segment"),
+            ("src\\\\out.txt", "backslash separator"),
+            ('""', "empty entry"),
+        ]:
+            with tempfile.TemporaryDirectory() as d:
+                state = os.path.join(d, "state")
+                write_owns_fixture(state, [entry])
+                rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+                check(f"R15 {label}: exit 1", rc == 1, f"rc={rc} err={err}")
+                check(f"R15 {label}: R15 named", rule_hit(err, "R15"), f"err={err!r}")
+                check(f"R15 {label}: task named", "T-001" in err, f"err={err!r}")
+                check(f"R15 {label}: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # The two spellings #162 demonstrated. Both need the entry to exist
+        # on disk for the shape to be provably wrong, which is why R15 takes
+        # repo_root and ready-set.py (which has none) can't catch this pair.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(d, "src", "lib"))
+            write_owns_fixture(state, ["src/lib"])
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("R15 directory without trailing slash: exit 1", rc == 1, f"rc={rc} err={err}")
+            check("R15 directory without trailing slash: entry quoted back", "src/lib" in err, err)
+            check("R15 directory without trailing slash: R15 named", rule_hit(err, "R15"), f"err={err!r}")
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(d, "src"))
+            write_lines(os.path.join(d, "src", "a.py"), ["x = 1"])
+            write_owns_fixture(state, ["src/a.py/"])
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("R15 file with trailing slash: exit 1", rc == 1, f"rc={rc} err={err}")
+            check("R15 file with trailing slash: R15 named", rule_hit(err, "R15"), f"err={err!r}")
+
+        # Owning a file the task hasn't created yet is the normal case, so
+        # existence is never what R15 asks about.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            write_owns_fixture(state, ["src/not-yet-written.py", "docs/generated/"])
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("R15 entries naming paths that don't exist yet: exit 0", rc == 0, f"rc={rc} err={err}")
+
+        # R13 has to catch the same pair the wave does, on the strings alone
+        # and with neither path on disk. Two well-formed entries, one
+        # directory, and R15 has nothing to say about either of them.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+            for tid, entry in (("T-001", "src/lib"), ("T-002", "src/lib/")):
+                write_lines(
+                    os.path.join(state, "tasks", f"{tid}.md"),
+                    f"""---
+id: {tid}
+title: Task {tid}
+spec: .agent-guild/state/spec.md#one
+clauses: [C-1]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  C-1: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: []
+dep_rationale: []
+escalations: []
+artifacts:
+  - out.txt
+owns:
+  - {entry}
+---
+
+## Spec excerpt
+
+Writes under src/lib.
+""".splitlines(),
+                )
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+            check("'src/lib' vs 'src/lib/' with neither on disk: exit 1", rc == 1, f"rc={rc} err={err}")
+            check("'src/lib' vs 'src/lib/': R13 named, not R15", rule_hit(err, "R13"), f"err={err!r}")
+
+        # The migration decision (#162): `owns` stays optional, so a corpus
+        # that predates the field is not retroactively in violation. The
+        # unmutated corpus below carries no `owns:` at all.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+            check("R15 corpus with no owns field anywhere: exit 0", rc == 0, f"rc={rc} err={err}")
+
         # -------------------------------------------------- R13: ownership overlap (#133)
         # `owns` postdates this corpus, so add_owns() has to inject it before
         # R13 has anything to check. Every real overlap in the corpus—T-001
@@ -796,6 +977,111 @@ dep_rationale.
             )
             rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
             check("owns-less task with a dep and no rationale: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------ generated trees: the marketplace files
+# Both marketplace files are build-plugin.py outputs, and neither sits under
+# `plugin/`, `plugins/`, or `.claude/`. While they were missing from
+# GENERATED_TREE_PREFIXES, a task whose only generated artifact was one of
+# them read as a task that regenerates nothing, and R8 went quiet on the
+# whole job: an illegal decomposition lints clean. Each marketplace file gets
+# a fire-then-pass pair, since the passing half on its own goes green against
+# the old prefix list too and would prove nothing.
+print("generated trees: a marketplace file counts as a regeneration")
+
+for marketplace in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
+    with tempfile.TemporaryDirectory() as d:
+        state = write_synthetic_state(d, [
+            {"id": "T-001", "artifacts": ["guild-core/roles/worker-bulk.md"]},
+            {"id": "T-002", "artifacts": [marketplace]},  # no dep on T-001
+        ])
+        rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+        check(f"{marketplace} regenerated before the edit it captures: exit 1", rc == 1, f"rc={rc} err={err}")
+        check(f"{marketplace}: R8 named", rule_hit(err, "R8"), f"err={err!r}")
+
+    with tempfile.TemporaryDirectory() as d:
+        state = write_synthetic_state(d, [
+            {"id": "T-001", "artifacts": ["guild-core/roles/worker-bulk.md"]},
+            {"id": "T-002", "artifacts": [marketplace], "deps": ["T-001"]},
+        ])
+        rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+        check(f"{marketplace} regenerated downstream of the edit: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------------- R16: build serialization (#164)
+# The case that reproduces today: two tasks editing disjoint paths under
+# guild-core/. Nothing about their file ownership overlaps, so the wave
+# dispatches both, and both then have to run build-plugin.py over the same
+# output trees. R16 refuses the decomposition until one task owns the
+# regeneration.
+print("R16: build serialization (#164)")
+
+GUILD_CORE_A = "guild-core/roles/auditor.md"
+GUILD_CORE_B = "guild-core/workflows/decompose/SKILL.md"
+
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": [GUILD_CORE_B]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 two build-input editors and no regenerator: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R16 no regenerator: R16 named", rule_hit(err, "R16"), f"err={err!r}")
+    check("R16 no regenerator: both editors named", "T-001" in err and "T-002" in err, err)
+    check("R16 no regenerator: no traceback", "Traceback" not in err, f"err={err!r}")
+
+# The fix the rule is asking for: one terminal task, downstream of both
+# edits, declaring the generated trees. Both editors still share a wave;
+# the regenerator waits on its deps, which is where the serialization the
+# issue asked for becomes visible in the wave's own output.
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": [GUILD_CORE_B]},
+        {"id": "T-003", "artifacts": ["plugin/", "plugins/", ".claude/"],
+         "deps": ["T-001", "T-002"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 one terminal regenerator downstream of both: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# Two regenerators with no dep path between them. R8 passes this, because
+# some generated task (T-004) is downstream of everything—which is why R8
+# alone was never enough.
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": ["plugin/"], "deps": ["T-001"]},
+        {"id": "T-003", "artifacts": ["plugins/"], "deps": ["T-001"]},
+        {"id": "T-004", "artifacts": [".claude/"], "deps": ["T-002", "T-003"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 two unordered regenerators: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R16 two unordered regenerators: R16 named, not R8", rule_hit(err, "R16"), f"err={err!r}")
+    check("R16 two unordered regenerators: both named", "T-002" in err and "T-003" in err, err)
+
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": [GUILD_CORE_A]},
+        {"id": "T-002", "artifacts": ["plugin/"], "deps": ["T-001"]},
+        {"id": "T-003", "artifacts": ["plugins/", ".claude/"], "deps": ["T-002"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 two regenerators on a dep path: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# A job that touches no build input owes nothing to the build step.
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(d, [
+        {"id": "T-001", "artifacts": ["docs/some-guide.md"]},
+        {"id": "T-002", "artifacts": ["README.md"]},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R16 no build inputs anywhere in the job: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# CON-audit has no tasks to serialize.
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R16 CON-audit with an empty tasks/: exit 0", rc == 0, f"rc={rc} err={err}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

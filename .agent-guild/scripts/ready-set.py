@@ -25,33 +25,37 @@ Emits one JSON object on stdout with four keys, in this order:
     deferred  — tasks held back, each {"id", "reason", "kind"}. A reason is
                 one of: "unmet deps: ..." (naming each unmet dep and its
                 status), "owns overlap with T-NNN" (naming the task it
-                collides with), "cannot share a wave with T-NNN: `owns` is
-                undeclared ..." (see below), or "spent retry budget:
-                retries=N max_retries=M". `kind` is the machine-readable
-                twin of that same reason—"deps", "owns", "owns-undeclared",
-                or "budget"—so a caller can tell them apart without pattern
-                -matching prose that's free to keep changing. stop-gate.py
-                consumes it to decide whether a deferred task's stall
-                counter should hold or advance. "deps" and "owns" name
-                obstacles nothing but waiting resolves, so the counter
-                holds. The other two must keep advancing it. "budget" is
-                retry-ladder step 4, an orchestrator judgment call (escalate
-                a tier, re-decompose, or hand it to the user) that waiting
-                can never resolve, so holding it would deadlock the backstop
-                on any job whose last open task sits at a spent budget.
-                "owns-undeclared" is deferred against EVERY id in --running,
-                and `owns: []` is what templates/task.md ships, so holding it
-                would let one live subagent freeze every other pending task's
-                counter—the same crowding-out #163 was filed to remove.
+                collides with), "cannot share a wave with T-NNN: ..."
+                (naming an undeclared or malformed `owns`, see below), or
+                "spent retry budget: retries=N max_retries=M". `kind` is the
+                machine-readable twin of that same reason—"deps", "owns",
+                "owns-undeclared", "owns-malformed", or "budget"—so a caller
+                can tell them apart without pattern-matching prose that's
+                free to keep changing. stop-gate.py consumes it to decide
+                whether a deferred task's stall counter should hold or
+                advance. "deps" and "owns" name obstacles nothing but waiting
+                resolves, so the counter holds. The rest must keep advancing
+                it. "budget" is retry-ladder step 4, an orchestrator judgment
+                call (escalate a tier, re-decompose, or hand it to the user)
+                that waiting can never resolve, so holding it would deadlock
+                the backstop on any job whose last open task sits at a spent
+                budget. "owns-undeclared" and "owns-malformed" are deferred
+                against EVERY id in --running, and `owns: []` is what
+                templates/task.md ships, so holding either would let one live
+                subagent freeze every other pending task's counter—the same
+                crowding-out #163 was filed to remove.
 
-Two tasks share a wave only if BOTH declare `owns`. An empty `owns` is the
-absence of a claim, not a claim to write nothing, and it is what
-templates/task.md ships, so undeclared is a fresh task's default state
-(#162). Treating it as "collides with nothing" would void the wave's whole
-safety guarantee precisely where nobody has thought about ownership yet.
-An undeclared task still dispatches, alone, which is the pre-wave behavior;
-every peer defers with a reason naming what to declare. Deferring the
-undeclared task instead would deadlock a decomposition that declares none.
+Two tasks share a wave only if BOTH declare `owns` and both declarations
+are well-formed. An empty `owns` is the absence of a claim, not a claim to
+write nothing, and it is what templates/task.md ships, so undeclared is a
+fresh task's default state (#162). Treating it as "collides with nothing"
+would void the wave's whole safety guarantee precisely where nobody has
+thought about ownership yet. A malformed entry is unknown territory in the
+same way: R15 refuses one at DEC-audit, but a task file can be hand-edited
+afterwards, so the shape is re-checked here rather than assumed. An
+undeclared or malformed task still dispatches, alone, which is the pre-wave
+behavior; every peer defers with a reason naming what to fix. Deferring the
+task itself instead would deadlock a decomposition that declares none.
     attention — tasks needing a human/orchestrator judgment call, each
                 {"id", "reason"}: a `disputed` task, or a task whose `deps`
                 names an `abandoned` task (waiting it out can never
@@ -87,9 +91,10 @@ already declared by an earlier file—reported on stderr, prefixed
 `ready-set: `, naming the file(s). A task silently skipped here is a task
 nobody would ever dispatch, so this fails loud rather than dropping it.
 
-Imports `paths_overlap` from check-diff-scope.py via the `_load_module`
-idiom check-job-spec.py already uses for the same import, rather than
-reimplementing ownership-overlap semantics a third time.
+Imports `paths_overlap` and `owns_entry_problem` from check-diff-scope.py
+via the `_load_module` idiom check-job-spec.py already uses for the same
+two imports, rather than reimplementing ownership-path semantics a second
+time.
 
 Stdlib only, so the kit stays copy-in portable.
 """
@@ -114,9 +119,9 @@ def _load_module(name, filename):
     return module
 
 
-paths_overlap = _load_module(
-    "check_diff_scope_module_scope", "check-diff-scope.py"
-).paths_overlap
+_diff_scope = _load_module("check_diff_scope_module_scope", "check-diff-scope.py")
+paths_overlap = _diff_scope.paths_overlap
+owns_entry_problem = _diff_scope.owns_entry_problem
 
 
 DEFAULT_MAX_RETRIES = 2
@@ -238,6 +243,22 @@ def read_task(path):
     if not isinstance(owns, list):
         raise TaskParseError(f"{path}: owns is not a list: {fm.get('owns')!r}")
 
+    # R15 refuses a malformed entry at DEC-audit, but a task file can be
+    # hand-edited afterwards and this script runs on every turn, so the
+    # shape is re-checked here rather than assumed. Textual checks only: the
+    # ones needing the tree (a directory spelled without its slash) would
+    # make the wave a function of the filesystem, and identical inputs on a
+    # Claude and a Codex host have to compute identical waves. A malformed
+    # entry is reported, never raised—an unparseable shape is the
+    # orchestrator's to fix, and exiting 3 would blind the stop gate to
+    # every other task in the job.
+    owns_problem = None
+    for entry in owns:
+        problem = owns_entry_problem(entry)
+        if problem:
+            owns_problem = (entry, problem)
+            break
+
     max_retries_raw = fm.get("max_retries", DEFAULT_MAX_RETRIES)
     if max_retries_raw == "":
         max_retries_raw = DEFAULT_MAX_RETRIES
@@ -254,6 +275,7 @@ def read_task(path):
         "retries": retries,
         "deps": deps,
         "owns": owns,
+        "owns_problem": owns_problem,
         "executor": str(fm["executor"]).strip(),
         "checker": str(fm["checker"]).strip(),
         "max_retries": max_retries,
@@ -325,8 +347,10 @@ def _owns_overlap(owns_a, owns_b):
     return any(paths_overlap(a, b) for a in owns_a for b in owns_b)
 
 
-def _pairing_blocked(owns_a, owns_b):
-    """Why two tasks may not share a wave, or None if they may.
+def _pairing_blocked(task_a, task_b):
+    """`(kind, detail)` for why two tasks may not share a wave, or None if
+    they may. `detail` is the explanatory half of the deferral reason, or
+    None for a plain overlap, which the caller states in its own words.
 
     `owns: []` is what templates/task.md ships and what new-task.py stamps,
     so undeclared is the DEFAULT state of a fresh task, not an unusual one.
@@ -334,17 +358,32 @@ def _pairing_blocked(owns_a, owns_b):
     evaporate exactly where nobody has thought about ownership yet, and the
     wave would still announce "no owns overlap" as its reason (#162). An
     absent claim is treated as an unknown one instead: unknown never rides
-    with anything else.
+    with anything else. A malformed entry is unknown too, for the same
+    reason and with a better fix attached, so it's reported ahead of the
+    undeclared case even when both apply.
 
     Deferring every undeclared task instead would deadlock a decomposition
     that declares none, since nothing would ever reach a wave. So an
     undeclared task still dispatches; it just goes alone, which is the
     pre-wave behavior and safe by construction.
     """
-    if not owns_a or not owns_b:
-        return "undeclared"
-    if _owns_overlap(owns_a, owns_b):
-        return "overlap"
+    for t in (task_a, task_b):
+        if t["owns_problem"]:
+            entry, problem = t["owns_problem"]
+            return (
+                "owns-malformed",
+                f"{t['id']}'s `owns` entry {entry!r} is malformed ({problem}), "
+                "so no collision check is possible; fix the entry to run them "
+                "together",
+            )
+    if not task_a["owns"] or not task_b["owns"]:
+        return (
+            "owns-undeclared",
+            "`owns` is undeclared on one or both, so no collision check is "
+            "possible; declare it on both to run them together",
+        )
+    if _owns_overlap(task_a["owns"], task_b["owns"]):
+        return ("owns", None)
     return None
 
 
@@ -369,7 +408,7 @@ def compute_ready_set(tasks, running):
             )
 
     wave = []
-    wave_owns = []  # [(tid, owns)] already placed, in placement order
+    wave_members = []  # [(tid, task)] already placed, in placement order
     deferred = []
 
     for tid in ids_sorted:
@@ -414,44 +453,46 @@ def compute_ready_set(tasks, running):
             deferred.append((tid, f"unmet deps: {', '.join(unmet)}", "deps"))
             continue
 
-        collision = why = None
-        for other_tid, other_owns in wave_owns:
-            why = _pairing_blocked(t["owns"], other_owns)
-            if why:
+        collision = blocked = None
+        for other_tid, other_task in wave_members:
+            blocked = _pairing_blocked(t, other_task)
+            if blocked:
                 collision = other_tid
                 break
         if collision is None:
             for rtid in sorted(running, key=_sort_key):
                 if rtid not in tasks:
                     continue
-                why = _pairing_blocked(t["owns"], tasks[rtid]["owns"])
-                if why:
+                blocked = _pairing_blocked(t, tasks[rtid])
+                if blocked:
                     collision = rtid
                     break
         if collision is not None:
-            if why == "undeclared":
-                deferred.append((
-                    tid,
-                    f"cannot share a wave with {collision}: `owns` is "
-                    "undeclared on one or both, so no collision check is "
-                    "possible; declare it on both to run them together",
-                    "owns-undeclared",
-                ))
-            else:
+            kind, detail = blocked
+            if kind == "owns":
                 deferred.append((tid, f"owns overlap with {collision}", "owns"))
+            else:
+                deferred.append(
+                    (tid, f"cannot share a wave with {collision}: {detail}", kind)
+                )
             continue
 
         # The reason names what was actually compared. Claiming "no owns
         # overlap" for a task nobody could check was #162's sharpest edge:
         # the gate certified a property it had skipped.
-        if t["owns"]:
+        if t["owns_problem"]:
+            entry, problem = t["owns_problem"]
+            reason = ("deps complete, retry budget available; alone in this "
+                      f"wave because its `owns` entry {entry!r} is malformed "
+                      f"({problem})")
+        elif t["owns"]:
             reason = ("deps complete, owns checked against every wave peer, "
                       "retry budget available")
         else:
             reason = ("deps complete, retry budget available; alone in this "
                       "wave because its `owns` is undeclared")
         wave.append({"id": tid, "agent": t["executor"], "reason": reason})
-        wave_owns.append((tid, t["owns"]))
+        wave_members.append((tid, t))
 
     checks = [
         {

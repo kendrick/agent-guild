@@ -66,7 +66,17 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
     write(d, "foo.py")
     rc, out, err = run_script(d, "foo.py")
     check("allowed-only: exit 0", rc == 0, f"rc={rc} err={err}")
-    check("allowed-only: OK line on stdout", out.startswith("OK:"), out)
+    lines = out.splitlines()
+    check(
+        "allowed-only: OK summary is the last stdout line",
+        bool(lines) and lines[-1] == "OK: 1 path(s) in scope",
+        out,
+    )
+    check(
+        "allowed-only: foo.py attributed to its exact-file allowlist entry",
+        "check-diff-scope: in scope: foo.py (file: foo.py)" in out,
+        out,
+    )
 
 # ------------------------------------------------- 2. one out-of-scope path
 print("one out-of-scope path exits nonzero and names it")
@@ -83,6 +93,7 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
         "out of scope: foo.py" not in err,
         err,
     )
+    check("out-of-scope: stdout stays empty on the failing path", out == "", out)
 
 # --------------------------------------- 3. state/ and --ignore never flagged
 print("state/ and --ignore paths are never flagged")
@@ -93,6 +104,16 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
     write(d, "scratch-notes.txt")
     rc, out, err = run_script(d, "foo.py", "--ignore", "scratch-notes.txt")
     check("state/ + --ignore only: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "state/ + --ignore only: scratch-notes.txt attributed to --ignore",
+        "check-diff-scope: in scope: scratch-notes.txt (ignore: scratch-notes.txt)" in out,
+        out,
+    )
+    check(
+        "state/ + --ignore only: T-001.md attributed to the state carve-out",
+        "check-diff-scope: in scope: .agent-guild/state/tasks/T-001.md (state carve-out)" in out,
+        out,
+    )
 
 with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
     init_repo(d)
@@ -115,6 +136,11 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
     write(d, os.path.join("plugin", "hooks", "hooks.json"))
     rc, out, err = run_script(d, "plugin/")
     check("dir-prefix: nested file exits 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "dir-prefix: nested file attributed to the dir: grant",
+        "check-diff-scope: in scope: plugin/hooks/hooks.json (dir: plugin/)" in out,
+        out,
+    )
 
 with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
     init_repo(d)
@@ -140,6 +166,12 @@ with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
         "rename within allowlist: no arrow-string leaked into stderr",
         "->" not in err,
         err,
+    )
+    check("rename within allowlist: new.py named on stdout", "in scope: new.py" in out, out)
+    check(
+        "rename within allowlist: no arrow-string leaked into stdout",
+        "->" not in out,
+        out,
     )
 
 with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
@@ -323,6 +355,81 @@ with tempfile.TemporaryDirectory() as d:
     check(
         "an entry naming a path that doesn't exist yet: no problem",
         owns_entry_problem("src/brand-new.py", d) is None,
+    )
+
+# ---------------------------------------------------- 9. stdout contract (#129)
+# These fixtures pin the passing run's stdout shape (#129): one detail line
+# per approved path naming the entry that admitted it, the OK summary last,
+# byte-identical across repeated runs, and directory attribution that follows
+# CLI-argument order.
+print("stdout contract: exact byte-stable output shapes")
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    rc, out, err = run_script(d, "foo.py")
+    check("zero changed paths: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "zero changed paths: stdout is exactly the summary line, nothing more",
+        out == "OK: 0 path(s) in scope\n",
+        out,
+    )
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, "foo.py")
+    write(d, os.path.join("plugin", "hooks", "hooks.json"))
+    write(d, os.path.join(".agent-guild", "state", "tasks", "T-002.md"))
+    rc1, out1, err1 = run_script(d, "foo.py", "plugin/")
+    rc2, out2, err2 = run_script(d, "foo.py", "plugin/")
+    check("ordering stability: both runs exit 0", rc1 == 0 and rc2 == 0, f"rc1={rc1} rc2={rc2}")
+    check(
+        "ordering stability: stdout is byte-identical across repeated runs",
+        out1 == out2,
+        f"out1={out1!r} out2={out2!r}",
+    )
+    lines1 = out1.splitlines()
+    check(
+        "ordering stability: OK summary is the last stdout line",
+        bool(lines1) and lines1[-1].startswith("OK:"),
+        out1,
+    )
+    detail_lines1 = [l for l in lines1 if l.startswith("check-diff-scope: in scope:")]
+    ok_count1 = int(lines1[-1].split()[1]) if lines1 else -1
+    check(
+        "ordering stability: detail-line count equals the OK summary's count",
+        len(detail_lines1) == ok_count1,
+        out1,
+    )
+    check(
+        "ordering stability: summary count matches the number of changed paths",
+        ok_count1 == 3,
+        out1,
+    )
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, os.path.join("docs", "generated", "api.md"))
+    rc, out, err = run_script(d, "docs/", "docs/generated/")
+    check("first-listed dir wins: docs/ listed first exits 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "first-listed dir wins: attribution names the first-listed grant (docs/)",
+        "check-diff-scope: in scope: docs/generated/api.md (dir: docs/)" in out,
+        out,
+    )
+
+with tempfile.TemporaryDirectory(prefix="check-diff-scope-fixture-") as d:
+    init_repo(d)
+    write(d, os.path.join("docs", "generated", "api.md"))
+    rc, out, err = run_script(d, "docs/generated/", "docs/")
+    check(
+        "first-listed dir wins: docs/generated/ listed first exits 0",
+        rc == 0,
+        f"rc={rc} err={err}",
+    )
+    check(
+        "first-listed dir wins: attribution flips when argument order flips",
+        "check-diff-scope: in scope: docs/generated/api.md (dir: docs/generated/)" in out,
+        out,
     )
 
 print(f"\n{passed} passed, {failed} failed")

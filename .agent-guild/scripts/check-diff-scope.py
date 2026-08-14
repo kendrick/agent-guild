@@ -36,10 +36,20 @@ The path set is the union of `git status --porcelain` and
 emits for a detected rename) resolves to the new path—a rename that lands
 back in scope shouldn't trip the check on its own history.
 
-Exit codes: 0 every changed path is in scope, one `OK:` line to stdout; 1 one
-or more paths are out of scope, each named on stderr as
-`check-diff-scope: out of scope: <path>`; 3 usage/infra error (not a git
+Exit codes: 0 every changed path is in scope, one
+`check-diff-scope: in scope: <path> (<reason>)` line per path to stdout—the
+reason naming the admitting allowlist entry (`file:`/`dir:`), an `ignore:`
+entry, or the state carve-out—followed by a final `OK: <N> path(s) in
+scope` summary; 1 one or more paths are out of scope, each named on stderr
+as `check-diff-scope: out of scope: <path>`; 3 usage/infra error (not a git
 repo, or a git command itself failed).
+
+Naming each approved path, rather than folding them into a bare count, is
+what lets someone who wasn't there audit the approval: a checker
+transcribing the result into a verdict, or a courier handed that verdict as
+evidence instead of repo access. On #117 a courier given only
+`OK: 17 path(s) in scope` had no list it could certify, and FAILed a run
+that was fine.
 
 `paths_overlap(a, b)` below is the single home for "do these two ownership
 paths overlap" semantics—check-job-spec.py's R13 ownership-overlap rule
@@ -104,7 +114,7 @@ def _run_git(*args):
 def collect_changed_paths():
     """Union of `git status --porcelain` and `git diff --name-only`,
     deduplicated, order preserved (first-seen wins)—stable output makes the
-    OK:/offender lines reproducible run to run.
+    in-scope/offender lines reproducible run to run.
 
     --untracked-files=all is not optional: git's default collapses a wholly
     new directory into a single `dir/` entry instead of listing the files
@@ -230,14 +240,32 @@ def path_within(path, prefix):
     return path.startswith(prefix)
 
 
-def in_scope(path, allowed_files, allowed_dirs, ignored):
+def scope_reason(path, allowed_files, allowed_dirs, ignored):
+    """The allowlist entry that admits `path`, or None if nothing does.
+
+    Returns the entry rather than a bool because main() prints it; the
+    module docstring above has the why.
+
+    Branch order decides attribution when a path qualifies under more than
+    one entry. An exact-file entry reports `file:` even where the path also
+    sits under a granted directory, and among directory grants the first
+    listed wins. `allowed_dirs` keeps CLI order, so nested grants like
+    `docs/` and `docs/generated/` attribute to whichever the caller listed
+    first rather than to an arbitrary one."""
     if path in allowed_files:
-        return True
+        return f"file: {path}"
     if path in ignored:
-        return True
+        return f"ignore: {path}"
     if path.startswith(".agent-guild/state/"):
-        return True
-    return any(path_within(path, prefix) for prefix in allowed_dirs)
+        return "state carve-out"
+    for prefix in allowed_dirs:
+        if path_within(path, prefix):
+            return f"dir: {prefix}"
+    return None
+
+
+def in_scope(path, allowed_files, allowed_dirs, ignored):
+    return scope_reason(path, allowed_files, allowed_dirs, ignored) is not None
 
 
 def main(argv=None):
@@ -276,15 +304,18 @@ def main(argv=None):
         sys.stderr.write(f"check-diff-scope: git command failed: {e}\n")
         return 3
 
-    offenders = [
-        p for p in paths if not in_scope(p, allowed_files, allowed_dirs, ignored)
+    reasons = [
+        (p, scope_reason(p, allowed_files, allowed_dirs, ignored)) for p in paths
     ]
+    offenders = [p for p, reason in reasons if reason is None]
 
     if offenders:
         for p in offenders:
             sys.stderr.write(f"check-diff-scope: out of scope: {p}\n")
         return 1
 
+    for p, reason in reasons:
+        print(f"check-diff-scope: in scope: {p} ({reason})")
     print(f"OK: {len(paths)} path(s) in scope")
     return 0
 

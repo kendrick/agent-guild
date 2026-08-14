@@ -829,6 +829,83 @@ check("attention: abandoned-dep task is marked as needing judgment, "
       "T-002" in err and "needs your judgment" in err
       and "depends on abandoned task(s): T-001" in err, err)
 
+# ------- stop-gate: invalidation attention on a CLOSED descendant (D1, #135)
+# Speculative dispatch lets a descendant finish and pass its own check before
+# its dep later fails rework—ready-set flags that as an `attention` entry
+# naming the descendant, but the descendant itself is `complete`, which
+# _lib.open_tasks() excludes by design (TERMINAL). Before this fix the
+# presentation loop only ever walked open_tasks()'s list, so the entry was
+# computed and then silently dropped, and the "can the turn end" test only
+# ever asked whether OPEN tasks remained—so once the DEP also reached a
+# terminal status, the gate exited 0 with T-002's stale-work warning never
+# read. Both halves are pinned here: the entry has to be presented, and it
+# has to hold the turn open even though the task it names isn't in the open
+# set at all.
+print("stop-gate.py: closed-descendant invalidation attention (D1, #135)")
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-002", status="complete", deps="[T-001]", owns="[b.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("closed descendant (complete): the turn is still held open",
+      rc == 2, f"rc={rc} err={err}")
+check("closed descendant (complete): T-002's invalidation reason is surfaced",
+      "T-002" in err and "needs your judgment" in err
+      and "built on T-001, which has gone back to 'rework'" in err, err)
+check("closed descendant (complete): T-001's own rework advice still shows",
+      "copy the checker's diagnosis into ## Rework diagnosis" in err, err)
+
+# Same shape, but the descendant is at `needs-check`—already open per
+# open_tasks(), so this exercises the ordinary (never-dropped) path beside
+# the closed one above, confirming both read from the same ready-set
+# `attention` bucket rather than two different code paths that could drift.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-011", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-012", status="needs-check", deps="[T-011]", owns="[b.py]",
+           artifacts="[out.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("open descendant (needs-check): the turn is held open",
+      rc == 2, f"rc={rc} err={err}")
+check("open descendant (needs-check): its invalidation reason is surfaced",
+      "T-012" in err and "needs your judgment" in err
+      and "built on T-011, which has gone back to 'rework'" in err, err)
+
+# A job with NOTHING open but the closed-descendant warning must still block:
+# the #125-era fast path used to return 0 the instant open_tasks() was empty,
+# without ever asking ready-set. T-001 (abandoned) and T-002 (complete) are
+# BOTH terminal here, so open_tasks() returns [] and this is exactly the
+# state that used to hit that fast path.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="abandoned", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-002", status="complete", deps="[T-001]", owns="[b.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("dep abandoned, descendant complete, nothing open: turn stays held",
+      rc == 2, f"rc={rc} err={err}")
+check("dep abandoned, descendant complete: T-002's own attention line shows"
+      " (not the dep's, which now reads 'abandoned')",
+      "T-002" in err, err)
+
+# Once the orchestrator does what the attention line tells it to—copy an
+# invalidation note and move the descendant to `assigned`—T-002 leaves
+# `complete` and ready-set stops flagging it (its own status is no longer
+# needs-check/checking/complete, so the invalidation check in
+# compute_ready_set doesn't even look at its deps). It has to fall straight
+# through to the ORDINARY rework-ladder advice, not linger as a stale
+# attention line and not double up on both.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-002", status="assigned", deps="[T-001]", owns="[b.py]",
+           retries=1)
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("reopened descendant (assigned): ready-set has nothing left to flag",
+      "needs your judgment" not in err, err)
+check("reopened descendant (assigned): gets the ordinary mid-flight/dispatch "
+      "advice instead",
+      "T-002 [assigned]" in err, err)
+
 # --------------------- stop-gate: a `rework` task must keep the retry ladder (#155)
 # Before this fix, ready-set.py treated `rework` as a wave candidate, so a
 # rework task with no unmet deps/collisions landed in the wave—and the wave
@@ -907,6 +984,45 @@ def stalled_text(proj):
     path = os.path.join(proj, ".agent-guild", "state", "STALLED.md")
     return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
 
+
+# A closed-descendant attention entity (D1) has to run through the SAME
+# digest/counter machinery as an open task: no spurious STALLED on the first
+# couple of firings (a fresh digest only counts as strike 1 the moment it's
+# first seen), but a genuine three-strike schedule once it's ignored—proving
+# it neither livelocks by being silently exempt from the backstop nor pins
+# the counter forever the way a naive "always hold this kind" rule would.
+print("stop-gate.py: closed-descendant attention entity joins the stall counters (D1)")
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-021", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-022", status="complete", deps="[T-021]", owns="[b.py]")
+# T-021 holds a fresh in-flight marker so ITS OWN counter stays pinned at 1
+# throughout—isolating the assertion to T-022's counter alone, the same
+# sibling-isolation technique the #111/#163 fixtures above use.
+write_in_flight_marker(proj, "T-021", "worker-standard")
+for _ in range(2):
+    rc, out, err = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("closed-descendant entity: no spurious STALLED after two firings",
+      rc == 2 and not stalled_text(proj), f"rc={rc}")
+# A third unread firing DOES trip it—same three-strike schedule as any
+# neglected open task—while the mid-flight sibling stays out of the report.
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text3 = stalled_text(proj)
+check("closed-descendant entity: strike three reaches STALLED.md",
+      rc3 == 2 and "T-022" in text3, f"rc3={rc3} text={text3!r}")
+check("closed-descendant entity: the mid-flight sibling isn't swept in",
+      "T-021" not in text3, text3)
+# Reporting T-022 parks it, same as any other entity—the gate stops holding
+# the turn open for it specifically, and (since T-021's own rework advice was
+# never touched here either) T-021 keeps the turn open independently. This
+# is the "reopened or non-open attention task participates sanely" half: a
+# parked closed-attention entity must not wedge the gate into blocking with
+# nothing left that could ever change it.
+write_task(proj, "T-021", status="complete", deps="[]", owns="[a.py]", retries=1)
+rc4, _, err4 = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("parking a closed-descendant entity lets the turn end once nothing "
+      "else is open (T-021 completed, T-022 stays parked)",
+      rc4 == 0, f"rc4={rc4} err={err4}")
 
 # The issue's own repro, inverted into an expectation: the stuck sibling
 # reaches STALLED.md on the ordinary three-strike schedule, the mid-flight
@@ -1406,6 +1522,167 @@ rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-deterministic", "prompt": "Task-ID: T-003"}}, proj)
 check("cites clauses, no check_method → checker blocked too",
       rc == 2 and "check_method is empty" in err, f"rc={rc} err={err}")
+
+# --------------------------------- dispatch-guard: dep gate (#135, worker path)
+# A worker dispatch used to ignore `deps` entirely—dispatch-guard checked
+# status/executor/model/retries but never whether a dep had actually produced
+# anything. This is net-new enforcement: a dep now has to be `complete`, or at
+# `needs-check`/`checking` with all of ITS OWN deps `complete` (one level of
+# speculation), before a worker on the task downstream of it is legal.
+print("dispatch-guard.py: dep gate (#135)")
+proj_dep = fresh_proj()
+audits_pass(proj_dep)
+seed_ready_set(proj_dep)
+
+# H1: dep at pending → blocked, naming the dep and its status.
+write_task(proj_dep, "T-101", status="pending", deps="[]")
+write_task(proj_dep, "T-102", status="assigned", deps="[T-101]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-102"}}, proj_dep)
+check("H1: dep at pending → exit 2", rc == 2, f"rc={rc} err={err}")
+check("H1: message names the dep and its status", "T-101 (pending)" in err, err)
+
+# H2: dep at needs-check with no deps of its own → satisfies, exit 0.
+write_task(proj_dep, "T-103", status="needs-check", deps="[]")
+write_task(proj_dep, "T-104", status="assigned", deps="[T-103]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-104"}}, proj_dep)
+check("H2: dep needs-check, its own deps empty → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# H2b: the same permission, but earned rather than vacuous. T-117's own dep
+# resolved, so it satisfies clause 2 for real. Without this the gate's
+# grandparent read is untested: every other fixture gives the dep an empty
+# `deps`, and on those the read is a no-op. Delete it and H3 still passes for
+# the wrong reason—an unread grandparent is an absent one, which fails the
+# predicate the same way an unverified one does—so the only thing that
+# catches the loss is a chain the gate is supposed to ALLOW.
+write_task(proj_dep, "T-116", status="complete", deps="[]")
+write_task(proj_dep, "T-117", status="needs-check", deps="[T-116]")
+write_task(proj_dep, "T-118", status="assigned", deps="[T-117]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                        "prompt": "Task-ID: T-118"}}, proj_dep)
+check("H2b: dep needs-check whose own dep is complete → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+# H3: dep at needs-check, but ITS dep is only needs-check too (depth 2) →
+# the speculation doesn't reach two levels deep, so this stays blocked.
+write_task(proj_dep, "T-106", status="needs-check", deps="[]")
+write_task(proj_dep, "T-105", status="needs-check", deps="[T-106]")
+write_task(proj_dep, "T-107", status="assigned", deps="[T-105]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-107"}}, proj_dep)
+check("H3: dep's own dep unresolved at depth 2 → exit 2", rc == 2, f"rc={rc} err={err}")
+
+# H4: dep at rework, and separately at disputed → both block. Neither status
+# is a legitimate build input regardless of what its own deps look like.
+write_task(proj_dep, "T-108", status="rework", deps="[]")
+write_task(proj_dep, "T-109", status="assigned", deps="[T-108]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-109"}}, proj_dep)
+check("H4: dep at rework → exit 2", rc == 2 and "T-108 (rework)" in err, err)
+
+write_task(proj_dep, "T-110", status="disputed", deps="[]")
+write_task(proj_dep, "T-111", status="assigned", deps="[T-110]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-111"}}, proj_dep)
+check("H4: dep at disputed → exit 2", rc == 2 and "T-110 (disputed)" in err, err)
+
+# H5: dep at complete → exit 0 (the ordinary, non-speculative case still works).
+write_task(proj_dep, "T-112", status="complete", deps="[]")
+write_task(proj_dep, "T-113", status="assigned", deps="[T-112]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-113"}}, proj_dep)
+check("H5: dep at complete → exit 0 (regression guard)", rc == 0, f"rc={rc} err={err}")
+
+# H6: ready-set.py absent (a copied-in kit that predates #135)—allow through,
+# not a block, per the same payload-freeze posture _job_spec_block takes.
+# Uses a proj with no seed_ready_set(), so .agent-guild/scripts/ready-set.py
+# genuinely doesn't exist.
+proj_nogate = fresh_proj()
+audits_pass(proj_nogate)
+write_task(proj_nogate, "T-201", status="pending")
+write_task(proj_nogate, "T-202", status="assigned", deps="[T-201]")
+gate_gaps_dep = os.path.join(proj_nogate, ".agent-guild", "state", "log", "gate-gaps.log")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-202"}}, proj_nogate)
+check("H6: ready-set.py missing → exit 0 (allow through)", rc == 0, f"rc={rc} err={err}")
+check("H6: gate-gaps.log records the gap",
+      os.path.exists(gate_gaps_dep) and "T-202" in open(gate_gaps_dep).read(),
+      open(gate_gaps_dep).read() if os.path.exists(gate_gaps_dep) else "gate-gaps.log missing")
+check("H6: stderr carries a note", "ready-set.py" in err and "T-202" in err, err)
+
+# H7: a dep task FILE that exists but is unparseable to ready-set.py's
+# stricter frontmatter parser (no closing '---')—the orchestrator's data to
+# fix, not an infrastructure gap, so this BLOCKS rather than allowing
+# through, the opposite posture from H6.
+bad_dep_path = os.path.join(proj_dep, ".agent-guild", "state", "tasks", "T-114.md")
+with open(bad_dep_path, "w", encoding="utf-8") as f:
+    f.write(
+        "---\nid: T-114\nstatus: pending\nretries: 0\ndeps: []\n"
+        "executor: worker-standard\nchecker: checker-deterministic\n"
+    )
+write_task(proj_dep, "T-115", status="assigned", deps="[T-114]")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard", "prompt": "Task-ID: T-115"}}, proj_dep)
+check("H7: unparseable dep file → exit 2", rc == 2, f"rc={rc} err={err}")
+check("H7: message names the dep file", "T-114.md" in err, err)
+
+# H8: the gate is worker-path only—a checker dispatch on a `checking` task
+# with the same unmet dep must not be touched by it.
+write_task(proj_dep, "T-116", status="pending")
+write_task(proj_dep, "T-117", status="checking", deps="[T-116]", checker="checker-deterministic")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "checker-deterministic", "prompt": "Task-ID: T-117"}}, proj_dep)
+check("H8: checker dispatch ignores the dep gate → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# H9: ready-set.py loads cleanly but is missing `unmet_deps`—the real
+# version-skew shape a project's copied-in scripts/ predating #135 has.
+# Confirmed against main's ACTUAL pre-#135 ready-set.py (via `git show
+# main:.agent-guild/scripts/ready-set.py`): it already defines read_task and
+# TaskParseError (those predate #135), but unmet_deps doesn't exist at all
+# there—dispatch-guard's own dep gate is what's new. Reproduced directly
+# before this fix landed: dispatch-guard raised AttributeError calling
+# module.unmet_deps, and _lib.run's fail-loud contract turned that into a
+# hard "HOOK ERROR" block of the worker, with nothing written to
+# gate-gaps.log—worse than the fail-open a merely-missing module already
+# gets, and silent besides.
+#
+# Simulated here the same way the stop-gate "no `kind`" version-skew fixture
+# does it (see that section's own comment): seed the REAL current
+# ready-set.py via the existing seed_ready_set() helper, then strip out just
+# the one export that postdates #135 by renaming its def line, so every
+# other call the gate makes (read_task, TaskParseError) still runs the real
+# implementation and only the missing-attribute shape is synthetic.
+proj_skew = fresh_proj()
+audits_pass(proj_skew)
+seed_ready_set(proj_skew)
+skew_path = os.path.join(proj_skew, ".agent-guild", "scripts", "ready-set.py")
+with open(skew_path, encoding="utf-8") as f:
+    skewed = f.read().replace(
+        "def unmet_deps(task, tasks):", "def _unmet_deps_removed(task, tasks):"
+    )
+with open(skew_path, "w", encoding="utf-8") as f:
+    f.write(skewed)
+check("H9 fixture: unmet_deps was actually renamed out of the copied file",
+      "def unmet_deps(" not in skewed and "_unmet_deps_removed" in skewed, skewed[:200])
+
+write_task(proj_skew, "T-301", status="pending", deps="[]")
+write_task(proj_skew, "T-302", status="assigned", deps="[T-301]")
+gate_gaps_skew = os.path.join(proj_skew, ".agent-guild", "state", "log", "gate-gaps.log")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                        "prompt": "Task-ID: T-302"}}, proj_skew)
+check("H9: version-skewed ready-set.py (missing unmet_deps) → exit 0 (allow through)",
+      rc == 0, f"rc={rc} err={err}")
+check("H9: no HOOK ERROR crash (the AttributeError this fix closes)",
+      "HOOK ERROR" not in err, err)
+gate_gaps_text = open(gate_gaps_skew).read() if os.path.exists(gate_gaps_skew) else ""
+check("H9: gate-gaps.log records the gap, naming version skew",
+      "T-302" in gate_gaps_text and "skew" in gate_gaps_text.lower(),
+      gate_gaps_text or "gate-gaps.log missing")
+check("H9: stderr carries a note naming version skew",
+      "T-302" in err and "skew" in err.lower(), err)
 
 # ------------------------------------------- dispatch-guard: DEC-audit gate
 # Issue #161: the decomposition audit used to be a memo. It is the only check

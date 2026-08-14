@@ -78,14 +78,22 @@ Statuses and who moves them:
 | `assigned`    | worker dispatched (or re-dispatched for rework) | you, just before dispatch |
 | `needs-check` | worker done, artifacts listed                   | the worker                |
 | `checking`    | checker dispatched                              | you                       |
-| `rework`      | FAIL verdict, diagnosis attached                | you                       |
+| `rework`      | FAIL verdict, diagnosis attached—or a dep's FAIL invalidated this task | you |
 | `disputed`    | worker filed a dispute                          | the worker                |
 | `complete`    | PASS verdict accepted                           | you                       |
 | `abandoned`   | cancelled, with a logged reason                 | you                       |
 
+`abandoned` is the end of the line. `complete` is too, with one exception: invalidation can send a completed task back to `rework`, because work resting on a dependency that later failed has to be rebuilt whether or not its own check had already passed.
+
+Accept a PASS when it lands. Holding a task at `checking` to keep the exception rare would cost more than it saves: a dep only satisfies clause 2 when its own deps are `complete`, so a task's completion is what releases its grandchildren, and sitting on it stalls the chain this whole mechanism exists to unstall. Reopening a completed task is the cheaper end of that trade, and you won't miss the moment: `ready-set` raises it as an `attention` entry, and the stop gate holds your turn open until you act on it.
+
 The loop:
 
-1. Dispatch a **wave**, not a task. `.agent-guild/scripts/ready-set.py` computes which tasks can go at once: every dep complete, no `owns` collision with a peer or with anything already running, retry budget left. Two tasks ride together only if both declare `owns` and both declarations are well formed; a task that declares none, or whose `owns` carries a malformed entry, goes alone, since an unreadable claim is an unknown one and the wave will not group what it cannot check. The stop gate runs it for you and prints the wave, or run it yourself. Move each member to `assigned` with `.agent-guild/scripts/task-status.py T-NNN assigned`, then dispatch **every member of that wave in one message, as parallel Task calls**. One per turn is the serialization the wave exists to remove.
+1. Dispatch a **wave**, not a task. `.agent-guild/scripts/ready-set.py` computes which tasks can go at once: every dep ready to build on, no `owns` collision with a peer or with anything already running, retry budget left. Two tasks ride together only if both declare `owns` and both declarations are well formed; a task that declares none, or whose `owns` carries a malformed entry, goes alone, since an unreadable claim is an unknown one and the wave will not group what it cannot check. The stop gate runs it for you and prints the wave, or run it yourself. Move each member to `assigned` with `.agent-guild/scripts/task-status.py T-NNN assigned`, then dispatch **every member of that wave in one message, as parallel Task calls**. One per turn is the serialization the wave exists to remove.
+
+   A dep is ready to build on once its worker has returned: `complete`, or sitting at `needs-check`/`checking` with every one of its own deps complete. Its check still has to pass before it goes `complete`. The check just stops gating the next dispatch, because what a dependent needs from its dependency is the artifact, and the artifact exists as soon as the worker puts it down.
+
+   That second condition is what caps speculation at one unverified level, since a dep that is itself speculating is not something you can build on. What it bounds is how much is in the air at once, not how far a FAIL reaches: rebuilding an invalidated task changes its artifact, so whatever built on *that* is invalidated in turn. The cascade is real and it runs the length of the chain. What the cap buys is that it arrives one level per turn, each level flagged as the one above it moves, rather than a whole subtree going stale at once with nothing to say which parts. `ready-set.py` marks a speculative wave member with `speculative_on`, naming the unverified deps it is betting on, and raises an `attention` entry when a task that already built is sitting on a dep whose artifact has changed underneath it.
 
    Drive it from the session, not from a workflow script. Guild hooks do not fire for workflow-spawned agents, so a `Workflow`-driven Phase 2 would skip `Task-ID` identity, the tier match, and the in-flight markers, and every gate would report green by never running. Measured on #134; the comment there carries the reproduction.
 
@@ -130,6 +138,10 @@ A FAIL is not "try again." It's "here is precisely what's wrong."
 4. Above `opus`, escalate to `fable` for one final dispatch. If fable's budget is also spent, stop dispatching: enrich the spec and re-decompose, or surface the task to the user. There is no rung above fable.
 
 The ladder is Claude-only for now. Those rungs are Claude model names, and a Codex host has no model to put behind them, so a task that escalates there records the bump and then can't dispatch at all: the gate refuses the stale tier, and the host refuses the new one. On Codex, treat a spent budget at the executor's own tier as step 4's ending—enrich the spec and re-decompose, or hand the task to the user—rather than climbing.
+
+Invalidation runs steps 1 and 2 for a different reason. When a dep fails its check after something downstream already built on its artifact, the descendant's work rests on something about to change, and the only real difference from an ordinary rework is where the diagnosis comes from. Write an invalidation note into the descendant's `## Rework diagnosis` naming the dep, its FAIL, and what that means for the artifact. Then move the task to `rework`, which is legal here from `needs-check`, `checking`, or `complete`. Set it back to `assigned`, increment `retries`, and re-dispatch the same executor on the same model. `ready-set.py` raises the `attention` entry that tells you this is owed, so you don't have to go looking for it.
+
+The increment is the load-bearing part. Verdict stems are round-scoped, `T-NNN-<tier>-r<retries>`, so bumping `retries` is what orphans the descendant's now-stale verdict. Leave it alone and the stop gate finds the old PASS still sitting at the current stem and tells you to act on it. The bump spends budget the worker did nothing to deserve, and that trade is deliberate: the alternative is new machinery for a rare corner, and the worst case is an escalation that hands a stronger model a task with a written account of exactly what to rebuild. The re-dispatch can't jump the gun either way: `dispatch-guard` refuses a worker whose deps aren't ready to build on, so it waits until the dep's own rework has returned. A descendant whose worker is still in flight when the dep fails is not a special case. Let it return, then invalidate it like any other.
 
 ## Disputes
 

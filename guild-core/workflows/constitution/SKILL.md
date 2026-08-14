@@ -16,6 +16,14 @@ Work through these steps in order. The output is `.agent-guild/state/constitutio
 
 Both paths end the same way: derive the job's **weight** before you draft a single clause. Ask the discriminator from the weight table under `## Job weight` in `CLAUDE.md`—does verification need an instrument built, or one that already exists invoked?—then adjust upward if the change runs unattended. Where the signals are ambiguous, take the heavier weight. State the result to the user in one line alongside the candidate quality bars ("This reads light: every acceptance check runs through the test command that's already there"), so it costs a word to correct and nothing to leave alone. Record it in the constitution's weight line, which is where the auditor reads it for the clause ceiling. If the user corrects your derivation, keep both in that line: the correction is the most useful thing the retrospective can report back.
 
+Three fixtures worth checking a derivation against:
+
+| Fixture | Signal | Weight |
+| --- | --- | --- |
+| kendrick/dotfiles#19 | verified through the existing `bats tests/` suite, but the guard runs unattended via chezmoi's `run_onchange` | standard |
+| kendrick/dotfiles#21 | verifying the fix means building a mutation harness—inverting each converted assertion and confirming it goes red—which doesn't exist yet | deep |
+| conflicting signals | every acceptance check runs through a command that already exists, but the job carries unattended blast radius, so the heavier weight wins | standard |
+
 Done when you can state the job's quality bars in the user's own terms, not generic ones, and the job weight is stated and confirmed.
 
 ## 2. Draft clauses
@@ -30,7 +38,7 @@ The CON-audit runs your checks rather than reading them, and for the ones whose 
 
 State each clause so a violation is recognizable. "Every page's `<h1>` matches the nav label linking to it" is a clause. "The site feels welcoming" is not.
 
-Keep the clause count inside the recorded weight's ceiling. Going over means one of two things: the clauses are over-built, or the weight was derived too light. Fix whichever is actually true and note it in the constitution, rather than cutting a clause the job needs to make a number work. Nothing enforces the ceiling mechanically today; the CON-audit reports an over-ceiling count and whether it was explained, and that report is the only thing that catches one.
+Keep the clause count inside the recorded weight's ceiling. Going over means one of two things: the clauses are over-built, or the weight was derived too light. Fix whichever is actually true, or—if the job genuinely needs the extra clause—record why in a `**Ceiling overrun**:` line directly beneath the weight line, rather than cutting a clause the job needs to make a number work. `check-job-spec.py`'s R18 blocks the auditor dispatch on an over-ceiling count that carries no such line, so an unrecorded overrun never reaches audit.
 
 When a clause changes a shared contract—a schema under `.agent-guild/schemas/`, a template shape, a hook-visible file format—its check must run the full consumer suites, not just the contract's own: today that means `python3 .agent-guild/hooks/test_hooks.py` alongside the contract's own tests. Falsify it in step 3 by asking "who else parses this shape?"—the #43 job scoped a schema's own tests but missed `test_hooks.py`'s verdict-fixture helper as a quiet consumer, shipping the hook suite red until the next job's worker hit the broken baseline.
 
@@ -68,6 +76,6 @@ Point every clause that guards protected content at `.agent-guild/scripts/check-
 
 Dispatch the **auditor** with `Audit-ID: CON-audit`. Dispatch it rather than asking whether to: the audit is what verifies the constitution, so putting that choice to the user hands them the auditor's job. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker, so the constitution is verified before anything is built against it. If the audit fails, revise the flagged clauses and re-submit; do not route around it.
 
-One exception, and only this one. When the clause count exceeds the recorded weight's ceiling, either the clauses are over-built or the weight was derived too light, and that call belongs to the user rather than the auditor. Put it to them as a single question naming both numbers—"9 clauses against standard's ceiling of 8: re-weight to deep, or cut one?"—and dispatch on the answer. Everything else you are unsure about goes to the auditor, which is what it is for. Nothing counts clauses against the ceiling today, so this rests on your own reading of step 2; #160 is the work that moves it into the linter.
+One exception, and only this one. When the clause count exceeds the recorded weight's ceiling, either the clauses are over-built or the weight was derived too light, and that call belongs to the user rather than the auditor. Put it to them as a single question naming the count against the ceiling—"9 clauses against standard's ceiling: re-weight to deep, cut one, or keep it and record why?"—and act on the answer. Re-weighting or cutting brings the count back under budget on its own; keeping it means writing the reason into the constitution's `**Ceiling overrun**:` line, since `check-job-spec.py`'s R18 blocks the auditor dispatch on an over-ceiling count that carries no such line. Everything else you are unsure about goes to the auditor, which is what it is for.
 
 A PASS covers the text that was audited and nothing else. Edit a clause afterward and the gate closes again until another audit round passes on the current document, so batch late revisions into one round rather than trickling them in after the verdict.

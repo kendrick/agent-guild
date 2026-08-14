@@ -24,9 +24,11 @@ Codex agents whose generated `sandbox_mode` is `read-only` never persist verdict
 
 ## Constitution Weight Line
 
-Source: `.agent-guild/templates/constitution.md`. A `**Job weight**: <light | standard | deep>[, corrected from <derived weight> by the user], <one-line reason>` line sits between the title and the template's comment block, written by the `constitution` skill in Phase 0 (#123). It sets one budget, the clause ceiling: 5 for light, 8 for standard, none for deep. The auditor reads it for that ceiling and reports an unexplained overrun or a missing line; nothing else reads it, and no script parses it at all. The optional middle segment keeps the derived weight when the user overrides it, because the correction is the most useful thing the retrospective can report back about the derivation.
+Source: `.agent-guild/templates/constitution.md`. A `**Job weight**: <light | standard | deep>[, corrected from <derived weight> by the user], <one-line reason>` line sits between the title and the template's comment block, written by the `constitution` skill in Phase 0 (#123). An optional `**Ceiling overrun**: <reason>` line can follow directly beneath it: it records why the job legitimately needs more clauses than its weight allows. An empty reason counts as absent.
 
-Nothing below `## Clauses` is safe to add to lightly: `check-job-spec.parse_constitution` ends a clause block at the next `### C-N:` heading rather than at `##`, so `## Protected content` and `## Non-goals` are scanned as the last clause's prose and a citation defect in them is reported against that clause. The weight line sits *above* `## Clauses` and is unaffected. Tracked in #160.
+`check-job-spec.py` parses both lines (#160). R17 fails the linter, and blocks the auditor dispatch, on a missing weight line, a line still holding the template placeholder, or an unknown weight word. R18 counts the clauses against `CLAUSE_CEILINGS`—the ceilings live in that one constant, welded by test to the `## Job weight` table in `.agent-guild/CLAUDE.md`—and fails an over-ceiling count with no `**Ceiling overrun**:` line beneath it. A recorded overrun passes: the ceiling stays a budget, not a gate.
+
+The clause-block terminator bug is fixed too: `check-job-spec.parse_constitution` now ends a block at the next `##`/`###` heading, matching `compose-brief.extract_clause`, instead of running to end of file. `## Protected content` and `## Non-goals` are scanned as their own labeled regions, so a citation defect there is reported against `constitution.md (## Non-goals)` rather than the last clause's id.
 
 ## Task Frontmatter
 

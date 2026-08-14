@@ -1596,5 +1596,48 @@ else:
             f"worked_rows={worked_rows}",
         )
 
+# --------------------------------------------------------- R19: baseline value (#182)
+print("R19: baseline value (#182)")
+
+
+def baseline_constitution(value):
+    """weighted_constitution with a `- **baseline**:` field on C-1 only—the
+    field is optional, so C-2 staying bare is itself part of every case."""
+    return weighted_constitution("light, one artifact", 2).replace(
+        "- **failing example**: clause 1's standard is violated.",
+        f"- **baseline**: {value}\n- **failing example**: clause 1's standard is violated.",
+    )
+
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    doc = baseline_constitution("amber")
+    # The mutate() discipline: prove the builder actually planted the field
+    # before asserting anything about how the linter reads it.
+    check("R19 fixture: baseline field present", "- **baseline**: amber" in doc, doc[:200])
+    write_lines(os.path.join(state, "constitution.md"), doc.splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R19 baseline 'amber': exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R19 baseline 'amber': R19 named", rule_hit(err, "R19"), f"err={err!r}")
+    check("R19 baseline 'amber': clause C-1 named", "C-1" in err, f"err={err!r}")
+    check("R19 baseline 'amber': the bad value named", "amber" in err, f"err={err!r}")
+    check("R19 baseline 'amber': no traceback", "Traceback" not in err, f"err={err!r}")
+
+for good in ("red", "green"):
+    with tempfile.TemporaryDirectory() as d:
+        state = os.path.join(d, "state")
+        os.makedirs(os.path.join(state, "tasks"))
+        write_lines(os.path.join(state, "constitution.md"), baseline_constitution(good).splitlines())
+        rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+        check(f"R19 baseline '{good}': exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("light, one artifact", 2).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R19 no baseline declared anywhere: exit 0", rc == 0, f"rc={rc} err={err}")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

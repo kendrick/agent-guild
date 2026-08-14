@@ -176,6 +176,28 @@ def _classify(subject):
     return _KNOWN_TYPES.get(type_, "Other"), scope, rest
 
 
+def _resolve_ssh_host(host):
+    """The real hostname behind an SSH config alias, or `host` unchanged.
+
+    A remote cloned through an alias (`git@github_personal:owner/repo.git`)
+    carries the alias, not a domain, and an alias is not reachable over the
+    web -- it produced a whole 0.6.0 section of dead `https://github_personal/...`
+    links. `ssh -G` is the only thing that knows the mapping, since it reads
+    the same config ssh itself would."""
+    try:
+        out = subprocess.run(
+            ["ssh", "-G", host], capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return host
+    if out.returncode != 0:
+        return host
+    for line in out.stdout.splitlines():
+        if line.startswith("hostname "):
+            return line.split(None, 1)[1].strip() or host
+    return host
+
+
 def _repo_web_url():
     """Derive the repo's https base URL from its origin remote, normalizing
     the SSH form (`git@host:owner/repo.git`) to https -- GitHub renders an
@@ -184,7 +206,7 @@ def _repo_web_url():
     url = _git(["remote", "get-url", "origin"]).strip()
     m = re.match(r"^git@([^:]+):(.+?)(?:\.git)?$", url)
     if m:
-        return f"https://{m.group(1)}/{m.group(2)}"
+        return f"https://{_resolve_ssh_host(m.group(1))}/{m.group(2)}"
     if url.startswith(("https://", "http://")):
         return url[:-4] if url.endswith(".git") else url
     raise ChangelogError(f"origin remote URL not recognized: {url!r}")

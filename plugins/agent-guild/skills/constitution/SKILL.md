@@ -71,6 +71,8 @@ Point every clause that guards protected content at `.agent-guild/scripts/check-
 
 ## 5. Send it to audit
 
-Tell the orchestrator to dispatch the **auditor** with `Audit-ID: CON-audit`. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker, so the constitution is verified before anything is built against it. If the audit fails, revise the flagged clauses and re-submit; do not route around it.
+Dispatch the **auditor** with `Audit-ID: CON-audit`. Dispatch it rather than asking whether to: the audit is what verifies the constitution, so putting that choice to the user hands them the auditor's job. Until a CON-audit PASS verdict exists, `dispatch-guard` blocks every worker, so the constitution is verified before anything is built against it. If the audit fails, revise the flagged clauses and re-submit; do not route around it.
+
+One exception, and only this one. When the clause count exceeds the recorded weight's ceiling, either the clauses are over-built or the weight was derived too light, and that call belongs to the user rather than the auditor. Put it to them as a single question naming both numbers—"9 clauses against standard's ceiling of 8: re-weight to deep, or cut one?"—and dispatch on the answer. Everything else you are unsure about goes to the auditor, which is what it is for. Nothing counts clauses against the ceiling today, so this rests on your own reading of step 2; #160 is the work that moves it into the linter.
 
 A PASS covers the text that was audited and nothing else. Edit a clause afterward and the gate closes again until another audit round passes on the current document, so batch late revisions into one round rather than trickling them in after the verdict.

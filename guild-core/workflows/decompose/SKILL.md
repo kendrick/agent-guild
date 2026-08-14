@@ -38,4 +38,4 @@ Done when every task names an executor, a checker, a check method covering each 
 
 ## 4. Send it to audit
 
-Tell the orchestrator to dispatch the **auditor** with `Audit-ID: DEC-audit`. The auditor confirms the tasks cover the spec, the assignments follow the routing table, and `deps` form a DAG. Until that verdict passes, `dispatch-guard` blocks every worker, and a later FAIL closes the gate an earlier PASS opened. Fix what it flags and re-submit.
+Dispatch the **auditor** with `Audit-ID: DEC-audit`. Dispatch it rather than asking whether to; nothing here is the user's call, and Phase 1 carries no equivalent of Phase 0's clause-ceiling exception. The auditor confirms the tasks cover the spec, the assignments follow the routing table, and `deps` form a DAG. Until that verdict passes, `dispatch-guard` blocks every worker, and a later FAIL closes the gate an earlier PASS opened. Fix what it flags and re-submit.

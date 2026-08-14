@@ -485,7 +485,7 @@ def main(data):
             return _lib.block(
                 f"Auditor finished without writing a verdict for {ident}. Write "
                 f".agent-guild/state/verdicts/{ident}-r0.md (or the next round) with a "
-                "verdict of PASS/FAIL/ERROR before finishing."
+                "verdict of PASS or FAIL before finishing."
             )
         ok, reason = _verdict_ok(vpath)
         if not ok:

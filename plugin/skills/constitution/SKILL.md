@@ -31,6 +31,8 @@ Turn each quality bar into a clause in `.agent-guild/state/constitution.md`. Per
 
 Those two are the whole list, and `check-job-spec.py` holds you to it before an auditor ever reads the file. A shell one-liner is not a third form: hand it to `.agent-guild/scripts/check-build.sh '<cmd>'` and it stays the first. The same script compares a clause's counts against its lists and cannot compare one against prose, so when a clause names N things, list them instead of spreading them across a sentence—#117 spent an audit round on a check that read "five files" above six of them. Run `python3 .agent-guild/scripts/check-job-spec.py --audit-id CON-audit` before you dispatch the auditor, since `dispatch-guard` refuses that dispatch until it passes.
 
+The CON-audit runs your checks rather than reading them, and for the ones whose logic this job wrote—an inline `check-build.sh` pipeline, or a self-test in a script the job adds—it first builds a reference implementation from what your clauses cite. A contract those clauses don't determine is a finding against the constitution, so write them so a stranger could build the same thing from the clause and the documents it names. A check handing off to a script or suite the repo already has owes no such reconstruction. Name a job-added script through `check-build.sh` as well, since R5 requires a directly-named script to exist before the audit is dispatched.
+
 State each clause so a violation is recognizable. "Every page's `<h1>` matches the nav label linking to it" is a clause. "The site feels welcoming" is not.
 
 Keep the clause count inside the recorded weight's ceiling. Going over means one of two things: the clauses are over-built, or the weight was derived too light. Fix whichever is actually true and note it in the constitution, rather than cutting a clause the job needs to make a number work. Nothing enforces the ceiling mechanically today; the CON-audit reports an over-ceiling count and whether it was explained, and that report is the only thing that catches one.
@@ -43,7 +45,19 @@ Done when every quality bar from the interview is a clause with a named check.
 
 For every clause, write its failing example: a specific artifact that would violate it. This is the load-bearing step. If you cannot describe what failure looks like, the clause is unfalsifiable—rewrite it into something checkable or cut it. An unfalsifiable clause survives audit only by luck and then lets any work through.
 
-Done when every clause has a concrete failing example and none is vague.
+Any check that mutates its input asserts the mutation landed before it asserts anything else. A mutation that silently failed makes every assertion after it vacuous, since the check is then reporting success against a run that did nothing. The `kendrick/skills#27` run is why this is a rule rather than a habit: a fixture was rewritten with `open(p, "w").write(re.sub(pattern, repl, open(p).read()))`, and Python opens for writing before it evaluates that argument, so the file truncated to zero bytes before the nested read ever ran. The fixture came out empty, empty files classified as v1, v1 records were skipped by the artifact under test, and every downstream assertion passed—including the one asserting `order-independent`, the exact string that clause existed to produce. The guard that fixes it runs first, asserting the precondition before anything else:
+
+```python
+raw = path.read_text()
+assert raw, f"{path} is empty after the rewrite"
+fixture = json.loads(raw)
+assert fixture["version"] == "v2", f"{path} is {fixture['version']}, not v2"
+assert "last_confirmed" not in fixture
+```
+
+On the truncated file, that fails loudly instead of passing over it. Four of the six occurrences on that run were in check code written specifically to catch this failure mode, which is why it belongs in the document rather than in somebody's memory—knowing about the trap did not prevent falling into it.
+
+Done when every clause has a concrete failing example, none is vague, and every check that mutates its input asserts the mutation before anything else.
 
 ## 4. Manifest protected words
 

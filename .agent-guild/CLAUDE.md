@@ -85,7 +85,7 @@ Statuses and who moves them:
 
 `abandoned` is the end of the line. `complete` is too, with one exception: invalidation can send a completed task back to `rework`, because work resting on a dependency that later failed has to be rebuilt whether or not its own check had already passed.
 
-Keep that exception rare by not setting a task `complete` while any of its deps is still unverified. Waiting costs nothing here—completion was never on the critical path, dispatch was. The stop gate will tell you a landed PASS is ready to act on without knowing whether the deps have cleared, so that call is yours: hold the task at `checking` until they do.
+Accept a PASS when it lands. Holding a task at `checking` to keep the exception rare would cost more than it saves: a dep only satisfies clause 2 when its own deps are `complete`, so a task's completion is what releases its grandchildren, and sitting on it stalls the chain this whole mechanism exists to unstall. Reopening a completed task is the cheaper end of that trade, and you won't miss the moment: `ready-set` raises it as an `attention` entry, and the stop gate holds your turn open until you act on it.
 
 The loop:
 
@@ -93,7 +93,7 @@ The loop:
 
    A dep is ready to build on once its worker has returned: `complete`, or sitting at `needs-check`/`checking` with every one of its own deps complete. Its check still has to pass before it goes `complete`. The check just stops gating the next dispatch, because what a dependent needs from its dependency is the artifact, and the artifact exists as soon as the worker puts it down.
 
-   That second condition is what caps speculation at one unverified level, since a dep that is itself speculating is not something you can build on. So a FAIL's blast radius stays one edge: what has to be rebuilt is whatever sat directly downstream of it, and nothing past that. `ready-set.py` marks a speculative wave member with `speculative_on`, naming the unverified deps it is betting on, and raises an `attention` entry when a task that already built is sitting on a dep that has since gone backwards.
+   That second condition is what caps speculation at one unverified level, since a dep that is itself speculating is not something you can build on. What it bounds is how much is in the air at once, not how far a FAIL reaches: rebuilding an invalidated task changes its artifact, so whatever built on *that* is invalidated in turn. The cascade is real and it runs the length of the chain. What the cap buys is that it arrives one level per turn, each level flagged as the one above it moves, rather than a whole subtree going stale at once with nothing to say which parts. `ready-set.py` marks a speculative wave member with `speculative_on`, naming the unverified deps it is betting on, and raises an `attention` entry when a task that already built is sitting on a dep whose artifact has changed underneath it.
 
    Drive it from the session, not from a workflow script. Guild hooks do not fire for workflow-spawned agents, so a `Workflow`-driven Phase 2 would skip `Task-ID` identity, the tier match, and the in-flight markers, and every gate would report green by never running. Measured on #134; the comment there carries the reproduction.
 

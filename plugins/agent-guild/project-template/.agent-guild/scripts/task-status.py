@@ -53,13 +53,14 @@ at rework the usual way:
     checker ran. Sending it back now instead of through `checking` is the
     point: nothing is learned by spending a checker on an artifact already
     known to rest on something about to change.
-  - complete -> rework. The recovery hatch, and it should stay rare. The
-    contract asks you not to complete a task while any of its deps is still
-    unverified, which costs nothing—completion was never on the critical
-    path, dispatch was—and makes an invalidated `complete` task a sign the
-    rule was skipped. It's an edge rather than a refusal because a job that
-    can't be driven out of a wrong state is worse than one status that
-    reopens.
+  - complete -> rework. A task can pass its own check before the dep it
+    built on fails, and that work still has to be rebuilt. It's an edge
+    rather than a refusal because a job that can't be driven out of a wrong
+    state is worse than one status that reopens. Holding a task at
+    `checking` to avoid needing this edge was considered and rejected: a
+    dep only becomes buildable-on for a grandchild once it is `complete`,
+    so sitting on a landed PASS stalls the chain that speculation exists to
+    unstall.
 
 `complete` is therefore no longer terminal, though `abandoned` still is.
 A reopened task rejoins `open_tasks()` and the stop gate drives it, which

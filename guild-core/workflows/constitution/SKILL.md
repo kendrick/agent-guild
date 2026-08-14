@@ -50,6 +50,10 @@ Done when every quality bar from the interview is a clause with a named check.
 
 For every clause, write its failing example: a specific artifact that would violate it. This is the load-bearing step. If you cannot describe what failure looks like, the clause is unfalsifiable—rewrite it into something checkable or cut it. An unfalsifiable clause survives audit only by luck and then lets any work through.
 
+Then hold the clause's text and its check against one hypothetical artifact and ask whether the two can disagree about it. Both halves can be specific and still specify different things, and that failure is nastier than vagueness because it survives a read-through—each half looks right alone. On `kendrick/skills#17`, C-2's text required its parts "before the next scenario heading" while its check extracted "the text between heading N and the next heading of any level"; those agree only for a scenario with no subheadings, so a worker who organized one under `#### Prompt` had the pass-condition table sliced out of the extract, and a blocker clause failed correct work with no tiebreak to appeal to. Four clauses on that run carried the shape, and the repair was the same every time: where the target already ships an artifact that decides the question, cite it instead of paraphrasing it—`lint-scope.sh:218-230` decided C-9, `scope-decisions.md:21-25` decided C-7, and each clause got shorter and correct in the same edit.
+
+Two companion questions catch what that one does not. *Does this check command actually run?*—the same run's r0 named a hook suite its target repo has never had, a check no artifact could clear, so every task citing it would have come back `blocked`. *Have I watched this instrument do what I claim it does?*—a check method asserted a linter guards against invented tokens, when the linter's token pass reads only `schema: 2` files and so exits 0 over a v1 fixture on a token that does not exist. The audit now catches both mechanically, by executing every runnable check and breaking a variant against it, so what asking them here buys is the round the auditor would otherwise spend.
+
 Any check that mutates its input asserts the mutation landed before it asserts anything else. A mutation that silently failed makes every assertion after it vacuous, since the check is then reporting success against a run that did nothing. The `kendrick/skills#27` run is why this is a rule rather than a habit: a fixture was rewritten with `open(p, "w").write(re.sub(pattern, repl, open(p).read()))`, and Python opens for writing before it evaluates that argument, so the file truncated to zero bytes before the nested read ever ran. The fixture came out empty, empty files classified as v1, v1 records were skipped by the artifact under test, and every downstream assertion passed—including the one asserting `order-independent`, the exact string that clause existed to produce. The guard that fixes it runs first, asserting the precondition before anything else:
 
 ```python
@@ -62,7 +66,7 @@ assert "last_confirmed" not in fixture
 
 On the truncated file, that fails loudly instead of passing over it. Four of the six occurrences on that run were in check code written specifically to catch this failure mode, which is why it belongs in the document rather than in somebody's memory—knowing about the trap did not prevent falling into it.
 
-Done when every clause has a concrete failing example, none is vague, and every check that mutates its input asserts the mutation before anything else.
+Done when every clause has a concrete failing example, none is vague, no clause's text and check can disagree about the same artifact, and every check that mutates its input asserts the mutation before anything else.
 
 ## 4. Manifest protected words
 

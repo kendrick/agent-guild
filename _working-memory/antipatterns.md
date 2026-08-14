@@ -237,3 +237,25 @@ The second failure was a host boundary. A Codex auditor runs `sandbox_mode = "re
 Both dissolved by moving the write to dispatch. `dispatch-guard` fingerprints the constitution it is sending the auditor to read, against the round the auditor is about to write (`next_audit_round`, the same arithmetic the auditor's brief gives it). Only a commissioned round carries a digest, a prediction that misses lands on a stem no verdict occupies and keeps refusing, and dispatch is a moment both hosts share.
 
 **Don't suggest** recording a fact about an artifact at the moment an agent finishes, when what the gate needs is what the agent was given. **Don't suggest** any hook write on the subagent-return path without checking it against the read-only Codex roles, where the parent persists and the subagent cannot. Ask what a no-op agent turn does to the state you're writing: if an agent that did nothing can advance a gate, the gate is measuring the wrong thing.
+
+## 2026-08-13: Don't derive a durable signal from a status that changes inside one turn
+
+#135's invalidation needed to notice that a dependency had been reworked underneath something already built on it. The first design read the dependency's current status: outside `{complete, needs-check, checking}` meant "regressed, invalidate the descendant." The commit message argued statelessness as a feature, needing no timestamp and no new frontmatter.
+
+Adversarial review reproduced the hole in six lines. The retry ladder walks `rework` → `assigned` → re-dispatch and the worker returns the task to `needs-check`, and on a Claude host all of that completes inside a single orchestrator turn. The signal existed at `rework` and `assigned` and was gone by `needs-check`, and there is no `Stop` firing between a `task-status.py` call and a `Task` dispatch in the same message. The window could close without any gate ever seeing it, and the descendant's stale work would ship with the job reporting success.
+
+The fix is to record a monotonic fact rather than read a mutable one. `task-status.py` stamps `built_on` when a task moves to `assigned`, pairing each dep with that dep's retry count at that moment. Counts only increase, so the comparison stays true until the descendant is dispatched again, which is exactly when it should stop being true.
+
+Two details are load-bearing and both have their own tests. Stamping on `assigned` alone: re-stamping on any later transition would capture the dep's current count and erase the signal it exists to preserve, and that mutation left every suite green until a fixture pinned it. And `read_task` normalizes to a fixed key set, so the first version of the comparison silently did nothing because `built_on` was being dropped before it was ever read.
+
+**Don't suggest** deriving a durable condition from a task status, since every status in this system is transient by design and the orchestrator moves several per turn. **Don't suggest** "stateless, so no new field" as an argument for a signal that has to outlive the event that raised it. Ask how long the condition must remain observable and compare that against how long the thing you are reading stays put. Related: a helper that normalizes to a known key set will drop a field you just added, so verify a new frontmatter field end to end rather than unit-testing the parser that reads it.
+
+## 2026-08-13: Don't measure a latency change in units that can't express latency
+
+#169 pinned the wave path's headline claim by replaying the archived #117 graph, and #135's follow-up leg asserted that speculative dispatch would take fewer waves. It failed. Both rules produce the same six waves in the same order, because the number of dependency layers is a property of the graph and not of the rule deciding when a layer opens.
+
+The assertion was measuring the wrong quantity. Speculation does not remove dependency layers, it removes the waiting between them: under the old rule a dependent waits for `complete`, which is two orchestrator turns past its dependency's worker returning, and under the new one it goes on the next turn. Modelling the `checking` turn the contract's own loop describes and counting turns instead, the same six-wave composition costs 12 turns against 8.
+
+The failing assertion was the useful output. Had it been quietly weakened to pass, the branch would have shipped with a test that watched a number the feature does not move, and a later regression reinstating the wait would have changed nothing the suite could see.
+
+**Don't suggest** adjusting an assertion to match the result when the assertion fails; work out which quantity the change actually moves and measure that. **Don't suggest** a discrete step count as a proxy for wall clock without checking whether the harness models the waiting the change removes. A harness that advances one generation per call has no latency in it to save.

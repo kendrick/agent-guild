@@ -14,6 +14,36 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-13: A Dep Is Ready When Its Worker Returns, And Invalidation Latches On Retry Counts
+
+**Source:** #135, landed as #178
+
+**Context:** A dependent waited for its dependency's verdict when what it needed was the artifact, which exists the moment the worker returns. Remeasuring the #117 archive before writing any code killed most of the issue's own numbers: "40 of 133 subagent-minutes" does not reproduce (that run is 166 minutes), nor does "646 seconds to 374" (the measurable leg is 696). The 30% ratio does reproduce, at 29.6%. #167 had already taken most of the prize, couriers being 26.1 minutes of critical path, leaving roughly 8.5 to 15.5 depending on one placeholder timestamp. Both of the issue's stated dependencies were gone: #134 closed infeasible, #136 closed not-planned.
+
+**Decision, the predicate.** A dep satisfies if it is `complete`, or at `needs-check`/`checking` with every one of its OWN deps complete. That second clause derives the one-level cap with no new field: on a chain, nothing ever stands on two unverified artifacts at once, while the chain still collapses progressively. Diamonds need no special code, since the predicate is per-dep. The rule lives in `ready-set.py` as `dep_unmet_reason`/`unmet_deps` and `dispatch-guard` imports it by path, because the wave advises and the gate enforces and two derivations of one rule drift.
+
+**Decision, no snapshot.** The issue's `git stash create` rollback was cut with the user's agreement. Rework already re-dispatches over the existing tree with no restore, and an invalidated descendant is that same situation with a different source of diagnosis. The issue's own design also has an unsolved case: restoring a whole owned file from a pre-wave snapshot reverts the dependency's later writes to that file, which #133 makes legal precisely because the two are ordered.
+
+**The invalidation signal has to be latched, and this is the part that took two tries.** The first design derived it from the dependency's current status and argued statelessness as a feature. It is the defect: the ladder walks `rework` → `assigned` → re-dispatch and the worker returns the task to `needs-check`, all inside one turn, so a status-derived signal can vanish before any gate sees it. `task-status.py` now stamps `built_on` when a task moves to `assigned`, pairing each dep with that dep's retry count at the one moment that means anything, just before the worker reads those artifacts. Counts only move forward, so the comparison holds until the descendant is dispatched again, which is the only event that should clear it.
+
+**`complete` stops being terminal, narrowly.** Invalidation has to move a descendant that already passed its own check, and the transition map had no edge: `complete` had no successors and `needs-check` reached only `checking`. Two edges now exist. Removing `complete` from `_lib.TERMINAL` was considered and rejected outright, since that set drives the stop gate's turn-holding and every finished task would keep its job alive forever; the gate surfaces attention entries for closed tasks instead.
+
+**Alternatives considered:** holding a task at `checking` until its deps cleared, to keep the `complete` → `rework` edge rare (rejected, and the claim that justified it was false: a dep satisfies clause 2 only once its own deps are complete, so a task's completion is what releases its grandchildren, and sitting on a landed PASS stalls the chain speculation exists to unstall); a frontmatter marker set at invalidation time rather than at dispatch (rejected, it records the wrong moment); deriving invalidation from verdict files (rejected, it would make the wave a function of `verdicts/` and break the pure-function-of-task-files contract that keeps two hosts computing identical waves).
+
+## 2026-08-13: Wave Count Is The Wrong Unit For The Wave Path's Own Claim
+
+**Source:** #169, landed as #177; refined by #178's second replay leg
+
+**Context:** v0.5.2 rests on waves beating serial dispatch and nothing tested it. #134 carried the criterion and was closed without it because the driver it named was infeasible, but the criterion never needed that driver: `ready-set.py` is a pure function of task files plus `--running`, so the replay runs offline.
+
+**Decision:** the archived #117 graph is replayed through the real CLI, and the corpus is given `owns` by the same `add_owns` the linter suite uses, extracted to `_corpus.py` so one derivation serves both. Replayed without it, every pair reads as `owns-undeclared` and the result is seven waves of one, reproducing exactly the serial behaviour the test exists to disprove while appearing to pass.
+
+**The metric was wrong the first time, and the failing test is what said so.** A speculative leg asserting fewer waves failed: both rules produce the same six waves in the same order, because the graph decides how many dependency layers there are, not the rule. What speculation changes is the waiting between them. Counting turns instead, with the `checking` turn the contract's own loop describes, the same composition takes 12 turns under the old rule and 8 under the new one. The turn count is pinned so a regression shows up as a number rather than as a wave shape nobody can tell apart.
+
+**Six waves, not five.** T-004's only artifact is a `~/repos/...` path, so its cloned `owns` entry is a tilde path `owns_entry_problem` refuses, and it rides alone rather than pairing with T-002. That deferral is asserted by kind so the pinned composition reads as a consequence rather than a snapshot somebody later "corrects."
+
+**Alternatives considered:** deriving `owns` a second way for this suite (rejected, two derivations drift and the fixture would agree with itself about the wrong thing); weakening the wave-count assertion to pass (rejected, the failure was the finding).
+
 ## 2026-08-13: Both Audits Gate, And A PASS Names The Bytes It Approved
 
 **Source:** #110 and #161, closed together on `fix/audit-gates-161-110`

@@ -804,6 +804,140 @@ with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
         result["attention"],
     )
 
+# ------------------------------- S10: invalidation survives the dep's rework
+# The signal S9 checks is derived from the dep's CURRENT status, and that
+# status is only wrong for part of one orchestrator turn: the ladder walks
+# rework -> assigned -> re-dispatch, and the worker returns the dep to
+# needs-check, all inside a turn a gate may never fire during. A descendant
+# that built against an artifact which has since been rebuilt has to keep
+# saying so, which is what `built_on` is for—task-status.py stamps each dep's
+# retry count when the task goes `assigned`, and a count only moves forward.
+print("S10: an invalidated task keeps saying so after its dep's rework returns")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="needs-check", retries=1)
+    write_task(d, "T-002", status="needs-check", deps=["T-001"])
+    # Stamped when T-002 was dispatched, i.e. before T-001 burned a retry.
+    path = os.path.join(d, "tasks", "T-002.md")
+    text = open(path, encoding="utf-8").read().replace(
+        "deps: [T-001]\n", "deps: [T-001]\nbuilt_on: [T-001:0]\n")
+    open(path, "w", encoding="utf-8").write(text)
+    rc, result, err = run_and_parse(d)
+    check("S10a: exit 0", rc == 0, f"rc={rc} err={err}")
+    check(
+        "S10a: dep back at needs-check but a retry ahead → still invalidated",
+        ids(result["attention"]) == ["T-002"]
+        and "retry" in result["attention"][0]["reason"],
+        result["attention"],
+    )
+
+# The same file with the dep at every later point in its own lifecycle. None
+# of these is a status that would trip S9's rule, which is the entire point.
+for later_status in ("checking", "complete"):
+    with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+        write_task(d, "T-001", status=later_status, retries=1)
+        write_task(d, "T-002", status="complete", deps=["T-001"])
+        path = os.path.join(d, "tasks", "T-002.md")
+        text = open(path, encoding="utf-8").read().replace(
+            "deps: [T-001]\n", "deps: [T-001]\nbuilt_on: [T-001:0]\n")
+        open(path, "w", encoding="utf-8").write(text)
+        rc, result, err = run_and_parse(d)
+        check(
+            f"S10b: dep at {later_status} a retry ahead → still invalidated",
+            ids(result["attention"]) == ["T-002"], result["attention"],
+        )
+
+# Re-dispatch re-stamps, which is the only thing that clears it.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="complete", retries=1)
+    write_task(d, "T-002", status="needs-check", deps=["T-001"])
+    path = os.path.join(d, "tasks", "T-002.md")
+    text = open(path, encoding="utf-8").read().replace(
+        "deps: [T-001]\n", "deps: [T-001]\nbuilt_on: [T-001:1]\n")
+    open(path, "w", encoding="utf-8").write(text)
+    rc, result, err = run_and_parse(d)
+    check("S10c: rebuilt against the current retry → nothing owed",
+          result["attention"] == [], result["attention"])
+
+# A dep that couldn't be read at dispatch was stamped `?`, which must read as
+# "rebuild me" rather than as agreement with whatever it says now.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="complete", retries=0)
+    write_task(d, "T-002", status="needs-check", deps=["T-001"])
+    path = os.path.join(d, "tasks", "T-002.md")
+    text = open(path, encoding="utf-8").read().replace(
+        "deps: [T-001]\n", "deps: [T-001]\nbuilt_on: [T-001:?]\n")
+    open(path, "w", encoding="utf-8").write(text)
+    rc, result, err = run_and_parse(d)
+    check("S10d: an unreadable stamp reads as invalidated, not as agreement",
+          ids(result["attention"]) == ["T-002"], result["attention"])
+
+# ---------------------------- S11: the holes the adversarial review found
+# A dangling dep id. The docstring promises this fails closed under both
+# clauses; nothing tested it, and returning None instead of "(unknown)" left
+# every suite green while a task depending on a nonexistent id waved.
+print("S11: a dangling dep id fails closed, in the wave and in invalidation")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-002", status="pending", deps=["T-999"], owns=["b.py"])
+    rc, result, err = run_and_parse(d)
+    check("S11a: a task depending on a nonexistent id never waves",
+          result["wave"] == [], result)
+    check("S11a: it defers on deps, naming the id as unknown",
+          ids(result["deferred"]) == ["T-002"]
+          and "T-999" in result["deferred"][0]["reason"]
+          and result["deferred"][0]["kind"] == "deps",
+          result["deferred"])
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-002", status="needs-check", deps=["T-999"])
+    rc, result, err = run_and_parse(d)
+    check("S11b: a BUILT task whose dep file vanished is flagged, not skipped",
+          ids(result["attention"]) == ["T-002"]
+          and "T-999" in result["attention"][0]["reason"],
+          result["attention"])
+
+# Two regressed deps on one descendant. stop-gate keys its reason lookup by
+# task id, so two entries for one task would silently drop the first's advice.
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="rework", retries=1)
+    write_task(d, "T-002", status="rework", retries=1)
+    write_task(d, "T-003", status="needs-check", deps=["T-001", "T-002"])
+    rc, result, err = run_and_parse(d)
+    check("S11c: two regressed deps produce exactly ONE attention entry",
+          len(result["attention"]) == 1 and result["attention"][0]["id"] == "T-003",
+          result["attention"])
+    check("S11c: and that one entry names both deps",
+          "T-001" in result["attention"][0]["reason"]
+          and "T-002" in result["attention"][0]["reason"],
+          result["attention"])
+
+# ------------------------ S12: an invalidated task waiting holds its counter
+# Sent back for a rebuild and now waiting on the dep that invalidated it, an
+# `assigned` task used to land in no bucket at all—so the stop gate fell
+# through to its own advice ("dispatch the executor"), dispatch-guard refused,
+# and STALLED.md landed in three turns on a task doing what it was told.
+print("S12: an invalidated task waiting on its dep is deferred, not stalled")
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="rework", retries=1)
+    write_task(d, "T-002", status="assigned", retries=1, deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("S12a: it lands in deferred with the stall-holding kind",
+          ids(result["deferred"]) == ["T-002"]
+          and result["deferred"][0]["kind"] == "deps",
+          result["deferred"])
+    rc, result, err = run_and_parse(d, "--running", "T-002")
+    check("S12b: but not while its worker is genuinely in flight",
+          result["deferred"] == [], result["deferred"])
+
+with tempfile.TemporaryDirectory(prefix="ready-set-fixture-") as d:
+    write_task(d, "T-001", status="complete", retries=1)
+    write_task(d, "T-002", status="assigned", retries=1, deps=["T-001"])
+    rc, result, err = run_and_parse(d)
+    check("S12c: once the dep is ready to build on, nothing is deferred",
+          result["deferred"] == [], result["deferred"])
+
 # ------------------------------------------- replay: the archived #117 graph
 # Everything above is a fixture built to exercise one rule. This section is the
 # only case driven by a job that actually ran (#169). The wave path's headline

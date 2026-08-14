@@ -130,6 +130,8 @@ TRANSITIONS = {
 }
 
 _STATUS_LINE_RE = re.compile(r"^(status:)([ \t]*)(\S+)([ \t]*)$")
+_DEPS_LINE_RE = re.compile(r"^(deps:)([ \t]*)(\[.*\])([ \t]*)$")
+_BUILT_ON_LINE_RE = re.compile(r"^(built_on:)([ \t]*)(\[.*\])([ \t]*)$")
 _RETRIES_LINE_RE = re.compile(r"^(retries:)([ \t]*)(\d+)([ \t]*)$")
 
 
@@ -193,7 +195,52 @@ def current_status(lines):
     return m.group(3)
 
 
-def apply_transition(lines, new_status, increment_retries):
+def _inline_list(value):
+    """The ids in a flat `[a, b]` frontmatter list. The block form isn't
+    accepted here because `deps` is inline everywhere it's written—the
+    template, new-task.py, and every archived corpus—and guessing at a
+    shape nothing produces would be inventing a contract."""
+    value = value.strip()
+    if not (value.startswith("[") and value.endswith("]")):
+        return []
+    return [p.strip() for p in value[1:-1].split(",") if p.strip()]
+
+
+def built_on_record(lines, state_dir):
+    """`built_on` for a task about to be dispatched: each of its deps paired
+    with that dep's retry count right now, as `T-001:0` entries.
+
+    This is what makes invalidation survive (#135). A descendant that built
+    on a dep needs to notice when that dep is reworked afterward, and the
+    dep's own status can't carry that: the orchestrator walks rework ->
+    assigned -> re-dispatch inside a single turn, so a signal derived from
+    the dep's current status is gone by the next time any gate looks. A
+    retry count is monotonic and the comparison stays true until this task
+    is dispatched again, which is exactly when it stops being true.
+
+    A dep whose file can't be read is recorded as `?`, which never equals a
+    later count and so reads as "rebuild me" rather than as agreement.
+    """
+    start, end = _split_frontmatter(lines)
+    idx, m, _ = _find_line(lines, start, end, _DEPS_LINE_RE)
+    if idx is None:
+        return []
+    entries = []
+    for dep_id in _inline_list(m.group(3)):
+        retries = "?"
+        try:
+            dep_lines = read_lines(os.path.join(state_dir, "tasks", f"{dep_id}.md"))
+            d_start, d_end = _split_frontmatter(dep_lines)
+            _, dm, _ = _find_line(dep_lines, d_start, d_end, _RETRIES_LINE_RE)
+            if dm is not None:
+                retries = dm.group(3)
+        except (TaskStatusError, OSError):
+            pass
+        entries.append(f"{dep_id}:{retries}")
+    return entries
+
+
+def apply_transition(lines, new_status, increment_retries, state_dir=None):
     """Returns the rewritten list of lines. Raises TaskStatusError if a
     field --increment-retries needs (retries:) is missing—the transition
     itself is assumed already validated as legal by the caller."""
@@ -211,6 +258,21 @@ def apply_transition(lines, new_status, increment_retries):
             raise TaskStatusError("missing required frontmatter field: retries")
         bumped = str(int(m.group(3)) + 1)
         lines[idx] = f"{m.group(1)}{m.group(2)}{bumped}{m.group(4)}{terminator}"
+
+    # Stamp on the way INTO assigned, which is the moment the worker is
+    # about to read its deps' artifacts. Doing it on any other transition
+    # would record a state the worker never saw.
+    if new_status == "assigned" and state_dir is not None:
+        record = built_on_record(lines, state_dir)
+        if record:
+            start, end = _split_frontmatter(lines)
+            idx, m, terminator = _find_line(lines, start, end, _BUILT_ON_LINE_RE)
+            rendered = "[" + ", ".join(record) + "]"
+            if idx is None:
+                d_idx, _, d_term = _find_line(lines, start, end, _DEPS_LINE_RE)
+                lines.insert(d_idx + 1, f"built_on: {rendered}{d_term}")
+            else:
+                lines[idx] = f"{m.group(1)}{m.group(2)}{rendered}{m.group(4)}{terminator}"
 
     return lines
 
@@ -276,7 +338,7 @@ def main(argv=None):
         return 1
 
     try:
-        new_lines = apply_transition(lines, args.status, args.increment_retries)
+        new_lines = apply_transition(lines, args.status, args.increment_retries, state_dir)
     except TaskStatusError as e:
         sys.stderr.write(f"task-status: {path}: {e}\n")
         return 3

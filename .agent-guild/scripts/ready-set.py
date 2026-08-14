@@ -356,6 +356,10 @@ def read_task(path):
         "executor": str(fm["executor"]).strip(),
         "checker": str(fm["checker"]).strip(),
         "max_retries": max_retries,
+        # Optional, and absent on every task file written before #135 and on
+        # any task never dispatched. Carried through raw rather than parsed
+        # here so read_task stays a normalizer: _built_on() owns the shape.
+        "built_on": _as_list(fm.get("built_on", [])),
     }
 
 
@@ -472,6 +476,29 @@ def _pairing_blocked(task_a, task_b):
 _SPECULATIVE_STATUSES = frozenset({"needs-check", "checking"})
 
 
+def _built_on(task):
+    """{dep_id: retries-at-dispatch} from a task's `built_on` field, which
+    task-status.py stamps when the task moves to `assigned`. Entries are
+    `T-001:0`; a count of `?` means the dep couldn't be read at dispatch and
+    reads as "rebuild me" rather than as agreement. Absent field means a task
+    dispatched before #135, or one that was never dispatched—nothing to
+    compare, so the status-based signal below is all there is."""
+    out = {}
+    raw = task.get("built_on")
+    if isinstance(raw, str):
+        raw = [raw] if raw.strip() else []
+    for entry in raw or []:
+        dep_id, _, count = str(entry).partition(":")
+        dep_id, count = dep_id.strip(), count.strip()
+        if not dep_id:
+            continue
+        try:
+            out[dep_id] = int(count)
+        except ValueError:
+            out[dep_id] = "?"
+    return out
+
+
 def dep_unmet_reason(dep_id, tasks):
     """None if `dep_id` satisfies as a build input for some other task's
     dep list, else the "T-00X (status)" fragment the deferred/attention
@@ -539,10 +566,36 @@ def compute_ready_set(tasks, running):
         # first's advice rather than add to it.
         if tasks[tid]["status"] in ("needs-check", "checking", "complete"):
             invalidations = []
+            built_on = _built_on(tasks[tid])
             for dep_id in tasks[tid]["deps"]:
                 if dep_id not in tasks:
+                    # A dep that isn't on disk can't be compared against, and
+                    # a built task standing on a missing one is its own
+                    # problem: say so rather than passing over it.
+                    invalidations.append(
+                        f"built on {dep_id}, which no longer has a task file: "
+                        "restore it or re-decompose, then rebuild this task"
+                    )
                     continue
                 dep_status = tasks[dep_id]["status"]
+
+                # The latched signal, and the one that actually holds (#135).
+                # A dep's status walks rework -> assigned -> needs-check
+                # inside one orchestrator turn, so anything derived from it
+                # is gone before the next gate fires. Its retry count isn't:
+                # it only moves forward, and it stays ahead of what this task
+                # recorded at dispatch until this task is dispatched again.
+                was = built_on.get(dep_id)
+                now = tasks[dep_id]["retries"]
+                if was is not None and (was == "?" or now > was):
+                    invalidations.append(
+                        f"built against {dep_id} at retry {was}, which is now "
+                        f"at retry {now}: its artifact changed underneath this "
+                        f"task—invalidate (see the retry ladder), then "
+                        f"re-dispatch once {dep_id} is ready to build on again"
+                    )
+                    continue
+
                 if dep_status in ("complete", "needs-check", "checking"):
                     continue
                 if dep_status == "disputed":
@@ -575,6 +628,25 @@ def compute_ready_set(tasks, running):
         # a rework task offered here would invite skipping them straight
         # into a dispatch-guard refusal.
         if t["status"] != "pending":
+            # An `assigned` task whose deps aren't ready is the shape
+            # invalidation leaves behind: sent back for a rebuild and now
+            # waiting on the dep that invalidated it. It isn't a wave
+            # candidate, but it needs to land in `deferred` all the same,
+            # because that is the only bucket whose `deps` kind holds the
+            # stall counter. Left in no bucket it falls through to the stop
+            # gate's own advice, which says to dispatch the executor, and
+            # dispatch-guard refuses it every turn until STALLED.md lands on
+            # a task that is doing exactly what it was told to.
+            # `running` is checked here rather than relying on the wave
+            # loop's own check below, which this branch returns before
+            # reaching: a task whose worker is genuinely in flight is not
+            # waiting on anything and must not be reported as deferred.
+            if t["status"] == "assigned" and tid not in running:
+                waiting = unmet_deps(t, tasks)
+                if waiting:
+                    deferred.append(
+                        (tid, f"unmet deps: {', '.join(waiting)}", "deps")
+                    )
             continue
         if tid in running:
             continue

@@ -829,6 +829,83 @@ check("attention: abandoned-dep task is marked as needing judgment, "
       "T-002" in err and "needs your judgment" in err
       and "depends on abandoned task(s): T-001" in err, err)
 
+# ------- stop-gate: invalidation attention on a CLOSED descendant (D1, #135)
+# Speculative dispatch lets a descendant finish and pass its own check before
+# its dep later fails rework—ready-set flags that as an `attention` entry
+# naming the descendant, but the descendant itself is `complete`, which
+# _lib.open_tasks() excludes by design (TERMINAL). Before this fix the
+# presentation loop only ever walked open_tasks()'s list, so the entry was
+# computed and then silently dropped, and the "can the turn end" test only
+# ever asked whether OPEN tasks remained—so once the DEP also reached a
+# terminal status, the gate exited 0 with T-002's stale-work warning never
+# read. Both halves are pinned here: the entry has to be presented, and it
+# has to hold the turn open even though the task it names isn't in the open
+# set at all.
+print("stop-gate.py: closed-descendant invalidation attention (D1, #135)")
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-002", status="complete", deps="[T-001]", owns="[b.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("closed descendant (complete): the turn is still held open",
+      rc == 2, f"rc={rc} err={err}")
+check("closed descendant (complete): T-002's invalidation reason is surfaced",
+      "T-002" in err and "needs your judgment" in err
+      and "built on T-001, which has gone back to 'rework'" in err, err)
+check("closed descendant (complete): T-001's own rework advice still shows",
+      "copy the checker's diagnosis into ## Rework diagnosis" in err, err)
+
+# Same shape, but the descendant is at `needs-check`—already open per
+# open_tasks(), so this exercises the ordinary (never-dropped) path beside
+# the closed one above, confirming both read from the same ready-set
+# `attention` bucket rather than two different code paths that could drift.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-011", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-012", status="needs-check", deps="[T-011]", owns="[b.py]",
+           artifacts="[out.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("open descendant (needs-check): the turn is held open",
+      rc == 2, f"rc={rc} err={err}")
+check("open descendant (needs-check): its invalidation reason is surfaced",
+      "T-012" in err and "needs your judgment" in err
+      and "built on T-011, which has gone back to 'rework'" in err, err)
+
+# A job with NOTHING open but the closed-descendant warning must still block:
+# the #125-era fast path used to return 0 the instant open_tasks() was empty,
+# without ever asking ready-set. T-001 (abandoned) and T-002 (complete) are
+# BOTH terminal here, so open_tasks() returns [] and this is exactly the
+# state that used to hit that fast path.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="abandoned", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-002", status="complete", deps="[T-001]", owns="[b.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("dep abandoned, descendant complete, nothing open: turn stays held",
+      rc == 2, f"rc={rc} err={err}")
+check("dep abandoned, descendant complete: T-002's own attention line shows"
+      " (not the dep's, which now reads 'abandoned')",
+      "T-002" in err, err)
+
+# Once the orchestrator does what the attention line tells it to—copy an
+# invalidation note and move the descendant to `assigned`—T-002 leaves
+# `complete` and ready-set stops flagging it (its own status is no longer
+# needs-check/checking/complete, so the invalidation check in
+# compute_ready_set doesn't even look at its deps). It has to fall straight
+# through to the ORDINARY rework-ladder advice, not linger as a stale
+# attention line and not double up on both.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-002", status="assigned", deps="[T-001]", owns="[b.py]",
+           retries=1)
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("reopened descendant (assigned): ready-set has nothing left to flag",
+      "needs your judgment" not in err, err)
+check("reopened descendant (assigned): gets the ordinary mid-flight/dispatch "
+      "advice instead",
+      "T-002 [assigned]" in err, err)
+
 # --------------------- stop-gate: a `rework` task must keep the retry ladder (#155)
 # Before this fix, ready-set.py treated `rework` as a wave candidate, so a
 # rework task with no unmet deps/collisions landed in the wave—and the wave
@@ -907,6 +984,45 @@ def stalled_text(proj):
     path = os.path.join(proj, ".agent-guild", "state", "STALLED.md")
     return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
 
+
+# A closed-descendant attention entity (D1) has to run through the SAME
+# digest/counter machinery as an open task: no spurious STALLED on the first
+# couple of firings (a fresh digest only counts as strike 1 the moment it's
+# first seen), but a genuine three-strike schedule once it's ignored—proving
+# it neither livelocks by being silently exempt from the backstop nor pins
+# the counter forever the way a naive "always hold this kind" rule would.
+print("stop-gate.py: closed-descendant attention entity joins the stall counters (D1)")
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-021", status="rework", deps="[]", owns="[a.py]", retries=1)
+write_task(proj, "T-022", status="complete", deps="[T-021]", owns="[b.py]")
+# T-021 holds a fresh in-flight marker so ITS OWN counter stays pinned at 1
+# throughout—isolating the assertion to T-022's counter alone, the same
+# sibling-isolation technique the #111/#163 fixtures above use.
+write_in_flight_marker(proj, "T-021", "worker-standard")
+for _ in range(2):
+    rc, out, err = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("closed-descendant entity: no spurious STALLED after two firings",
+      rc == 2 and not stalled_text(proj), f"rc={rc}")
+# A third unread firing DOES trip it—same three-strike schedule as any
+# neglected open task—while the mid-flight sibling stays out of the report.
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+text3 = stalled_text(proj)
+check("closed-descendant entity: strike three reaches STALLED.md",
+      rc3 == 2 and "T-022" in text3, f"rc3={rc3} text={text3!r}")
+check("closed-descendant entity: the mid-flight sibling isn't swept in",
+      "T-021" not in text3, text3)
+# Reporting T-022 parks it, same as any other entity—the gate stops holding
+# the turn open for it specifically, and (since T-021's own rework advice was
+# never touched here either) T-021 keeps the turn open independently. This
+# is the "reopened or non-open attention task participates sanely" half: a
+# parked closed-attention entity must not wedge the gate into blocking with
+# nothing left that could ever change it.
+write_task(proj, "T-021", status="complete", deps="[]", owns="[a.py]", retries=1)
+rc4, _, err4 = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("parking a closed-descendant entity lets the turn end once nothing "
+      "else is open (T-021 completed, T-022 stays parked)",
+      rc4 == 0, f"rc4={rc4} err={err4}")
 
 # The issue's own repro, inverted into an expectation: the stuck sibling
 # reaches STALLED.md on the ordinary three-strike schedule, the mid-flight
@@ -1519,6 +1635,54 @@ write_task(proj_dep, "T-117", status="checking", deps="[T-116]", checker="checke
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "checker-deterministic", "prompt": "Task-ID: T-117"}}, proj_dep)
 check("H8: checker dispatch ignores the dep gate → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# H9: ready-set.py loads cleanly but is missing `unmet_deps`—the real
+# version-skew shape a project's copied-in scripts/ predating #135 has.
+# Confirmed against main's ACTUAL pre-#135 ready-set.py (via `git show
+# main:.agent-guild/scripts/ready-set.py`): it already defines read_task and
+# TaskParseError (those predate #135), but unmet_deps doesn't exist at all
+# there—dispatch-guard's own dep gate is what's new. Reproduced directly
+# before this fix landed: dispatch-guard raised AttributeError calling
+# module.unmet_deps, and _lib.run's fail-loud contract turned that into a
+# hard "HOOK ERROR" block of the worker, with nothing written to
+# gate-gaps.log—worse than the fail-open a merely-missing module already
+# gets, and silent besides.
+#
+# Simulated here the same way the stop-gate "no `kind`" version-skew fixture
+# does it (see that section's own comment): seed the REAL current
+# ready-set.py via the existing seed_ready_set() helper, then strip out just
+# the one export that postdates #135 by renaming its def line, so every
+# other call the gate makes (read_task, TaskParseError) still runs the real
+# implementation and only the missing-attribute shape is synthetic.
+proj_skew = fresh_proj()
+audits_pass(proj_skew)
+seed_ready_set(proj_skew)
+skew_path = os.path.join(proj_skew, ".agent-guild", "scripts", "ready-set.py")
+with open(skew_path, encoding="utf-8") as f:
+    skewed = f.read().replace(
+        "def unmet_deps(task, tasks):", "def _unmet_deps_removed(task, tasks):"
+    )
+with open(skew_path, "w", encoding="utf-8") as f:
+    f.write(skewed)
+check("H9 fixture: unmet_deps was actually renamed out of the copied file",
+      "def unmet_deps(" not in skewed and "_unmet_deps_removed" in skewed, skewed[:200])
+
+write_task(proj_skew, "T-301", status="pending", deps="[]")
+write_task(proj_skew, "T-302", status="assigned", deps="[T-301]")
+gate_gaps_skew = os.path.join(proj_skew, ".agent-guild", "state", "log", "gate-gaps.log")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "worker-standard",
+                                        "prompt": "Task-ID: T-302"}}, proj_skew)
+check("H9: version-skewed ready-set.py (missing unmet_deps) → exit 0 (allow through)",
+      rc == 0, f"rc={rc} err={err}")
+check("H9: no HOOK ERROR crash (the AttributeError this fix closes)",
+      "HOOK ERROR" not in err, err)
+gate_gaps_text = open(gate_gaps_skew).read() if os.path.exists(gate_gaps_skew) else ""
+check("H9: gate-gaps.log records the gap, naming version skew",
+      "T-302" in gate_gaps_text and "skew" in gate_gaps_text.lower(),
+      gate_gaps_text or "gate-gaps.log missing")
+check("H9: stderr carries a note naming version skew",
+      "T-302" in err and "skew" in err.lower(), err)
 
 # ------------------------------------------- dispatch-guard: DEC-audit gate
 # Issue #161: the decomposition audit used to be a memo. It is the only check

@@ -114,9 +114,24 @@ none of those (including every `rework` task: ready-set never offers one in
 the wave, since dispatching it straight would skip the retry ladder's
 diagnosis-copy and retries-increment steps and trip dispatch-guard's
 `assigned`-only check for workers) falls through to _next_move, unchanged.
+
+Speculative dispatch (#135) means an `attention` entry can name a task that
+isn't open at all: a `complete` descendant can finish its own check before
+its dep later fails rework, and ready-set flags that as an invalidation the
+orchestrator owes regardless. _lib.open_tasks() excludes `complete` on
+purpose—reopening it there would hold the gate open on every finished job
+forever—so this entry has nowhere to land in the ordinary per-open-task
+walk. Dropping it silently would let the turn end with a live invalidation
+warning nobody read (D1). `closed_attention` in main() is the other half of
+`tasks`: computed the same way, given its own presentation line in the same
+"needs your judgment" phrasing, and folded into the same digest/counter
+machinery so it holds the turn open and eventually reaches STALLED.md on the
+same three-strike schedule as any neglected open task, rather than being
+exempt from the backstop that governs everything else here.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -149,6 +164,27 @@ _KIND_BY_REASON_PREFIX = (
 # subprocess.run() timeout without a real 5s wait for every run of this
 # suite.
 READY_SET_TIMEOUT_S = float(os.environ.get("AGENT_GUILD_READY_SET_TIMEOUT", "5"))
+
+_TASK_FILE_RE = re.compile(r"^T-\d+\.md$")
+
+
+def _has_any_task_file():
+    """True if state/tasks/ holds at least one T-NNN.md, terminal status or
+    not. _lib.open_tasks() only ever returns the non-terminal ones, so "every
+    task in this job finished" and "no job has ever touched this repo" read
+    identically through it—but only the first can still owe an `attention`
+    entry ready-set computed over a `complete`/`abandoned` descendant (a
+    speculative-dispatch invalidation, #135/D1): open_tasks() excludes both
+    statuses by design, so it alone can never tell the two apart. This is
+    the cheap check that does, ahead of paying for a ready-set.py subprocess:
+    a plain Q&A session with .agent-guild/ copied in but never used has an
+    empty (or absent) tasks/ dir and still exits this gate immediately, same
+    as before this fix."""
+    try:
+        names = os.listdir(_lib.state_path("tasks"))
+    except OSError:
+        return False
+    return any(_TASK_FILE_RE.match(n) for n in names)
 
 
 def _next_move(tid, status, retries, marker_state=None, marker_ts=None):
@@ -467,6 +503,23 @@ def _deferral_held(tid, dispositions):
     return kind in DEFERRAL_HOLD_KINDS
 
 
+def _closed_task_status_retries(tid):
+    """Best-effort (status, retries) for a task OUTSIDE open_tasks()'s view—
+    reached only when ready-set names it in `attention` anyway: a
+    `complete`/`abandoned` descendant whose dep has regressed behind it
+    (D1). Never raises: an unreadable file still needs a stable status
+    string so its digest/counter can hold rather than crash the gate that's
+    surfacing it—the same posture open_tasks() itself takes on a task it
+    can't read (reports it as "malformed" instead of dropping it)."""
+    task = _lib.read_task(tid) or {}
+    status = str(task.get("status", "")).strip() or "unknown"
+    try:
+        retries = int(str(task.get("retries", "0")).strip() or "0")
+    except (TypeError, ValueError):
+        retries = 0
+    return status, retries
+
+
 def _task_digest(tid, status, retries, verdicts, fresh_markers):
     """This task's own slice of the job state, as the string its counter
     compares against.
@@ -503,8 +556,9 @@ def main(data):
         return 0
 
     tasks = _lib.open_tasks()
-    if not tasks:
-        # Clean slate—clear any stale block counters and let the turn end.
+    if not tasks and not _has_any_task_file():
+        # Genuinely nothing here, ever—the pre-#125 fast path, unchanged: no
+        # ready-set subprocess to pay for on a plain Q&A session.
         _save_state({}, None)
         return 0
 
@@ -520,6 +574,36 @@ def main(data):
     # it twice a firing would double the cost for nothing.
     ready_result = _compute_wave(fresh_markers)
     dispositions = _dispositions(ready_result)
+
+    # D1: an `attention` entry can name a task open_tasks() will never
+    # return—a `complete` (or `abandoned`) descendant that finished its own
+    # check before its dep later failed rework, which is exactly what
+    # speculative dispatch caps at one level rather than rules out. Every
+    # bucket below this point already carries that entry (compute_ready_set
+    # doesn't filter by open status), but the presentation loop historically
+    # only ever walked `tasks`, and this gate's own "can the turn end" test
+    # only ever asked whether OPEN tasks remained—so the entry was computed
+    # and then silently dropped on both counts. `closed_attention` is what
+    # closes that hole: folded into `combined` below, it gets a
+    # presentation line same as an open attention task, and it participates
+    # in the same digest/counter machinery as any other entity, so the gate
+    # can't exit 0 with an unread invalidation warning still on the table.
+    open_ids = {tid for tid, _status, _retries in tasks}
+    attention_entries = ready_result["attention"] if ready_result else []
+    closed_attention = [a for a in attention_entries if a["id"] not in open_ids]
+
+    if not tasks and not closed_attention:
+        # Every task in this job is terminal and ready-set has nothing
+        # outstanding to flag—clear any stale block counters and let the
+        # turn end. (Reached only when _has_any_task_file() was true above,
+        # i.e. a job DID run here; an empty tasks/ dir returned already.)
+        _save_state({}, None)
+        return 0
+
+    closed_status = {a["id"]: _closed_task_status_retries(a["id"]) for a in closed_attention}
+    combined = list(tasks) + [
+        (tid, *closed_status[tid]) for tid in (a["id"] for a in closed_attention)
+    ]
 
     prev = _load_state()
     prev_entries = prev["entries"]
@@ -541,17 +625,28 @@ def main(data):
         and transcript_size == prev.get("transcript_size")
     )
 
-    # One entity per open task: (key, digest, marker_held, deferral_held,
-    # line).
+    # One entity per open task, PLUS one per closed task ready-set flagged in
+    # `attention`: (key, digest, marker_held, deferral_held, line).
+    # `_deferral_held` already reads False for anything outside the
+    # `deferred` bucket, so a closed-attention entity (bucket "attention")
+    # is never held—it accumulates a blocked-turn count on the same ordinary
+    # schedule as a neglected open task, which is the intended answer to
+    # "must not livelock": three unread firings and it reaches STALLED.md
+    # exactly like anything else does.
     entities = [
         (
             tid,
             _task_digest(tid, status, retries, verdicts, fresh_markers),
             any(m.startswith(f"{tid}--") for m in fresh_markers),
             _deferral_held(tid, dispositions),
-            f"- {tid} [{status}] retries={retries}",
+            (
+                f"- {tid} [{status}] retries={retries}"
+                if tid in open_ids else
+                f"- {tid} [{status}] retries={retries} (closed—ready-set "
+                "flags an unresolved invalidation naming it)"
+            ),
         )
-        for tid, status, retries in tasks
+        for tid, status, retries in combined
     ]
 
     def _prev_count(key):
@@ -654,7 +749,15 @@ def main(data):
         except Exception:
             pass
         tasks = [t for t in tasks if t[0] not in parked]
-        if not tasks:
+        # A closed-attention entity parks exactly like an open task does—
+        # three unread firings and the gate stops holding the turn open for
+        # it. Filtered here so the turn can still end once everything
+        # outstanding (open or closed) has either moved or been parked;
+        # without this a job whose only remaining item was a parked
+        # closed-attention entity would block forever with nothing left
+        # that could ever change it.
+        closed_attention = [a for a in closed_attention if a["id"] not in parked]
+        if not tasks and not closed_attention:
             return 0
 
     all_markers = _lib.in_flight(ttl=float("inf"))
@@ -706,14 +809,37 @@ def main(data):
         task_lines.append(
             _next_move(*t, *_marker_info(tid, fresh_markers, all_markers))
         )
+    # D1: a closed-attention task (already `complete`/`abandoned`, so it's
+    # never in `tasks` and the loop above never reaches it) still gets its
+    # own line, in the same "needs your judgment" phrasing an open attention
+    # task gets—ready-set's reason string is identical in shape either way,
+    # naming the dep that regressed and what invalidating the descendant
+    # requires.
+    for a in closed_attention:
+        tid = a["id"]
+        status, _retries = closed_status[tid]
+        task_lines.append(
+            f"  {tid} [{status}] → needs your judgment, not a dispatch "
+            f"(ready-set): {a['reason']}."
+        )
     wave_block = _wave_block(wave)
     body_sections = ([wave_block] if wave_block else []) + [
         "\n".join(task_lines)
     ]
     body = "\n".join(body_sections)
+    if closed_attention:
+        header = (
+            f"{len(tasks)} task(s) still open, plus {len(closed_attention)} "
+            "already-closed task(s) ready-set flags for an unresolved "
+            "invalidation—the turn can't end yet. Next move for each:\n"
+        )
+    else:
+        header = (
+            f"{len(tasks)} task(s) still open—the turn can't end yet. "
+            "Next move for each:\n"
+        )
     return _lib.block(
-        f"{len(tasks)} task(s) still open—the turn can't end yet. "
-        "Next move for each:\n"
+        f"{header}"
         f"{body}\n"
         "Do the next move, then stop again. If you need to hand control back to "
         "the user mid-job, the user can `touch .agent-guild/state/PAUSED`."

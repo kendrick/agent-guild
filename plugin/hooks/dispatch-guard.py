@@ -239,6 +239,18 @@ def _log_dep_gate_gap(tid, detail):
 
 _READY_SET_MODULE = None
 _READY_SET_LOAD_ATTEMPTED = False
+_READY_SET_LOAD_REASON = None  # set only when load fails; see _load_ready_set
+
+# The three names _dep_gate_block calls on a loaded module. All three predate
+# #135 individually, but #135 is what first calls them from here—a project's
+# copied-in scripts/ready-set.py can be old enough to define none of them
+# (main, pre-#135, has read_task and TaskParseError but no unmet_deps at
+# all), and exec_module() alone can't catch that: the file loads cleanly,
+# the AttributeError only fires on the first call. Checked as a set, not
+# just unmet_deps, so a script old enough to be missing all three still gets
+# one clear "version skew" message instead of a coincidentally-passing
+# hasattr on the one this docstring happened to name.
+_REQUIRED_READY_SET_ATTRS = ("read_task", "unmet_deps", "TaskParseError")
 
 
 def _load_ready_set():
@@ -247,15 +259,25 @@ def _load_ready_set():
     idiom ready-set.py itself uses at its own top (for check-diff-scope.py):
     the filename has a hyphen, so it can't be imported the normal way.
 
-    Returns None—never raises—if the file is missing, or it (or anything it
-    transitively imports, e.g. its own check-diff-scope.py) fails to load.
-    Same reasoning as _job_spec_block's precedent above: install.py never
-    upgrades a project's copied-in .agent-guild/ payload, so a repo can run
-    hooks newer than its own scripts/. An old ready-set.py never proposes
-    speculative dispatch in the first place, so a gate built to catch a bad
-    speculation has nothing to catch there—allowing through is safe by
-    construction, not a shortcut."""
-    global _READY_SET_MODULE, _READY_SET_LOAD_ATTEMPTED
+    Returns None—never raises—if the file is missing, it (or anything it
+    transitively imports, e.g. its own check-diff-scope.py) fails to load,
+    OR it loaded fine but is missing one of _REQUIRED_READY_SET_ATTRS. That
+    last case is version skew, not a load failure: install.py never upgrades
+    a project's copied-in .agent-guild/ payload, so a repo can run hooks
+    newer than its own scripts/, and a pre-#135 ready-set.py exec_modules
+    without error—it simply has no unmet_deps to call. Left unguarded, the
+    very first dep-gated dispatch raises AttributeError, which _lib.run's
+    fail-loud contract turns into a hard block of every worker on a task
+    with deps, with nothing written to gate-gaps.log—exactly the silent,
+    unrecoverable failure the missing-module case already knows how to fail
+    open from. `_READY_SET_LOAD_REASON` records which case this was so the
+    caller's message can name version skew specifically, rather than folding
+    it into the generic "missing or failed to load."
+
+    An old ready-set.py never proposes speculative dispatch in the first
+    place, so a gate built to catch a bad speculation has nothing to catch
+    there—allowing through is safe by construction, not a shortcut."""
+    global _READY_SET_MODULE, _READY_SET_LOAD_ATTEMPTED, _READY_SET_LOAD_REASON
     if _READY_SET_MODULE is not None or _READY_SET_LOAD_ATTEMPTED:
         return _READY_SET_MODULE
     _READY_SET_LOAD_ATTEMPTED = True
@@ -265,10 +287,16 @@ def _load_ready_set():
             "dispatch_guard_ready_set", path
         )
         if spec is None or spec.loader is None:
+            _READY_SET_LOAD_REASON = "missing"
             return None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
     except Exception:
+        _READY_SET_LOAD_REASON = "missing"
+        return None
+    missing_attrs = [a for a in _REQUIRED_READY_SET_ATTRS if not hasattr(module, a)]
+    if missing_attrs:
+        _READY_SET_LOAD_REASON = "skew:" + ", ".join(missing_attrs)
         return None
     _READY_SET_MODULE = module
     return module
@@ -307,9 +335,18 @@ def _dep_gate_block(tid, task):
 
     module = _load_ready_set()
     if module is None:
-        _log_dep_gate_gap(tid, "module missing or failed to load")
+        if isinstance(_READY_SET_LOAD_REASON, str) and _READY_SET_LOAD_REASON.startswith("skew:"):
+            attrs = _READY_SET_LOAD_REASON.split(":", 1)[1]
+            situation = (
+                f"loaded but is missing {attrs} (version skew: this "
+                "project's copied-in scripts/ready-set.py predates #135's "
+                "dependency-gate exports)"
+            )
+        else:
+            situation = "is missing or failed to load"
+        _log_dep_gate_gap(tid, situation)
         sys.stderr.write(
-            f"dispatch-guard: ready-set.py is missing or failed to load—the "
+            f"dispatch-guard: ready-set.py {situation}—the "
             f"dependency gate did not run for {tid}. Logged to "
             ".agent-guild/state/log/gate-gaps.log; the worker is dispatched "
             "unchecked.\n"

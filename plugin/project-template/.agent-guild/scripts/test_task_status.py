@@ -297,5 +297,95 @@ with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
     check("no-status-field: exit 3", rc == 3, f"rc={rc} out={out} err={err}")
     check("no-status-field: names the missing field", "status" in err, err)
 
+# ------------------------------------------- built_on stamping (#135)
+# Invalidation needs to survive its own dependency's rework: the ladder walks
+# rework -> assigned -> re-dispatch inside one turn, so anything read off the
+# dep's current status is gone before the next gate fires. The retry count is
+# not, so a task records each dep's count at the moment it goes `assigned`,
+# which is the moment its worker is about to read those artifacts.
+print("moving to assigned records what each dep was at, for invalidation")
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="needs-check", retries=2)
+    write_task(tasks_dir, "T-002", status="pending", extra="deps: [T-001]\n")
+    rc, out, err = run_script(d, "T-002", "assigned")
+    body = open(os.path.join(tasks_dir, "T-002.md"), encoding="utf-8").read()
+    check("built_on: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("built_on: records the dep at its current retry count",
+          "built_on: [T-001:2]" in body, body)
+
+    # Re-dispatch re-stamps. This is the only thing that clears an
+    # invalidation, so it has to track rather than stick at the first value.
+    write_task(tasks_dir, "T-001", status="needs-check", retries=5)
+    run_script(d, "T-002", "needs-check")
+    run_script(d, "T-002", "rework")
+    rc, out, err = run_script(d, "T-002", "assigned")
+    body = open(os.path.join(tasks_dir, "T-002.md"), encoding="utf-8").read()
+    check("built_on: re-dispatch overwrites rather than accumulating",
+          "built_on: [T-001:5]" in body and "T-001:2" not in body, body)
+
+# Only `assigned` stamps. Every other transition must leave the record
+# alone, and this is the assertion that matters most: re-stamping when the
+# descendant reaches `needs-check` would capture the dep's CURRENT retry
+# count and erase the very invalidation the record exists to preserve.
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="needs-check", retries=0)
+    write_task(tasks_dir, "T-002", status="pending", extra="deps: [T-001]\n")
+    run_script(d, "T-002", "assigned")
+    # The dep now fails and burns a retry, which is exactly what the
+    # descendant's record has to keep pointing at.
+    write_task(tasks_dir, "T-001", status="needs-check", retries=1)
+    for nxt in ("needs-check", "checking", "complete"):
+        run_script(d, "T-002", nxt)
+        body = open(os.path.join(tasks_dir, "T-002.md"), encoding="utf-8").read()
+        check(f"built_on: moving to {nxt} does not re-stamp",
+              "built_on: [T-001:0]" in body, body)
+
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="complete", retries=0)
+    write_task(tasks_dir, "T-002", status="complete", retries=1)
+    write_task(tasks_dir, "T-003", status="pending", extra="deps: [T-001, T-002]\n")
+    rc, out, err = run_script(d, "T-003", "assigned")
+    body = open(os.path.join(tasks_dir, "T-003.md"), encoding="utf-8").read()
+    check("built_on: every dep is recorded, in the order deps names them",
+          "built_on: [T-001:0, T-002:1]" in body, body)
+
+# A dep that can't be read is stamped `?`, which never equals a later count
+# and so reads as "rebuild me" instead of as agreement.
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-002", status="pending", extra="deps: [T-404]\n")
+    rc, out, err = run_script(d, "T-002", "assigned")
+    body = open(os.path.join(tasks_dir, "T-002.md"), encoding="utf-8").read()
+    check("built_on: an unreadable dep stamps '?' rather than a number",
+          rc == 0 and "built_on: [T-404:?]" in body, f"rc={rc} body={body}")
+
+# A task with no deps has nothing to record, and gains no field.
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="pending")
+    rc, out, err = run_script(d, "T-001", "assigned")
+    body = open(os.path.join(tasks_dir, "T-001.md"), encoding="utf-8").read()
+    check("built_on: a dep-less task gains no built_on field",
+          rc == 0 and "built_on" not in body, body)
+
+# Byte preservation still holds: the stamp is an inserted line, and nothing
+# else in the file may move.
+with tempfile.TemporaryDirectory(prefix="task-status-fixture-") as d:
+    tasks_dir = os.path.join(d, "tasks")
+    write_task(tasks_dir, "T-001", status="complete", retries=0)
+    write_task(tasks_dir, "T-002", status="pending", extra="deps: [T-001]\n")
+    path = os.path.join(tasks_dir, "T-002.md")
+    before = open(path, encoding="utf-8").read()
+    run_script(d, "T-002", "assigned")
+    after = open(path, encoding="utf-8").read()
+    lost = [ln for ln in before.splitlines()
+            if ln not in after.splitlines() and not ln.startswith("status:")]
+    check("built_on: no other line is disturbed by the insertion",
+          lost == [], f"lost={lost}")
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

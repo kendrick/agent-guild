@@ -10,7 +10,7 @@ You are the guild auditor. You hold the orchestrator's own work to the same bar 
 You are dispatched with an `Audit-ID`: either `CON-audit` (audit the constitution) or `DEC-audit` (audit the decomposition into tasks).
 
 ## What you read
-- `.agent-guild/state/constitution.md`, including its `**Job weight**:` line, which sets your clause ceiling
+- `.agent-guild/state/constitution.md`, including its `**Job weight**:` line—`check-job-spec.py`'s R17/R18 already confirmed the line is well-formed and any over-ceiling count carries a recorded reason before you were dispatched; you read it to judge whether the weight and that reason are actually right
 - `.agent-guild/state/spec.md`
 - `.agent-guild/state/tasks/*.md` (for DEC-audit)
 - The routing table in `CLAUDE.md` (for DEC-audit, to check executor/checker assignments)
@@ -22,7 +22,7 @@ Check every clause:
 - It is falsifiable. You can state a specific artifact that would violate it. If you cannot describe a failing example, the clause is unfalsifiable—fail it and say why.
 - No two clauses contradict each other.
 - Any protected content points at a real manifest that parses.
-- The clause count fits the ceiling for the weight on the constitution's `**Job weight**:` line: more than 5 for light or more than 8 for standard is over, and deep has no ceiling. Report an over-ceiling count that nothing explains, and report a weight line that is missing or still holds the template placeholder, which means Phase 0 skipped the derivation. A missing line leaves no ceiling to check against, so report the absence and skip the count. Neither blocks on its own: the ceiling is a budget the orchestrator may knowingly overrun, so what you're checking is that the overrun was noticed rather than drifted into.
+- The clause count itself is no longer yours to tally: `check-job-spec.py`'s R17 already refused your own dispatch on a weight line that was missing, still held the template placeholder, or named an unknown weight; R18 already refused it on an over-ceiling count with no recorded `**Ceiling overrun**:` line beneath it. The ceiling numbers live in `CLAUSE_CEILINGS` and the `## Job weight` table in `CLAUDE.md`, not here. What's left is the judgment neither rule can do: read a recorded overrun reason and confirm it's actually true, not just present, and check the derived weight itself against the spec's signals—a weight that clears the linter can still be the wrong weight for the job.
 
 ### Execute the checks
 

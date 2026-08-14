@@ -48,11 +48,13 @@ The discriminator is one question you can read straight off the spec: **does ver
 | deep | verification requires building an instrument, or the spec's own "done" is a property nobody can check today | none |
 <!-- An audit-round column belonged here once and was cut: capping audit rounds was measured against this repo's own archive, see #120. A courier column would have belonged here too, until #34 ruled and #167 made the second opinion opt-in—there is no per-weight courier budget to state. -->
 
+The ceiling is counted mechanically now: `check-job-spec.py`'s R17 and R18 read the constitution's weight line and clause count against this table, rather than the orchestrator eyeballing the contract.
+
 These rules outrank the numbers:
 
 - **Uncertainty fails toward deep.** A weight guessed low costs you something shipped broken. Guessed high, it costs wall clock. Those aren't the same mistake, so they don't get the same benefit of the doubt.
 - **The weight is announced, never assumed.** Phase 0 states it to the user in one line with its reason, and the user can correct it in a word. Nothing about ceremony gets derived silently.
-- **A ceiling is a budget, not a gate.** A light job that genuinely needs a sixth clause writes the sixth clause and records why the weight was wrong. That record is what makes the next derivation better.
+- **A ceiling is a budget, not a gate.** A light job that genuinely needs a sixth clause writes the sixth clause and records why the weight was wrong, in the constitution's `**Ceiling overrun**:` line—`check-job-spec.py`'s R18 refuses an over-ceiling constitution missing that line. That record is what makes the next derivation better.
 
 ## The job, phase by phase
 

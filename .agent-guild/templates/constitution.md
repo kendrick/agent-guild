@@ -8,11 +8,18 @@ against—every task, every verdict, and every dispute ruling references it by
 clause id. The /constitution skill writes it; the auditor agent must PASS it
 (CON-audit) before any worker is dispatched (dispatch-guard enforces this).
 
-THE WEIGHT LINE above is set by the /constitution skill in Phase 0 and read by
-the auditor, which holds the clause count to that weight's ceiling. Keep the
-derived weight in the line when the user corrects it: the correction is the
-most useful thing the retrospective can report. See the weight table under
-"## Job weight" in CLAUDE.md.
+THE WEIGHT LINE above is set by the /constitution skill in Phase 0.
+`check-job-spec.py`'s R17 blocks the auditor dispatch if the line is missing,
+still holds the placeholder, or names an unknown weight; R18 blocks it if the
+clause count runs over that weight's ceiling with no overrun recorded. The
+record is one line directly beneath the weight line—`**Ceiling overrun**:
+<why this job legitimately needs more clauses than its budget>`—written only
+when the count is actually over; at or under budget the line does not appear.
+The ceiling is a budget, not a hard line: write the
+overrun reason and R18 passes; leave it off and it doesn't. Keep the derived
+weight in the line when the user corrects it—the correction is the most
+useful thing the retrospective can report. The ceiling numbers themselves
+live in the "## Job weight" table in CLAUDE.md, not here.
 
 THE FALSIFIABILITY RULE: every clause must name a concrete check method AND be
 something you can state a failing example for. If you cannot describe an

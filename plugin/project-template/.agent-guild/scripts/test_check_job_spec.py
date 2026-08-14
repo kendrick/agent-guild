@@ -94,6 +94,29 @@ def copy_corpus_state(state_dir):
     shutil.copytree(
         os.path.join(ARCHIVE_DIR, "tasks"), os.path.join(state_dir, "tasks")
     )
+    add_weight_line(state_dir)
+
+
+WEIGHT_LINE_TEXT = (
+    "**Job weight**: deep, back-filled by this suite: the #117 corpus "
+    "predates the weight line (#123)"
+)
+
+
+def add_weight_line(state_dir):
+    """Insert a `**Job weight**:` line right after the constitution's title,
+    mirroring how add_owns()/add_dep_rationale() back-fill fields the #117
+    corpus predates (#133, #125)—the corpus shipped before #123 added the
+    line R17/R18 read. Deep, so back-filling it never trips R18 by
+    accident: the ceiling is a separate concern from whether the corpus
+    carries a weight at all. Mutates constitution.md on disk."""
+    const_path = os.path.join(state_dir, "constitution.md")
+    with open(const_path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    assert lines and lines[0].startswith("# "), f"{const_path}: no title line to insert the weight line after"
+    lines.insert(1, WEIGHT_LINE_TEXT)
+    with open(const_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 # add_owns lives in _corpus.py because test_ready_set.py replays this same
@@ -207,6 +230,8 @@ def build_fixture_repo_root(root):
 
 MINIMAL_CONSTITUTION = """# Constitution: CLI fixture
 
+**Job weight**: deep, synthetic fixture; deep so no case couples to a clause count
+
 ## Clauses
 
 ### C-1: trivial clause
@@ -225,16 +250,20 @@ MINIMAL_CONSTITUTION = """# Constitution: CLI fixture
 """
 
 
-def write_synthetic_state(d, tasks):
-    """A minimal state dir: MINIMAL_CONSTITUTION plus one task file per
-    entry in `tasks`, each `{"id", "artifacts", "deps"}`. For the build
-    rules (R8, R16), where what matters is which paths a task claims and
-    who depends on whom, and the corpus is the wrong instrument because
-    its own build graph is the thing under test elsewhere. No `owns`, so
-    R13/R14/R15 have nothing to say about these fixtures."""
+def write_synthetic_state(d, tasks, constitution_text=MINIMAL_CONSTITUTION):
+    """A minimal state dir: `constitution_text` (MINIMAL_CONSTITUTION by
+    default) plus one task file per entry in `tasks`, each `{"id",
+    "artifacts", "deps"}`. For the build rules (R8, R16), where what
+    matters is which paths a task claims and who depends on whom, and the
+    corpus is the wrong instrument because its own build graph is the
+    thing under test elsewhere. No `owns`, so R13/R14/R15 have nothing to
+    say about these fixtures. `constitution_text` is overridable so R17/R18
+    can reuse this same task-writing shape against a constitution with a
+    different weight line or clause count, rather than a second copy of
+    the same frontmatter template."""
     state = os.path.join(d, "state")
     os.makedirs(os.path.join(state, "tasks"))
-    write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
+    write_lines(os.path.join(state, "constitution.md"), constitution_text.splitlines())
     for t in tasks:
         artifacts_block = "\n".join(f"  - {a}" for a in t["artifacts"])
         write_lines(
@@ -269,6 +298,8 @@ Writes {', '.join(t['artifacts'])}.
 def raw_shell_constitution(check_line):
     return f"""# Constitution: R4 fixture
 
+**Job weight**: deep, synthetic fixture; deep so no case couples to a clause count
+
 ## Clauses
 
 ### C-1: build succeeds
@@ -284,6 +315,150 @@ def raw_shell_constitution(check_line):
 ## Non-goals
 
 - none.
+"""
+
+
+# ------------------------------------------- R17/R18/boundary fixture helpers
+
+def clause_citation_constitution(citation):
+    """A single-clause, deep-weight constitution whose last clause's own
+    block—before any trailing section—carries `citation`. Deep weight keeps
+    R18 out of every citation-boundary case, since what's under test there
+    is where a defect gets attributed, not the ceiling."""
+    return f"""# Constitution: citation-boundary fixture
+
+**Job weight**: deep, synthetic fixture; deep so no case couples to a clause count
+
+## Clauses
+
+### C-1: trivial clause
+- **text**: The output file exists and is non-empty.
+- **check**: checker-judgment: confirm the output file exists and has content.
+- **severity**: minor
+- **failing example**: the output file is empty or missing; see `{citation}` for the real check.
+
+## Protected content
+
+- none.
+
+## Non-goals
+
+- none.
+"""
+
+
+def trailing_section_citation_constitution(citation):
+    """Same shape, but `citation` sits in `## Protected content` instead of
+    the clause block—the section #160 stopped silently folding into the
+    last clause's own tail."""
+    return f"""# Constitution: citation-boundary fixture
+
+**Job weight**: deep, synthetic fixture; deep so no case couples to a clause count
+
+## Clauses
+
+### C-1: trivial clause
+- **text**: The output file exists and is non-empty.
+- **check**: checker-judgment: confirm the output file exists and has content.
+- **severity**: minor
+- **failing example**: the output file is empty or missing.
+
+## Protected content
+
+- see `{citation}` for the reference implementation.
+
+## Non-goals
+
+- none.
+"""
+
+
+def clause_block(n):
+    """One mechanically generated `### C-N:` block. Used only by
+    weighted_constitution below, where what's under test is the clause
+    COUNT and the weight WORD, never a clause's own content."""
+    return (
+        f"### C-{n}: clause {n}\n"
+        f"- **text**: Clause {n} states a falsifiable standard.\n"
+        f"- **check**: checker-judgment: confirm clause {n}'s standard holds.\n"
+        f"- **severity**: minor\n"
+        f"- **failing example**: clause {n}'s standard is violated.\n"
+    )
+
+
+def weighted_constitution(weight_line, n_clauses, overrun_line=None):
+    """A constitution carrying `weight_line` verbatim after `**Job
+    weight**:` and exactly `n_clauses` generated clauses—R17/R18's whole
+    input surface. `overrun_line` is omitted when None, present (even if
+    empty, to exercise the empty-reason case) otherwise."""
+    overrun_block = f"**Ceiling overrun**: {overrun_line}\n" if overrun_line is not None else ""
+    clauses_block = "\n".join(clause_block(i) for i in range(1, n_clauses + 1))
+    return f"""# Constitution: weight/ceiling fixture
+
+**Job weight**: {weight_line}
+{overrun_block}
+## Clauses
+
+{clauses_block}
+
+## Protected content
+
+- none.
+
+## Non-goals
+
+- none.
+"""
+
+
+def constitution_without_weight_line(n_clauses=1):
+    """weighted_constitution's twin with no `**Job weight**:` line at
+    all—R17's missing-line case, which weighted_constitution can't express
+    since it always writes the line."""
+    clauses_block = "\n".join(clause_block(i) for i in range(1, n_clauses + 1))
+    return f"""# Constitution: weight/ceiling fixture
+
+## Clauses
+
+{clauses_block}
+
+## Protected content
+
+- none.
+
+## Non-goals
+
+- none.
+"""
+
+
+def weighted_task(task_id, clause_id, artifact):
+    """One task citing exactly one clause—used to build a decomposition
+    where every clause weighted_constitution generated is wired to a task,
+    so R6 (clause wiring) and R7 (DAG) clear before R17/R18 get a turn
+    under --audit-id DEC-audit."""
+    return f"""---
+id: {task_id}
+title: Weighted fixture {task_id}
+spec: .agent-guild/state/spec.md#one
+clauses: [{clause_id}]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+  {clause_id}: checker-judgment: confirm the output file exists and has content.
+status: pending
+retries: 0
+max_retries: 2
+deps: []
+escalations: []
+artifacts:
+  - {artifact}
+---
+
+## Spec excerpt
+
+Writes {artifact}.
 """
 
 
@@ -1048,6 +1223,378 @@ with tempfile.TemporaryDirectory() as d:
     write_lines(os.path.join(state, "constitution.md"), MINIMAL_CONSTITUTION.splitlines())
     rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
     check("R16 CON-audit with an empty tasks/: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------------- clause boundary + trailing sections (#160 piece 4)
+# The fix under test: a clause block now ends at the next `##`/`###`
+# heading instead of running to EOF, and `## Protected content` /
+# `## Non-goals` are scanned as their own regions—labeled
+# `constitution.md (## <title>)`—rather than silently absorbed into the
+# last clause's tail. build_fixture_repo_root pins compose-brief.py:64 to
+# a real snippet, same as the R1/R2 corpus cases above, so a citation to
+# that file resolves or doesn't by construction rather than by luck
+# against the live repo.
+print("clause boundary + trailing sections (#160 piece 4)")
+
+with tempfile.TemporaryDirectory() as fixture_root:
+    build_fixture_repo_root(fixture_root)
+
+    with tempfile.TemporaryDirectory() as d:
+        state = os.path.join(d, "state")
+        os.makedirs(os.path.join(state, "tasks"))
+        write_lines(
+            os.path.join(state, "constitution.md"),
+            trailing_section_citation_constitution(
+                ".agent-guild/scripts/compose-brief.py:9999"
+            ).splitlines(),
+        )
+        rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "CON-audit")
+        # Exit 1 here is itself half the proof: if the boundary fix had
+        # dropped trailing sections instead of re-scoping them, this
+        # citation would never be read at all and the case would exit 0.
+        check("bogus citation in a trailing section: exit 1", rc == 1, f"rc={rc} err={err}")
+        check("bogus citation in a trailing section: R1 named", rule_hit(err, "R1"), f"err={err!r}")
+        check(
+            "bogus citation in a trailing section: attributed to its own section, not the last clause",
+            "constitution.md (## Protected content)" in err,
+            f"err={err!r}",
+        )
+        check("bogus citation in a trailing section: no traceback", "Traceback" not in err, f"err={err!r}")
+
+    with tempfile.TemporaryDirectory() as d:
+        state = os.path.join(d, "state")
+        os.makedirs(os.path.join(state, "tasks"))
+        write_lines(
+            os.path.join(state, "constitution.md"),
+            trailing_section_citation_constitution(
+                ".agent-guild/scripts/compose-brief.py:64"
+            ).splitlines(),
+        )
+        rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "CON-audit")
+        check("corrected citation in a trailing section: exit 0", rc == 0, f"rc={rc} err={err}")
+
+    with tempfile.TemporaryDirectory() as d:
+        state = os.path.join(d, "state")
+        os.makedirs(os.path.join(state, "tasks"))
+        write_lines(
+            os.path.join(state, "constitution.md"),
+            clause_citation_constitution(
+                ".agent-guild/scripts/compose-brief.py:9999"
+            ).splitlines(),
+        )
+        rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "CON-audit")
+        check("bogus citation inside the clause's own block: exit 1", rc == 1, f"rc={rc} err={err}")
+        check("bogus citation inside the clause's own block: R1 named", rule_hit(err, "R1"), f"err={err!r}")
+        # The other half of the proof: narrowing the boundary didn't
+        # un-scan the clause itself, so this one stays attributed to plain
+        # constitution.md—no `(## ...)` parenthetical, because it never
+        # left the clause's own block.
+        check(
+            "bogus citation inside the clause's own block: no section parenthetical",
+            "(##" not in err,
+            f"err={err!r}",
+        )
+        check("bogus citation inside the clause's own block: no traceback", "Traceback" not in err, f"err={err!r}")
+
+# ------------------------------------------------------------- R17: weight line (#160)
+# Constitution-only (--audit-id CON-audit) except the one DEC-audit repeat
+# at the end, which needs a minimal valid task set for R6/R7 to clear
+# before R17 gets a turn.
+print("R17: weight line (#160)")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), constitution_without_weight_line(1).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R17 missing weight line: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R17 missing weight line: R17 named", rule_hit(err, "R17"), f"err={err!r}")
+    check("R17 missing weight line: mentions phase 0's derivation", "phase 0" in err.lower(), f"err={err!r}")
+    check("R17 missing weight line: no traceback", "Traceback" not in err, f"err={err!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(
+        os.path.join(state, "constitution.md"),
+        weighted_constitution(
+            "<light | standard | deep>[, corrected from <derived weight> by the user], <one-line reason>", 1
+        ).splitlines(),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R17 verbatim template placeholder: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R17 verbatim template placeholder: R17 named", rule_hit(err, "R17"), f"err={err!r}")
+    check("R17 verbatim template placeholder: names 'placeholder'", "placeholder" in err, f"err={err!r}")
+    check("R17 verbatim template placeholder: no traceback", "Traceback" not in err, f"err={err!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("heavy, because reasons", 1).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R17 unknown weight word: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R17 unknown weight word: R17 named", rule_hit(err, "R17"), f"err={err!r}")
+    check("R17 unknown weight word: names 'heavy'", "heavy" in err, f"err={err!r}")
+    check("R17 unknown weight word: no traceback", "Traceback" not in err, f"err={err!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("light, one artifact", 3).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R17 valid light weight, under its ceiling: exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(
+        os.path.join(state, "constitution.md"),
+        weighted_constitution(
+            "standard, corrected from light by the user, the harness needs extending", 8
+        ).splitlines(),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R17 corrected form, at standard's ceiling: exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(
+        os.path.join(state, "constitution.md"),
+        weighted_constitution(
+            "standard, corrected from light by the user, the harness needs extending", 9
+        ).splitlines(),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    # Over standard's ceiling (8), not light's (5)—only reachable if the
+    # corrected form actually parsed as "standard" rather than choking on
+    # the "corrected from light by the user" clause.
+    check("R17 corrected form, over standard's ceiling: exit 1", rc == 1, f"rc={rc} err={err}")
+    check(
+        "R17 corrected form, over ceiling: R18 named, proving 'standard' parsed",
+        rule_hit(err, "R18"),
+        f"err={err!r}",
+    )
+
+with tempfile.TemporaryDirectory() as d:
+    state = write_synthetic_state(
+        d,
+        [{"id": "T-001", "artifacts": ["out.txt"]}],
+        constitution_text=constitution_without_weight_line(1),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R17 missing weight line under DEC-audit: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R17 missing weight line under DEC-audit: R17 named", rule_hit(err, "R17"), f"err={err!r}")
+    check("R17 missing weight line under DEC-audit: no traceback", "Traceback" not in err, f"err={err!r}")
+
+# --------------------------------------------------------- R18: clause ceiling (#160)
+print("R18: clause ceiling (#160)")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("light, one artifact", 6).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R18 light over ceiling, no overrun recorded: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R18 light over ceiling: R18 named", rule_hit(err, "R18"), f"err={err!r}")
+    check("R18 light over ceiling: count 6 named", "6" in err, f"err={err!r}")
+    check("R18 light over ceiling: ceiling 5 named", "5" in err, f"err={err!r}")
+    check("R18 light over ceiling: weight 'light' named", "light" in err, f"err={err!r}")
+    check("R18 light over ceiling: '**Ceiling overrun**' named", "**Ceiling overrun**" in err, f"err={err!r}")
+    check("R18 light over ceiling: no traceback", "Traceback" not in err, f"err={err!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(
+        os.path.join(state, "constitution.md"),
+        weighted_constitution(
+            "light, one artifact", 6, overrun_line="the sixth clause covers the unattended cron path"
+        ).splitlines(),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R18 light over ceiling, overrun recorded: exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("light, one artifact", 5).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R18 light exactly at its ceiling: exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("standard, one artifact", 9).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R18 standard over ceiling, no overrun recorded: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R18 standard over ceiling: R18 named", rule_hit(err, "R18"), f"err={err!r}")
+    check("R18 standard over ceiling: ceiling 8 named", "8" in err, f"err={err!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("deep, one artifact", 12).splitlines())
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    check("R18 deep is unbounded: exit 0", rc == 0, f"rc={rc} err={err}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(
+        os.path.join(state, "constitution.md"),
+        weighted_constitution("light, one artifact", 6, overrun_line="").splitlines(),
+    )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+    # An overrun line with nothing after the colon records nothing—R18
+    # treats it the same as no overrun line at all rather than as a blank
+    # waiver.
+    check("R18 overrun line with an empty reason: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R18 empty overrun reason: R18 named", rule_hit(err, "R18"), f"err={err!r}")
+    check("R18 empty overrun reason: no traceback", "Traceback" not in err, f"err={err!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), weighted_constitution("light, one artifact", 6).splitlines())
+    for i in range(1, 7):
+        write_lines(
+            os.path.join(state, "tasks", f"T-{i:03d}.md"),
+            weighted_task(f"T-{i:03d}", f"C-{i}", f"out{i}.txt").splitlines(),
+        )
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R18 under DEC-audit: light+6, every clause cited, no overrun: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R18 under DEC-audit: R18 named", rule_hit(err, "R18"), f"err={err!r}")
+    check("R18 under DEC-audit: no traceback", "Traceback" not in err, f"err={err!r}")
+
+# ------------------------------------------------- ceiling weld: table <-> CLAUSE_CEILINGS (#160)
+# CLAUSE_CEILINGS is the numbers' one mechanical home; CLAUDE.md's
+# "## Job weight" table restates them for the humans deriving a weight.
+# Reading the boundaries from the TABLE at test time—rather than
+# hardcoding 5/8/None a second time here—is what makes this section fail
+# if the two are ever edited to disagree (#160's welded-ceiling AC).
+print("ceiling weld: CLAUDE.md table welded to CLAUSE_CEILINGS (#160)")
+
+CLAUDE_MD_PATH = os.path.normpath(os.path.join(SCRIPTS_DIR, "..", "CLAUDE.md"))
+WEIGHT_ROW_RE = re.compile(r"^\|\s*(light|standard|deep)\s*\|.*\|\s*(\d+|none)\s*\|\s*$", re.M)
+
+if not os.path.isfile(CLAUDE_MD_PATH):
+    print(f"note: {CLAUDE_MD_PATH} not found — skipping the ceiling-weld section. This "
+          f"suite ships into user projects; a copied-in kit may not carry this repo's "
+          f"own CLAUDE.md, so the skip is expected there.")
+else:
+    with open(CLAUDE_MD_PATH, encoding="utf-8") as f:
+        claude_md_text = f.read()
+    weight_rows = WEIGHT_ROW_RE.findall(claude_md_text)
+    check(
+        "ceiling weld: exactly three '## Job weight' table rows found",
+        len(weight_rows) == 3,
+        f"weight_rows={weight_rows}",
+    )
+
+    for weight, ceiling_str in weight_rows:
+        if ceiling_str == "none":
+            with tempfile.TemporaryDirectory() as d:
+                state = os.path.join(d, "state")
+                os.makedirs(os.path.join(state, "tasks"))
+                write_lines(
+                    os.path.join(state, "constitution.md"),
+                    weighted_constitution(f"{weight}, ceiling-weld fixture", 12).splitlines(),
+                )
+                rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+                check(f"ceiling weld {weight}=none: 12 clauses exit 0", rc == 0, f"rc={rc} err={err}")
+            continue
+
+        n = int(ceiling_str)
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(
+                os.path.join(state, "constitution.md"),
+                weighted_constitution(f"{weight}, ceiling-weld fixture", n).splitlines(),
+            )
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+            check(f"ceiling weld {weight}: {n} clauses (at the table's ceiling) exit 0", rc == 0, f"rc={rc} err={err}")
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(
+                os.path.join(state, "constitution.md"),
+                weighted_constitution(f"{weight}, ceiling-weld fixture", n + 1).splitlines(),
+            )
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+            check(f"ceiling weld {weight}: {n + 1} clauses (one over) exit 1", rc == 1, f"rc={rc} err={err}")
+            check(f"ceiling weld {weight}: R18 named", rule_hit(err, "R18"), f"err={err!r}")
+            check(f"ceiling weld {weight}: table's ceiling {n} named", str(n) in err, f"err={err!r}")
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            os.makedirs(os.path.join(state, "tasks"))
+            write_lines(
+                os.path.join(state, "constitution.md"),
+                weighted_constitution(
+                    f"{weight}, ceiling-weld fixture", n + 1,
+                    overrun_line="the extra clause covers a signal not on the table's row",
+                ).splitlines(),
+            )
+            rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+            check(f"ceiling weld {weight}: {n + 1} clauses with a recorded overrun exit 0", rc == 0, f"rc={rc} err={err}")
+
+# ------------------------------------------- worked examples: constitution SKILL.md (#160)
+# The constitution skill's own weight-derivation worked examples, pinned
+# so a later edit to guild-core/workflows/constitution/SKILL.md can't
+# quietly drift the table's weights away from what the skill's prose
+# claims about them. Guarded on guild-core/ rather than the corpus
+# archive—this table has nothing to do with the #117 corpus—since a
+# copied-in kit carries guild-core/ but never this repo's own source tree
+# for it.
+print("worked examples: constitution SKILL.md weight-derivation table (#160)")
+
+GUILD_CORE_DIR = os.path.normpath(os.path.join(SCRIPTS_DIR, "..", "..", "guild-core"))
+WORKED_EXAMPLE_ROW_RE = re.compile(
+    r"^\| (kendrick/dotfiles#\d+|conflicting signals) \| (.+) \| (light|standard|deep) \|$", re.M
+)
+
+if not os.path.isdir(GUILD_CORE_DIR):
+    print(f"note: {GUILD_CORE_DIR} not found — skipping the worked-examples section. This "
+          f"suite ships into user projects; guild-core/ is this repo's own kit source and "
+          f"does not ship, so the skip is expected there.")
+else:
+    skill_path = os.path.join(GUILD_CORE_DIR, "workflows", "constitution", "SKILL.md")
+    if not os.path.isfile(skill_path):
+        print(f"note: {skill_path} not found — skipping the worked-examples section.")
+    else:
+        with open(skill_path, encoding="utf-8") as f:
+            skill_text = f.read()
+        worked_rows = {
+            m.group(1): (m.group(2), m.group(3))
+            for m in WORKED_EXAMPLE_ROW_RE.finditer(skill_text)
+        }
+        # If a concurrent edit to SKILL.md hasn't landed the table yet,
+        # these fail honestly rather than being loosened to tolerate the
+        # race—see this task's own report for whether that happened here.
+        check("worked examples: three rows present", len(worked_rows) == 3, f"worked_rows={worked_rows}")
+        check(
+            "worked examples: kendrick/dotfiles#19 derives standard",
+            worked_rows.get("kendrick/dotfiles#19", (None, None))[1] == "standard",
+            f"worked_rows={worked_rows}",
+        )
+        check(
+            "worked examples: kendrick/dotfiles#21 derives deep",
+            worked_rows.get("kendrick/dotfiles#21", (None, None))[1] == "deep",
+            f"worked_rows={worked_rows}",
+        )
+        check(
+            "worked examples: conflicting signals derives standard",
+            worked_rows.get("conflicting signals", (None, None))[1] == "standard",
+            f"worked_rows={worked_rows}",
+        )
+        check(
+            "worked examples: conflicting signals' middle cell explains the heavier weight wins",
+            "heavier" in worked_rows.get("conflicting signals", ("", None))[0],
+            f"worked_rows={worked_rows}",
+        )
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -18,16 +18,26 @@ masks something provable—and only the FIRST violation found is reported:
 
     R6 clause wiring         R4 check form            R2 citation anchor
     R7 dependency DAG        R5 check runnable        R9 verdict contradiction
-    R15 owns shape           R1 citation resolves     R10 count vs list
-    R13 ownership overlap    R3 citation shape        R12' cross-artifact count
-    R14 dep rationale        R8 build ordering
-                             R16 build serialization
+    R17 weight line          R1 citation resolves     R10 count vs list
+    R18 clause ceiling       R3 citation shape        R12' cross-artifact count
+    R15 owns shape           R8 build ordering
+    R13 ownership overlap    R16 build serialization
+    R14 dep rationale
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
 depend on, order, or own yet), so R6, R7, R15, R13, R14, R8, and R16 are
 skipped; every other rule runs over constitution.md alone. `--audit-id
 DEC-audit`: everything runs, and an empty `tasks/` is itself an R6
 failure—a decomposition that produced no tasks decomposed nothing.
+
+R17 and R18 (#160) run under both audit ids—the constitution is input to
+both—and R17 before R18, so a constitution with no usable weight reports
+as "derive the weight" rather than as a ceiling complaint. R17 wants the
+`**Job weight**:` line present, past its template placeholder, and naming
+a real weight; R18 counts clauses against that weight's ceiling
+(CLAUSE_CEILINGS, the numbers' one mechanical home) and refuses only an
+overrun no `**Ceiling overrun**:` line records—the ceiling is a budget,
+not a gate, so a recorded overrun passes.
 
 R16 runs immediately after R8 and reads the same two path sets. R8 puts the
 regeneration last; R16 asks how many regenerations there are, and whether a
@@ -64,12 +74,18 @@ and that the two lists correspond one to one; whether a given rationale is
 actually *true* is judgment, and stays the auditor's job under DEC-audit,
 not this linter's.
 
-Every prose rule (R1 through R4, R9, R10, R12') reads only two kinds of
+Every prose rule (R1 through R4, R9, R10, R12') reads only three kinds of
 text: a task's frontmatter (in practice, only `check_method` carries prose)
-plus its `## Spec excerpt`, and a constitution clause's own block. Everything
-else—`## Rework diagnosis`, `## Courier comparison`, `## Routing`, fenced
-code blocks, HTML comments—is a historical record or literal script text,
-not paperwork under review, and scanning it produced six of the false
+plus its `## Spec excerpt`; a constitution clause's own block, which ends at
+the next `##`/`###` heading—the boundary is imported from
+compose-brief.py's `extract_clause` so the two parsers of one file can't
+disagree (#160); and each post-`## Clauses` section (`## Protected
+content`, `## Non-goals`, ...) as its own region, labeled
+`constitution.md (## <title>)` so a defect there is reported against the
+section rather than against the last clause's id. Everything else—`##
+Rework diagnosis`, `## Courier comparison`, `## Routing`, fenced code
+blocks, HTML comments—is a historical record or literal script text, not
+paperwork under review, and scanning it produced six of the false
 positives this linter was measured against before that scope was drawn.
 
 Exit codes: 0 pass; 1 a rule is violated (one line on stderr, prefixed
@@ -149,6 +165,19 @@ try:
 except Exception:
     paths_overlap = None
     owns_entry_problem = None
+
+# The clause-block terminator, taken from compose-brief.py rather than
+# restated, so the two parsers of constitution.md can't disagree on where a
+# clause ends—they did once (#160): this file ran a block to the next
+# `### C-N:` heading or EOF while extract_clause stopped at any `##`/`###`,
+# and the last clause quietly swallowed `## Protected content` and
+# `## Non-goals`, blaming their defects on an innocent clause id. The
+# fallback duplicates two regex tokens; the parity test in
+# test_check_job_spec.py is what actually pins the boundary.
+try:
+    NEXT_H2_OR_H3_RE = _load_module("compose_brief_boundary_scope", "compose-brief.py").NEXT_H2_OR_H3_RE
+except Exception:
+    NEXT_H2_OR_H3_RE = re.compile(r"(?m)^#{2,3} ")
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +427,13 @@ def parse_constitution(text):
     for idx, m in enumerate(headings):
         clause_id = m.group(1)
         start = m.start()
-        end = headings[idx + 1].start() if idx + 1 < len(headings) else len(text)
+        # A block ends at the next `##` or `###` heading of any kind—the
+        # same boundary extract_clause draws—not at the next `### C-N:`,
+        # which would run the last clause to EOF and absorb every trailing
+        # section into it (#160). What those sections lose here they get
+        # back as regions of their own; see parse_trailing_sections.
+        end_m = NEXT_H2_OR_H3_RE.search(text, m.end())
+        end = end_m.start() if end_m else len(text)
         block = text[start:end].rstrip("\n")
         block_start_line = text.count("\n", 0, start) + 1
 
@@ -416,6 +451,138 @@ def parse_constitution(text):
             offset += len(line) + 1
         clauses[clause_id] = Clause(clause_id, block, block_start_line, check_text, check_line, severity)
     return clauses
+
+
+def parse_trailing_sections(text):
+    """[(title, block_text, block_start_line)] for every `## ` section at or
+    after the first clause heading—`## Protected content` and `## Non-goals`
+    in the template, plus anything a job adds. Narrowing the clause boundary
+    above without re-registering these would silently drop them from every
+    prose rule, trading #160's misattribution for a blind spot; this is the
+    other half of that fix. A `###` inside a section is the section's own
+    content, so blocks run to the next `## ` heading or EOF. Sections before
+    the first clause (the preamble, `## Clauses` itself) stay unscanned:
+    the weight line is R17/R18's territory, not citation prose."""
+    headings = list(CLAUSE_HEADING_RE.finditer(text))
+    if not headings:
+        return []
+    first_clause = headings[0].start()
+    sections = []
+    for m in re.finditer(r"(?m)^## .*$", text):
+        if m.start() < first_clause:
+            continue
+        nxt = re.search(r"(?m)^## ", text[m.end():])
+        end = m.end() + (nxt.start() if nxt else len(text) - m.end())
+        sections.append((
+            m.group(0).strip(),
+            text[m.start():end].rstrip("\n"),
+            text.count("\n", 0, m.start()) + 1,
+        ))
+    return sections
+
+
+# ---------------------------------------------------------------------------
+# Weight line parsing, for R17/R18. The line sits in the preamble, above the
+# first heading, so parse_constitution never sees it.
+# ---------------------------------------------------------------------------
+
+# The one mechanical home for the ceilings (#160). CLAUDE.md's `## Job
+# weight` table restates them for the humans who derive a weight, and a
+# test welds that table to this dict so the two can't drift; nothing else
+# may state the numbers.
+CLAUSE_CEILINGS = {"light": 5, "standard": 8, "deep": None}
+
+WEIGHT_LINE_RE = re.compile(r"(?m)^\*\*Job weight\*\*:\s*(.*)$")
+OVERRUN_LINE_RE = re.compile(r"(?m)^\*\*Ceiling overrun\*\*:\s*(.*)$")
+
+
+class WeightInfo:
+    def __init__(self, raw, line, weight, token, placeholder, overrun_reason):
+        self.raw = raw
+        self.line = line
+        self.weight = weight            # a CLAUSE_CEILINGS key, or None
+        self.token = token              # the raw first word, for diagnostics
+        self.placeholder = placeholder
+        self.overrun_reason = overrun_reason
+
+
+def parse_weight_line(text):
+    """WeightInfo from the constitution's preamble, or None when no
+    `**Job weight**:` line exists at all. Only the preamble—text before the
+    first `##`/`###` heading—is searched, so a clause quoting the line's
+    shape can't shadow the real one. The effective weight is the first
+    word of the first comma-segment, which reads `standard, corrected from
+    light by the user, <reason>` as standard with no extra grammar. A
+    value still starting with `<` is the template placeholder, untouched
+    since Phase 0 skipped its derivation step."""
+    boundary = NEXT_H2_OR_H3_RE.search(text)
+    preamble = text[:boundary.start()] if boundary else text
+    m = WEIGHT_LINE_RE.search(preamble)
+    if not m:
+        return None
+    value = m.group(1).strip()
+    line = text.count("\n", 0, m.start()) + 1
+    placeholder = value.startswith("<")
+    token = value.split(",")[0].split()[0].lower() if value.split(",")[0].split() else ""
+    weight = token if token in CLAUSE_CEILINGS else None
+    om = OVERRUN_LINE_RE.search(preamble)
+    # An overrun line whose reason is empty recorded nothing—R18 treats it
+    # as absent rather than as a waiver you can leave blank. A `<`-leading
+    # value is the template's shape copied without a decision behind it,
+    # which is the same nothing (mirrors the weight placeholder above).
+    overrun_reason = om.group(1).strip() if om else ""
+    if overrun_reason.startswith("<"):
+        overrun_reason = ""
+    return WeightInfo(value, line, weight, token, placeholder, overrun_reason)
+
+
+# ---------------------------------------------------------------------------
+# R17/R18: weight line and clause ceiling (#160). Both run under CON-audit
+# and DEC-audit alike—the constitution is input to both—and R17 runs first
+# so a constitution with no usable weight always reports as "derive the
+# weight" rather than as a ceiling complaint about a ceiling it never set.
+# R18 is deliberately not a hard cap: CLAUDE.md calls the ceiling a budget,
+# not a gate, so what it refuses is an overrun nothing recorded. The
+# recorded form is a `**Ceiling overrun**:` line with a non-empty reason.
+# ---------------------------------------------------------------------------
+
+def rule_R17(ctx):
+    w = ctx.weight
+    if w is None:
+        return (
+            "R17 weight-line: constitution.md:1 has no **Job weight** line above "
+            "## Clauses—phase 0's derivation step (the constitution skill's "
+            "interview) sets it before drafting"
+        )
+    if w.placeholder:
+        return (
+            f"R17 weight-line: constitution.md:{w.line} still carries the template "
+            "placeholder—phase 0's derivation step (the constitution skill's "
+            "interview) was skipped"
+        )
+    if w.weight is None:
+        return (
+            f"R17 weight-line: constitution.md:{w.line} weight '{w.token}' is none "
+            "of light, standard, or deep"
+        )
+    return None
+
+
+def rule_R18(ctx):
+    w = ctx.weight
+    if w is None or w.weight is None:
+        return None  # no usable weight is R17's finding, not a ceiling question
+    ceiling = CLAUSE_CEILINGS[w.weight]
+    if ceiling is None:
+        return None  # deep is unbounded by design
+    count = len(ctx.clauses)
+    if count > ceiling and not w.overrun_reason:
+        return (
+            f"R18 clause-ceiling: constitution.md:{w.line} {count} clauses against "
+            f"{w.weight}'s ceiling of {ceiling} and no **Ceiling overrun** line "
+            "records why"
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1119,6 +1286,20 @@ def gather_prose_regions(ctx):
             return _start + _text.count("\n", 0, offset)
 
         regions.append(("constitution.md", "constitution.md", text, line_of))
+    # Post-Clauses sections (`## Protected content`, `## Non-goals`, ...)
+    # were scanned before #160's boundary fix too—as the last clause's
+    # accidental tail. Registering them here keeps that surface and fixes
+    # the attribution: the section's own label, not an innocent clause id.
+    # The artifact_key stays constitution.md on purpose, so R12' keeps
+    # treating a section and a clause of the same file as one artifact
+    # rather than cross-comparing them as two.
+    for title, block_text, start_line in ctx.trailing_sections:
+        text = scoped(block_text)
+
+        def line_of(offset, _start=start_line, _text=text):
+            return _start + _text.count("\n", 0, offset)
+
+        regions.append(("constitution.md", f"constitution.md ({title})", text, line_of))
     return regions
 
 
@@ -1535,9 +1716,14 @@ def rule_R12(ctx):
 # ---------------------------------------------------------------------------
 
 class Context:
-    def __init__(self, clauses, tasks):
+    # weight and trailing_sections default so a direct importer building a
+    # Context by hand (the module-scope-load audience above) keeps working;
+    # R17 reads a missing weight as its missing-line finding either way.
+    def __init__(self, clauses, tasks, weight=None, trailing_sections=()):
         self.clauses = clauses
         self.tasks = tasks
+        self.weight = weight
+        self.trailing_sections = trailing_sections
 
 
 def load_context(state_dir, compose_brief):
@@ -1552,6 +1738,8 @@ def load_context(state_dir, compose_brief):
         return None, f"cannot read {const_path}: {e}"
 
     clauses = parse_constitution(const_text)
+    weight = parse_weight_line(const_text)
+    trailing_sections = parse_trailing_sections(const_text)
 
     task_paths = sorted(glob.glob(os.path.join(state_dir, "tasks", "*.md")))
     tasks = []
@@ -1561,7 +1749,7 @@ def load_context(state_dir, compose_brief):
             return None, err
         tasks.append(task)
 
-    return Context(clauses, tasks), None
+    return Context(clauses, tasks, weight, trailing_sections), None
 
 
 def run_rules(ctx, audit_id, repo_root):
@@ -1571,6 +1759,8 @@ def run_rules(ctx, audit_id, repo_root):
     steps = (
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
+        lambda: rule_R17(ctx),
+        lambda: rule_R18(ctx),
         lambda: rule_R15(ctx, audit_id, repo_root),
         lambda: rule_R13(ctx, audit_id),
         lambda: rule_R14(ctx, audit_id),
@@ -1627,6 +1817,8 @@ body
 """
 
 _FIXTURE_CONSTITUTION = """# Constitution: self-test fixture
+
+**Job weight**: light, two clauses, both through existing checks
 
 ### C-1: first clause
 - **text**: The build must stay green.

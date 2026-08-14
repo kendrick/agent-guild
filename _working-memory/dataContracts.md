@@ -30,6 +30,12 @@ Source: `.agent-guild/templates/constitution.md`. A `**Job weight**: <light | st
 
 The clause-block terminator bug is fixed too: `check-job-spec.parse_constitution` now ends a block at the next `##`/`###` heading, matching `compose-brief.extract_clause`, instead of running to end of file. `## Protected content` and `## Non-goals` are scanned as their own labeled regions, so a citation defect there is reported against `constitution.md (## Non-goals)` rather than the last clause's id.
 
+## Clause Baseline Field
+
+A clause with a script check can optionally carry `- **baseline**: red | green` alongside its `- **check**:` line; judgment clauses carry none. Red declares the check is expected to FAIL against the untouched tree: the property the clause names hasn't been built yet. Green declares it's expected to PASS: the clause forbids something, or guards a suite that already passes. `check-job-spec.py`'s R19 fails the linter on any other value, blocking the auditor dispatch like every other rule.
+
+`.agent-guild/scripts/check-baselines.py [state-dir] [--repo-root DIR] [--timeout SECONDS] [--dry-run]` runs every declared check against the current tree and holds the exit code to its declaration, meaningful before any work begins at Phase 0 / CON-audit r0. It skips judgment, undeclared, and unclassifiable clauses, tallying each. Exit 1 if any check contradicts its baseline; else 3 if any check could not run (exit 3, a timeout, or a bad baseline value); else 0. `--dry-run` classifies every clause without executing anything and always exits 0. The auditor invokes it during CON-audit; it's never wired into `dispatch-guard` or any hook.
+
 ## Task Frontmatter
 
 Source: `.agent-guild/templates/task.md`. Fields: `id`, `title`, `spec` (anchor into `spec.md`), `clauses[]`, `executor`, `executor_model`, `checker`, `check_method`, `status`, `retries`, `max_retries`, `deps[]`, `dep_rationale[]`, `owns[]`, `escalations[]`, `artifacts[]`. Every clause in `clauses` must appear in `check_method`, named to a script invocation or a `checker-judgment` rubric.

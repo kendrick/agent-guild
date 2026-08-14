@@ -40,6 +40,17 @@ is a third form nothing verifies, so hand it to the sanctioned runner instead:
 check-build.sh 'one; two; exit $((a|b))'. That is still the first form, and
 check-job-spec.py shell-parses whatever you pass it.
 
+A script-checked clause can also carry `- **baseline**: red | green`. Red
+means the check is expected to FAIL against the tree as the job finds it:
+the clause asserts a property nothing has built yet. Green means expected to
+PASS: the clause forbids something, or guards a suite that already passes.
+The field is optional, but declare it on every script-checked clause you
+can. check-baselines.py runs the declared checks against the current tree
+before any worker is dispatched (Phase 0 / CON-audit r0) and holds each to
+its word, catching a red clause whose check already passes—the #141
+defect—mechanically, instead of spending an audit round on it.
+check-job-spec.py's R19 rejects any baseline value other than red or green.
+
 The CON-audit builds a reference implementation only when a check's own
 logic is written for this job—an inline check-build.sh pipeline, or a
 self-test in a new script—not when it hands off to an existing script or
@@ -56,6 +67,7 @@ compare one against prose, and #117 spent an audit round on a clause that read
 ### C-1: <short name>
 - **text**: <the standard, stated so a violation is recognizable>
 - **check**: .agent-guild/scripts/check-foo.sh <args>   <!-- or: checker-judgment: <rubric> -->
+- **baseline**: red   <!-- red | green, see comment above; optional -->
 - **severity**: blocker   <!-- blocker | major | minor -->
 - **failing example**: <one concrete artifact that would violate this>
 

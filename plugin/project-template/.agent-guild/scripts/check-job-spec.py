@@ -20,8 +20,9 @@ masks something provable—and only the FIRST violation found is reported:
     R7 dependency DAG        R5 check runnable        R9 verdict contradiction
     R17 weight line          R1 citation resolves     R10 count vs list
     R18 clause ceiling       R3 citation shape        R12' cross-artifact count
-    R15 owns shape           R8 build ordering
-    R13 ownership overlap    R16 build serialization
+    R19 baseline value       R8 build ordering
+    R15 owns shape           R16 build serialization
+    R13 ownership overlap
     R14 dep rationale
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
@@ -37,7 +38,10 @@ as "derive the weight" rather than as a ceiling complaint. R17 wants the
 a real weight; R18 counts clauses against that weight's ceiling
 (CLAUSE_CEILINGS, the numbers' one mechanical home) and refuses only an
 overrun no `**Ceiling overrun**:` line records—the ceiling is a budget,
-not a gate, so a recorded overrun passes.
+not a gate, so a recorded overrun passes. R19 (#182) holds the optional
+`- **baseline**:` clause field to its two legal values, red and green;
+absence is legal (check-baselines.py skips and counts it), so the only
+provable defect is a value that script could never hold a check to.
 
 R16 runs immediately after R8 and reads the same two path sets. R8 puts the
 regeneration last; R16 asks how many regenerations there are, and whether a
@@ -408,13 +412,16 @@ CLAUSE_FIELD_RE = re.compile(r"^- \*\*([a-zA-Z ]+)\*\*:\s?(.*)$")
 
 class Clause:
     def __init__(self, clause_id, block_text, block_start_line,
-                 check_text, check_line, severity):
+                 check_text, check_line, severity,
+                 baseline=None, baseline_line=0):
         self.id = clause_id
         self.block_text = block_text
         self.block_start_line = block_start_line
         self.check_text = check_text
         self.check_line = check_line
         self.severity = severity
+        self.baseline = baseline
+        self.baseline_line = baseline_line
 
 
 def parse_constitution(text):
@@ -438,6 +445,7 @@ def parse_constitution(text):
         block_start_line = text.count("\n", 0, start) + 1
 
         check_text, check_line, severity = "", 0, None
+        baseline, baseline_line = None, 0
         offset = start
         for line in block.split("\n"):
             fm = CLAUSE_FIELD_RE.match(line.strip())
@@ -448,8 +456,12 @@ def parse_constitution(text):
                     check_line = text.count("\n", 0, offset) + 1
                 elif field == "severity":
                     severity = val
+                elif field == "baseline":
+                    baseline = val.lower()
+                    baseline_line = text.count("\n", 0, offset) + 1
             offset += len(line) + 1
-        clauses[clause_id] = Clause(clause_id, block, block_start_line, check_text, check_line, severity)
+        clauses[clause_id] = Clause(clause_id, block, block_start_line, check_text, check_line, severity,
+                                    baseline, baseline_line)
     return clauses
 
 
@@ -582,6 +594,28 @@ def rule_R18(ctx):
             f"{w.weight}'s ceiling of {ceiling} and no **Ceiling overrun** line "
             "records why"
         )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# R19: baseline value (#182). The `- **baseline**:` field is optional—a
+# clause that declares nothing is skipped by check-baselines.py and counted,
+# not failed—so the only defect this rule can prove is a value that is
+# neither red nor green: a declaration check-baselines.py could not hold
+# the check to, caught here before an auditor round instead of surfacing
+# as that script's could-not-run bucket mid-audit.
+# ---------------------------------------------------------------------------
+
+def rule_R19(ctx):
+    for cid in sorted(ctx.clauses, key=lambda c: int(c[2:])):
+        clause = ctx.clauses[cid]
+        if clause.baseline is None:
+            continue
+        if clause.baseline not in ("red", "green"):
+            return (
+                f"R19 baseline-value: constitution.md:{clause.baseline_line} {cid} "
+                f"baseline '{clause.baseline}' is neither red nor green"
+            )
     return None
 
 
@@ -1761,6 +1795,7 @@ def run_rules(ctx, audit_id, repo_root):
         lambda: rule_R7(ctx, audit_id),
         lambda: rule_R17(ctx),
         lambda: rule_R18(ctx),
+        lambda: rule_R19(ctx),
         lambda: rule_R15(ctx, audit_id, repo_root),
         lambda: rule_R13(ctx, audit_id),
         lambda: rule_R14(ctx, audit_id),

@@ -33,6 +33,11 @@ is a third form nothing verifies, so hand it to the sanctioned runner instead:
 check-build.sh 'one; two; exit $((a|b))'. That is still the first form, and
 check-job-spec.py shell-parses whatever you pass it.
 
+The CON-audit builds a reference implementation only when a check's own
+logic is written for this job—an inline check-build.sh pipeline, or a
+self-test in a new script—not when it hands off to an existing script or
+suite. Write those so a stranger could build them.
+
 When a clause names N things, list them instead of spreading them across a
 sentence. check-job-spec.py can compare a count against a list. It cannot
 compare one against prose, and #117 spent an audit round on a clause that read

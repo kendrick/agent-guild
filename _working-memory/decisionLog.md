@@ -14,6 +14,32 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-16: The Apparatus Cache Is Declined, Because Rebuilding It Is A Variance Oracle
+
+**Source:** #122, partially shipped as PR #199; the alternative filed as #198
+
+**Context:** #119 told the CON-auditor to build a reference implementation and run every clause's harness against it, and never said how many times. `kendrick/skills#27` built the same one six times inside 107 minutes. #122 read that as waste and proposed caching it.
+
+**Decision:** don't cache. On `kendrick/dotfiles#19` two consecutive rounds rebuilt the same harness and disagreed about `$STUBS` placement and `PATH` prepend-versus-replace, and both disagreements were real constitution blockers no reading had caught. That divergence is a variance oracle: it surfaces ambiguities nobody thought to write a control for, and those cannot be enumerated in advance, because if they could the clause would not be ambiguous. Two supporting reasons. #191 binds the fork sweep to transcription, so a round reusing an artifact transcribes nothing and its sweep has an empty domain. And build-is-a-check is anti-correlated with cache hits, since a CON round N+1 exists precisely because the constitution just changed, which is when re-asking "is this still buildable" has the most to say.
+
+**What shipped instead:** the venue rule — a throwaway repo goes in its own `mktemp -d`, never under the apparatus path, which is what the role actually instructed and what let one fixture break a whole repo's chezmoi rendering; round-scoping now carrying its reason rather than reading as reclaimable housekeeping; and apparatus named as the archive's explicit exception, deleted at teardown because `archive/` is tracked.
+
+**Alternatives considered:** moving a persisted apparatus outside the repo (rejected — no job identity exists in the kit, `CON-audit-r0` is the same string in every job, and there is no precedent for a persistent out-of-tree path); keying reuse to a per-artifact digest (rejected, see [[antipatterns]]); a two-sided control carried by the cache (rejected — a control the harness's author writes is not independent of the harness's own misconception).
+
+**Measured, across eleven archived runs:** 29 CON rounds, 20 DEC rounds, 9 DEC rounds after the first. Seven of the eleven have no round a cache could have helped, and four of the nine belong to #117 alone. Both issues now park on a written entry condition (see [[openQuestions]]).
+
+## 2026-08-16: A Harness Red Against Everything Reported As Discriminating
+
+**Source:** #191, landed as PR #197 (`d41cf9a`)
+
+**Context:** #119's discrimination test asked only whether a harness stays green against a deliberately-broken variant, never whether it goes green against something correct. A harness red against *everything* satisfied that test and reported as discriminating. #182 named the blindness while scoping itself out of it, closing its non-goals with "#119's auditor prose remains the only coverage for a check that is red when it should be green." The prose did not carry it.
+
+**Decision:** the auditor runs every check against the reference implementation it built and expects green, and a clause clears that section on green-then-red and on nothing else. A harness red against a faithful implementation fails its clause, named as a distinct defect from one that stays green against a variant: that check accepts too much, this one accepts nothing at all and no worker can ever satisfy it. The build step gains the matching case — a contract you can build two ways is the same finding as one you cannot build at all, and the sweep for it runs by enumeration over every clause transcribed rather than where the wording looks slippery.
+
+**Incident:** `kendrick/skills#27` CON-audit-r2 found a check whose own setup truncated the record it then asserted against, so no conforming stamper could pass it while its headline pass string printed anyway. It was caught only because that auditor ran the check against a conforming reference implementation it wrote itself.
+
+**Known limit:** the section is nested under `## CON-audit`, and both incidents that motivated the change are DEC rounds where the auditors built past their charter on initiative. Filed as #196.
+
 ## 2026-08-13: A Dep Is Ready When Its Worker Returns, And Invalidation Latches On Retry Counts
 
 **Source:** #135, landed as #178

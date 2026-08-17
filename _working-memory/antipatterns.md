@@ -14,6 +14,16 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-16: Don't key a cache on a digest its own producer wrote
+
+**Tried:** #122's per-artifact cache key. A cached reference implementation would carry a `.sha256` of the document it transcribes, written by the auditor that built it, reusing #110's `file_sha256` plus sidecar shape. A later round compares that digest against the live document and skips the build on a match.
+
+**What broke:** it inverts the trust direction of the very mechanism it cites. #110 works because two parties write two files — `dispatch-guard` stamps the *input* at dispatch, the auditor writes the *verdict*, and `_lib.audit_gate` compares across them. One party writing both sides proves only that the document has not moved since some agent wrote a hex string, and says nothing about whether the artifact was built from those bytes. An auditor that half-built, built from a stale reading, copied the previous round's directory, or died mid-build produces a cache byte-indistinguishable from a good one. The direction of failure flips too: `audit_gate` fails closed, while a cache hit fails *open*, because a match means skip the check.
+
+**Why we backed out:** the whole value of the borrowed shape is that a bad state stops the job. Deploying it where a bad state silently removes a check is the opposite of that, on the one role whose own brief warns that a rubber stamp disables the only check reaching the orchestrator's work.
+
+**Don't suggest:** any cache, skip, or reuse gated on a digest written by the same agent that produced the thing being reused — and that includes a self-reported "I rebuilt this from the current text." If a future design needs a key, it is hook-written over the input at dispatch, and the constitution-derived case already has one in `CON-audit-r<N>.md.sha256` that needs no new machinery at all.
+
 ## 2026-08-12: Don't give the orchestrator an exit from a failed audit it can take alone
 
 **Tried:** #120's "ship with minors" rule. When an audit's round budget ran out with no blocker outstanding, the orchestrator accepted the document, recorded the leftover minor findings, and carried on. Built twice, in two different shapes.

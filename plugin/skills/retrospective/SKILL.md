@@ -30,10 +30,12 @@ Write `.agent-guild/state/retrospective.md` covering:
 
 ## 3. Offer to archive
 
-The next job reuses `.agent-guild/state/`, so offer to move this run's record into `.agent-guild/state/archive/<date>/` (get the date from the environment) before the next constitution and task set land on top of it. Everything the run wrote goes:
+The next job reuses `.agent-guild/state/`, so offer to move this run's record into `.agent-guild/state/archive/<date>/` (get the date from the environment) before the next constitution and task set land on top of it. Everything the run wrote goes, with one exception named below:
 
 - `tasks/`, `briefs/`, `verdicts/`, `disputes/`, `notes/`—the message bus.
 - `log/`—dispatches, escalations, the stop gate's counter, and `vendor-calls.jsonl`.
 - `spec.md`, `constitution.md`, and the `retrospective.md` you just wrote.
+
+`apparatus/` is the exception, and it travels nowhere. `archive/` is tracked—that is what makes it worth carrying—so a throwaway repo or a whole-tree copy moved there ships, and one round of it on the `kendrick/dotfiles#22` run was 33M across 3,182 files. Delete it at teardown instead, and say in the retrospective that you did, since nothing else in the kit ever removes it.
 
 `log/` is the one that gets left behind, since it reads like plumbing rather than like part of the record. Check it last. It isn't plumbing: the vendor-call ledger inside it accounts for what every crossing cost and how the second opinions landed, and a ledger left live is one the next job appends to—two jobs' rows in one file, keyed by the same task ids.

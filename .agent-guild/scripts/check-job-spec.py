@@ -92,13 +92,23 @@ blocks, HTML comments—is a historical record or literal script text, not
 paperwork under review, and scanning it produced six of the false
 positives this linter was measured against before that scope was drawn.
 
-Exit codes: 0 pass; 1 a rule is violated (one line on stderr, prefixed
-`job-spec: `, naming the rule first—e.g. `job-spec: R2 citation-anchor:
-tasks/T-001.md:57 cites compose-brief.py:58 but the quoted code is at
-compose-brief.py:64`); 3 infra (state dir missing, a file unreadable, a task
-file with no frontmatter, or validate-verdict.py/compose-brief.py not
-importable)—an infra failure is not evidence the paperwork is sound, so
-dispatch-guard treats it as a distinct, non-passing outcome.
+Exit codes: 0 pass; 1 a PROOF rule is violated; 4 a HEURISTIC rule is
+violated; 3 infra (state dir missing, a file unreadable, a task file with no
+frontmatter, or validate-verdict.py/compose-brief.py not importable)—an
+infra failure is not evidence the paperwork is sound, so dispatch-guard
+treats it as a distinct, non-passing outcome.
+
+A violation is one line on stderr prefixed `job-spec: `, carrying the class
+in brackets and then the rule—e.g. `job-spec: [heuristic] R2
+citation-anchor: tasks/T-001.md:57 cites compose-brief.py:58 but the quoted
+code is at compose-brief.py:64`. The split between 1 and 4 is #139: a proof
+means the paperwork is wrong, a heuristic means the paperwork is wrong or
+the rule misread it, and a caller that cannot tell them apart treats a
+misfire as a defect. Both still block. A heuristic that fires also prints
+the waiver syntax, since a misread otherwise has no recourse short of
+state/PAUSED, which stands down every gate in the system rather than the one
+rule. See RULE_CLASS for the classification and rule_R20 for what a waiver
+must look like.
 
 --self-test runs an embedded fixture battery in temp directories and exits
 0 only if every fixture behaves as documented.
@@ -506,6 +516,73 @@ CLAUSE_CEILINGS = {"light": 5, "standard": 8, "deep": None}
 
 WEIGHT_LINE_RE = re.compile(r"(?m)^\*\*Job weight\*\*:\s*(.*)$")
 OVERRUN_LINE_RE = re.compile(r"(?m)^\*\*Ceiling overrun\*\*:\s*(.*)$")
+LINT_EXCEPTION_RE = re.compile(r"(?m)^\*\*Lint exception\*\*:\s*(\S+)[ \t]*[—:-]?[ \t]*(.*)$")
+
+PROOF = "proof"
+HEURISTIC = "heuristic"
+
+# Which rules prove a defect and which infer one (#139). The distinction was
+# already load-bearing in run_rules' ordering ("proofs before heuristics")
+# and nowhere else, so a misfire and a real defect blocked a dispatch
+# identically. A proof means the paperwork is wrong. A heuristic means the
+# paperwork is wrong OR the rule misread it, and only that second kind is
+# waivable—see rule_R20, which refuses a waiver against anything else.
+#
+# The four heuristics are the rules #132's adversarial review produced false
+# positives from: R2 guesses which backtick span anchors a citation, R9
+# pattern-matches an instruction to pass while filing a defect, R10 reads a
+# count above a list, R12' compares near-duplicate sentences. All four carry
+# constants tuned against a single seven-task corpus.
+RULE_CLASS = {
+    "R1": PROOF, "R2": HEURISTIC, "R3": PROOF, "R4": PROOF, "R5": PROOF,
+    "R6": PROOF, "R7": PROOF, "R8": PROOF, "R9": HEURISTIC,
+    "R10": HEURISTIC, "R12": HEURISTIC, "R13": PROOF, "R14": PROOF,
+    "R15": PROOF, "R16": PROOF, "R17": PROOF, "R18": PROOF, "R19": PROOF,
+    "R20": PROOF,
+}
+
+
+def normalize_rule_id(rid):
+    """`R12'` and `R12` are the same rule. R12 prints itself with a prime
+    because #132 replaced the original R12 with a narrower one and the prime
+    is how the plan distinguished them, so the id in a message and the id a
+    human types into a waiver can differ by that character. Normalizing here
+    means RULE_CLASS is keyed once and both spellings find it."""
+    return rid.strip().rstrip(":").rstrip("'′’")
+
+
+def rule_id_of(msg):
+    """The rule id a violation message opens with. Every rule body formats
+    its message as `R<N> <slug>: ...`, which the module docstring documents
+    as the contract, so the id is the first token."""
+    return normalize_rule_id(msg.split(None, 1)[0]) if msg else ""
+
+
+def rule_class_of(msg):
+    """PROOF for anything unrecognized, so a rule added without a RULE_CLASS
+    entry blocks as a proof rather than becoming silently waivable. R20
+    catches the missing entry itself; this is the fallback if it somehow
+    doesn't."""
+    return RULE_CLASS.get(rule_id_of(msg), PROOF)
+
+
+def parse_lint_exceptions(text):
+    """{rule_id: reason} from the constitution's preamble. Repeatable, one
+    rule per line, mirroring `**Ceiling overrun**:`—a waiver is a decision
+    about one rule, and one line per decision keeps a reason free to contain
+    whatever punctuation it needs. A reason that is empty or still carries
+    the template's `<` placeholder recorded nothing, so it does not count,
+    same as R18 reads an empty overrun line as absent."""
+    boundary = NEXT_H2_OR_H3_RE.search(text)
+    preamble = text[:boundary.start()] if boundary else text
+    out = {}
+    for m in LINT_EXCEPTION_RE.finditer(preamble):
+        rid = normalize_rule_id(m.group(1).rstrip("—-"))
+        reason = m.group(2).strip()
+        if reason.startswith("<"):
+            reason = ""
+        out[rid] = reason
+    return out
 
 
 class WeightInfo:
@@ -605,6 +682,54 @@ def rule_R18(ctx):
 # the check to, caught here before an auditor round instead of surfacing
 # as that script's could-not-run bucket mid-audit.
 # ---------------------------------------------------------------------------
+
+def rule_R20(ctx):
+    """A `**Lint exception**:` line has to name a heuristic and say why
+    (#139). Three ways it doesn't, all proved rather than inferred:
+
+    A waiver against a proof rule is the dangerous one. A proof fires on a
+    citation that doesn't resolve or a graph with a cycle, and there is no
+    reading of those where the rule is the thing that's wrong—so a waiver
+    would suppress a real defect rather than a misread, which is the one
+    outcome this whole mechanism must not buy. An unknown id is refused for
+    the same reason at one remove: it silences nothing today, and it becomes
+    a live waiver the moment someone adds a rule under that number.
+
+    An empty reason is refused because the reason is the point. The waiver
+    costs a line either way; what makes it worth having is the record of why
+    a rule was silenced, which is what a later tuning pass reads.
+    """
+    for rid, reason in sorted(ctx.lint_exceptions.items()):
+        cls = RULE_CLASS.get(rid)
+        if cls is None:
+            return (
+                f"R20 lint-exception: constitution.md waives {rid}, which is not "
+                "a rule this linter has; a waiver against an unknown id silences "
+                "nothing now and silences whatever takes that number later"
+            )
+        if cls != HEURISTIC:
+            return (
+                f"R20 lint-exception: constitution.md waives {rid}, which proves "
+                "its defect rather than inferring it; only a heuristic can misread "
+                f"paperwork, so only a heuristic can be waived ({_heuristic_list()})"
+            )
+        if not reason:
+            return (
+                f"R20 lint-exception: constitution.md waives {rid} with no reason "
+                "recorded; the reason is what a later pass at the rule reads, so "
+                "an unexplained waiver is refused the way an empty **Ceiling "
+                "overrun** line is"
+            )
+    return None
+
+
+def _heuristic_list():
+    names = sorted(
+        (r for r, c in RULE_CLASS.items() if c == HEURISTIC),
+        key=lambda r: int(r[1:]),
+    )
+    return "waivable: " + ", ".join(names)
+
 
 def rule_R19(ctx):
     for cid in sorted(ctx.clauses, key=lambda c: int(c[2:])):
@@ -1753,11 +1878,15 @@ class Context:
     # weight and trailing_sections default so a direct importer building a
     # Context by hand (the module-scope-load audience above) keeps working;
     # R17 reads a missing weight as its missing-line finding either way.
-    def __init__(self, clauses, tasks, weight=None, trailing_sections=()):
+    def __init__(self, clauses, tasks, weight=None, trailing_sections=(),
+                 lint_exceptions=None):
         self.clauses = clauses
         self.tasks = tasks
         self.weight = weight
         self.trailing_sections = trailing_sections
+        # Defaults empty for the same hand-built-Context audience as weight:
+        # no waivers is the ordinary state, and R20 has nothing to check.
+        self.lint_exceptions = lint_exceptions or {}
 
 
 def load_context(state_dir, compose_brief):
@@ -1774,6 +1903,7 @@ def load_context(state_dir, compose_brief):
     clauses = parse_constitution(const_text)
     weight = parse_weight_line(const_text)
     trailing_sections = parse_trailing_sections(const_text)
+    lint_exceptions = parse_lint_exceptions(const_text)
 
     task_paths = sorted(glob.glob(os.path.join(state_dir, "tasks", "*.md")))
     tasks = []
@@ -1783,18 +1913,31 @@ def load_context(state_dir, compose_brief):
             return None, err
         tasks.append(task)
 
-    return Context(clauses, tasks, weight, trailing_sections), None
+    return Context(clauses, tasks, weight, trailing_sections, lint_exceptions), None
 
 
 def run_rules(ctx, audit_id, repo_root):
-    """First violation across all rules, evaluated in the plan's order—
-    proofs before heuristics—or None if every rule passes."""
+    """(message, class, waived) for the first violation across all rules,
+    evaluated in the plan's order—proofs before heuristics—or
+    (None, None, waived) if every rule passes.
+
+    `class` is PROOF or HEURISTIC and decides the exit code, so a caller can
+    tell a proved defect from a guessed one without reading the prose (#139).
+    `waived` lists the rule ids a `**Lint exception**:` line silenced and
+    that actually fired, so a pass that depended on a waiver says so instead
+    of looking clean.
+
+    A waiver only ever skips a heuristic: R20 runs early and refuses a
+    waiver against anything else, so by the time a heuristic consults
+    ctx.lint_exceptions here, the ids in it have already been proved
+    waivable."""
     regions = citation_regions(ctx)
     steps = (
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
         lambda: rule_R17(ctx),
         lambda: rule_R18(ctx),
+        lambda: rule_R20(ctx),
         lambda: rule_R19(ctx),
         lambda: rule_R15(ctx, audit_id, repo_root),
         lambda: rule_R13(ctx, audit_id),
@@ -1810,11 +1953,22 @@ def run_rules(ctx, audit_id, repo_root):
         lambda: rule_R10(ctx),
         lambda: rule_R12(ctx),
     )
+    waived = []
     for step in steps:
         msg = step()
-        if msg:
-            return msg
-    return None
+        if not msg:
+            continue
+        cls = rule_class_of(msg)
+        rid = rule_id_of(msg)
+        if cls == HEURISTIC and rid in ctx.lint_exceptions:
+            # Skip and keep going rather than return clean: a later rule may
+            # still have a real finding, and the waiver was for this rule
+            # only. Recorded so the pass line can name it—a silenced rule
+            # nobody can see is the failure mode this replaced.
+            waived.append(rid)
+            continue
+        return msg, cls, waived
+    return None, None, waived
 
 
 # ---------------------------------------------------------------------------
@@ -2032,6 +2186,18 @@ _SELF_TEST_CASES = [
 
 def self_test():
     failures = []
+    seen_classes = set()
+
+    # Every rule run_rules dispatches needs a RULE_CLASS entry. Without this,
+    # a rule added later falls to rule_class_of's PROOF default and its class
+    # is a guess the table never made—which is the single-place-declaration
+    # this issue exists to establish (#139).
+    declared = set(RULE_CLASS)
+    for rid in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10",
+                "R12", "R13", "R14", "R15", "R16", "R17", "R18", "R19", "R20"):
+        if rid not in declared:
+            failures.append(f"RULE_CLASS is missing an entry for {rid}")
+
     for name, mutation, expect_ok, needle in _SELF_TEST_CASES:
         with tempfile.TemporaryDirectory(prefix="check-job-spec-fixture-") as root:
             _write_fixture(root, mutation)
@@ -2062,6 +2228,43 @@ def self_test():
                         f"(expected {needle!r} in {combined!r})"
                     )
                     continue
+
+                # The class the fixture's own rule declares, checked against
+                # both places a caller can read it: the exit code and the
+                # `job-spec: ` line. Derived from the needle rather than
+                # listed per case, so every fixture asserts its class and a
+                # rule that changes class can't pass by nobody re-listing it.
+                want = RULE_CLASS.get(rule_id_of(needle))
+                if want is None:
+                    failures.append(
+                        f"{name}: needle {needle!r} does not start with a rule "
+                        "id RULE_CLASS knows, so its class cannot be checked"
+                    )
+                    continue
+                seen_classes.add(want)
+                want_code = 4 if want == HEURISTIC else 1
+                if proc.returncode != want_code:
+                    failures.append(
+                        f"{name}: {rule_id_of(needle)} is a {want}, expected exit "
+                        f"{want_code}, got {proc.returncode}"
+                    )
+                if f"[{want}]" not in combined:
+                    failures.append(
+                        f"{name}: diagnostic did not carry the [{want}] class tag "
+                        f"(got {combined!r})"
+                    )
+                if want == HEURISTIC and "**Lint exception**" not in combined:
+                    failures.append(
+                        f"{name}: a heuristic block must name the waiver as its "
+                        f"recourse (got {combined!r})"
+                    )
+
+    for want in (PROOF, HEURISTIC):
+        if want not in seen_classes:
+            failures.append(
+                f"no self-test fixture exercises a {want} rule, so the emitted "
+                f"class for {want} is unasserted"
+            )
 
     if failures:
         sys.stderr.write("SELF-TEST FAILED:\n")
@@ -2113,12 +2316,22 @@ def main():
         return 3
 
     repo_root = args.repo_root or os.getcwd()
-    msg = run_rules(ctx, args.audit_id, repo_root)
+    msg, cls, waived = run_rules(ctx, args.audit_id, repo_root)
     if msg:
-        sys.stderr.write(f"job-spec: {msg}\n")
-        return 1
+        sys.stderr.write(f"job-spec: [{cls}] {msg}\n")
+        if cls == HEURISTIC:
+            sys.stderr.write(
+                f"job-spec: {rule_id_of(msg)} infers this defect rather than "
+                "proving it. If it misread the paperwork, record a "
+                f"`**Lint exception**: {rule_id_of(msg)} — <why>` line in the "
+                "constitution's preamble and re-run. Do not reach for "
+                "state/PAUSED, which stands down every gate in the system "
+                "rather than this one rule.\n"
+            )
+        return 4 if cls == HEURISTIC else 1
 
-    print(f"OK: {args.state} passes check-job-spec ({args.audit_id})")
+    note = f" ({', '.join(waived)} waived)" if waived else ""
+    print(f"OK: {args.state} passes check-job-spec ({args.audit_id}){note}")
     return 0
 
 

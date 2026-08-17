@@ -1367,6 +1367,22 @@ check("auditor, linter exits 1 → exit 2", rc == 2
 check("auditor, linter exits 1 → message reads as two sentences, not run together",
       "stale line. Fix that before spending an opus auditor" in err, err)
 
+# Exit 4 is a heuristic violation (#139). It still blocks—the argument for
+# warn-only died on this hook reading stderr and discarding stdout—but the
+# reader has to be told the rule inferred rather than proved, because these
+# are the rules that produced every false positive #132's review found.
+write_fake_linter(proj, 4, "job-spec: [heuristic] R10 count-vs-list: T-006.md:41 says 'four' but the list has 3")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor", "prompt": "Audit-ID: CON-audit"}}, proj)
+check("auditor, linter exits 4 → exit 2 (a heuristic still blocks)", rc == 2, f"rc={rc} err={err}")
+check("auditor, linter exits 4 → the linter's own class tag survives",
+      "[heuristic]" in err, err)
+check("auditor, linter exits 4 → names the class rather than claiming a proof",
+      "infers its defect rather than proving one" in err
+      and "a defect a script already proved" not in err, err)
+check("auditor, linter exits 4 → message reads as two sentences, not run together",
+      "the list has 3. That rule infers" in err, err)
+
 write_fake_linter(proj, 3, "job-spec: could not parse constitution.md")
 rc, out, err = run_hook("dispatch-guard.py",
                         {"tool_input": {"subagent_type": "auditor", "prompt": "Audit-ID: CON-audit"}}, proj)

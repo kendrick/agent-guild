@@ -618,7 +618,7 @@ else:
             )
             if ok:
                 rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
-                check("M1 stale code citation: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("M1 stale code citation: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
                 check("M1: R2 named", rule_hit(err, "R2"), f"err={err!r}")
                 check("M1: no traceback", "Traceback" not in err, f"err={err!r}")
 
@@ -658,7 +658,7 @@ else:
             )
             if ok:
                 rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
-                check("M3 count disagrees with its list: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("M3 count disagrees with its list: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
                 check("M3: R10 named", rule_hit(err, "R10"), f"err={err!r}")
                 check("M3: no traceback", "Traceback" not in err, f"err={err!r}")
 
@@ -680,7 +680,7 @@ else:
             )
             if ok:
                 rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
-                check("M4 pass-while-major instruction: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("M4 pass-while-major instruction: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
                 check("M4: R9 named", rule_hit(err, "R9"), f"err={err!r}")
                 check("M4: no traceback", "Traceback" not in err, f"err={err!r}")
 
@@ -717,7 +717,7 @@ else:
             )
             if ok:
                 rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
-                check("M6 count disagrees across artifacts: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("M6 count disagrees across artifacts: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
                 check("M6: R12 named", rule_hit(err, "R12"), f"err={err!r}")
                 check("M6: no traceback", "Traceback" not in err, f"err={err!r}")
 
@@ -758,7 +758,7 @@ else:
             )
             if ok:
                 rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
-                check("P2 negation not governing pass no longer vetoes: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("P2 negation not governing pass no longer vetoes: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
                 check("P2: R9 named", rule_hit(err, "R9"), f"err={err!r}")
                 check("P2: no traceback", "Traceback" not in err, f"err={err!r}")
 
@@ -795,7 +795,7 @@ else:
             )
             if ok:
                 rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
-                check("P4 wrong early count no longer hidden by a coincidental match: exit 1", rc == 1, f"rc={rc} err={err}")
+                check("P4 wrong early count no longer hidden by a coincidental match: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
                 check("P4: R10 named", rule_hit(err, "R10"), f"err={err!r}")
                 check("P4: no traceback", "Traceback" not in err, f"err={err!r}")
 
@@ -1638,6 +1638,96 @@ with tempfile.TemporaryDirectory() as d:
     write_lines(os.path.join(state, "constitution.md"), weighted_constitution("light, one artifact", 2).splitlines())
     rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
     check("R19 no baseline declared anywhere: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# ---------------------------------------------------------------------------
+# #139: proof vs heuristic, and the waiver that gives a heuristic misfire a
+# recourse short of standing down every gate.
+# ---------------------------------------------------------------------------
+
+def waivable_constitution(exception_line=None):
+    """A two-clause constitution that passes on its own, optionally carrying
+    one `**Lint exception**:` line. R20's entire input surface."""
+    block = f"**Lint exception**: {exception_line}\n" if exception_line is not None else ""
+    return weighted_constitution("light, one artifact", 2).replace(
+        "\n## Clauses", f"{block}\n## Clauses", 1
+    )
+
+
+def run_waiver(exception_line):
+    with tempfile.TemporaryDirectory() as d:
+        state = os.path.join(d, "state")
+        os.makedirs(os.path.join(state, "tasks"))
+        write_lines(
+            os.path.join(state, "constitution.md"),
+            waivable_constitution(exception_line).splitlines(),
+        )
+        return run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+
+
+# A proof rule is never waivable: it fires on a citation that doesn't resolve
+# or a graph with a cycle, and there is no reading of those where the rule is
+# what's wrong. Waiving one would suppress a real defect, the one thing this
+# mechanism must not be able to buy.
+rc, out, err = run_waiver("R6 — I would rather not wire the clauses up")
+check("R20 waiver against a proof rule: exit 1", rc == 1, f"rc={rc} err={err}")
+check("R20 proof waiver: R20 named", rule_hit(err, "R20"), f"err={err!r}")
+check("R20 proof waiver: says which rules are waivable", "waivable:" in err, f"err={err!r}")
+check("R20 proof waiver: classed as a proof", "[proof]" in err, f"err={err!r}")
+
+# An id no rule owns silences nothing today and becomes a live waiver the
+# moment someone adds a rule under that number.
+rc, out, err = run_waiver("R99 — a rule that does not exist")
+check("R20 waiver against an unknown rule: exit 1", rc == 1, f"rc={rc} err={err}")
+check("R20 unknown waiver: R20 named", rule_hit(err, "R20"), f"err={err!r}")
+
+# The reason is the point: it is what a later pass at the rule reads. Refused
+# the way R18 refuses an empty **Ceiling overrun** line.
+rc, out, err = run_waiver("R10")
+check("R20 waiver with no reason: exit 1", rc == 1, f"rc={rc} err={err}")
+check("R20 empty-reason waiver: R20 named", rule_hit(err, "R20"), f"err={err!r}")
+
+rc, out, err = run_waiver("R10 — <why this rule misread the paperwork>")
+check("R20 waiver still holding the template placeholder: exit 1", rc == 1, f"rc={rc} err={err}")
+
+# A well-formed waiver against a heuristic is accepted and does not itself
+# fire anything.
+rc, out, err = run_waiver("R10 — the count above that list is a ticket number")
+check("R20 well-formed heuristic waiver: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# R12 prints its id with a prime (#132 replaced the original R12 with a
+# narrower one). A human typing either spelling into a waiver must find the
+# same rule, or the recourse the block message names doesn't work.
+for spelling in ("R12", "R12'"):
+    rc, out, err = run_waiver(f"{spelling} — the two counts describe different things")
+    check(f"R20 waiver spelled {spelling}: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# The waiver actually silences its rule, against a corpus mutation known to
+# fire it, and the pass says so rather than looking clean.
+if os.path.isdir(ARCHIVE_DIR):
+    with tempfile.TemporaryDirectory() as waiver_root:
+        build_fixture_repo_root(waiver_root)
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            # M3's own mutation, the one proved above to fire R10.
+            ok = mutate(
+                os.path.join(state, "tasks", "T-006.md"),
+                "record three findings",
+                "record four findings",
+                "M3-waived",
+            )
+            if ok:
+                const = os.path.join(state, "constitution.md")
+                with open(const, encoding="utf-8") as f:
+                    text = f.read()
+                with open(const, "w", encoding="utf-8") as f:
+                    f.write(text.replace(
+                        "\n## Clauses",
+                        "\n**Lint exception**: R10 — that count is a ticket "
+                        "reference, not an enumeration\n\n## Clauses", 1))
+                rc, out, err = run_linter(state, "--repo-root", waiver_root, "--audit-id", "DEC-audit")
+                check("waived R10 on a mutation that fires it: exit 0", rc == 0, f"rc={rc} err={err}")
+                check("waived R10: the pass names the waiver", "R10 waived" in out, f"out={out!r}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

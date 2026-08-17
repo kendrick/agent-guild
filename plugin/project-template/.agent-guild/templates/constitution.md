@@ -21,6 +21,18 @@ weight in the line when the user corrects it—the correction is the most
 useful thing the retrospective can report. The ceiling numbers themselves
 live in the "## Job weight" table in CLAUDE.md, not here.
 
+A LINT EXCEPTION is the other line this preamble can carry, and most jobs
+never need one. `check-job-spec.py` has two kinds of rule. Most prove their
+defect: a citation that doesn't resolve, a dependency cycle, a clause no task
+cites. Four infer one from prose—R2, R9, R10, R12'—and those four can be
+wrong about paperwork that is actually fine. When one of them blocks a
+dispatch you disagree with, record `**Lint exception**: R10 — <why the rule
+misread this>` in the preamble, one line per rule, and it stands down for
+that rule alone. R20 refuses the waiver if it names a rule that proves rather
+than infers, names no rule this linter has, or records no reason. Reach for
+this instead of `state/PAUSED`, which stands down every gate in the system
+rather than the single rule that misfired.
+
 THE FALSIFIABILITY RULE: every clause must name a concrete check method AND be
 something you can state a failing example for. If you cannot describe an
 artifact that violates the clause, the clause is unfalsifiable—rewrite it or

@@ -1694,6 +1694,54 @@ check("R20 waiver still holding the template placeholder: exit 1", rc == 1, f"rc
 rc, out, err = run_waiver("R10 — the count above that list is a ticket number")
 check("R20 well-formed heuristic waiver: exit 0", rc == 0, f"rc={rc} err={err}")
 
+# A commented-out or fenced waiver is not live. Commenting a line out is the
+# universal way to turn it OFF, and the shipped constitution template opens
+# its own preamble with a multi-line `<!--`, so this is the region where this
+# repo habitually parks text that must not execute. Found by adversarial
+# review; the parser scanned raw preamble text before the fix.
+rc, out, err = run_waiver(None)
+base_rc = rc
+for label, block in (
+    ("multi-line HTML comment", "<!--\n**Lint exception**: R10 — commented out\n-->"),
+    ("fenced code block", "```\n**Lint exception**: R10 — example syntax\n```"),
+):
+    with tempfile.TemporaryDirectory() as d:
+        state = os.path.join(d, "state")
+        os.makedirs(os.path.join(state, "tasks"))
+        text = weighted_constitution("light, one artifact", 2).replace(
+            "\n## Clauses", f"\n{block}\n\n## Clauses", 1)
+        write_lines(os.path.join(state, "constitution.md"), text.splitlines())
+        rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "CON-audit")
+        check(f"waiver inside a {label} is not parsed", "waived" not in out, f"out={out!r}")
+
+# A stale placeholder appended under a real reason must not blank it: last
+# write wins would turn a recorded waiver into an unexplained one.
+rc, out, err = run_waiver(
+    "R10 — the count is a ticket reference\n**Lint exception**: R10 — <tbd>")
+check("duplicate waiver keeps the first non-empty reason: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# The repo's own prose style chains em dashes with no surrounding spaces, so
+# this is the spelling its author is most likely to write.
+for label, line in (
+    ("unspaced em dash", "R10—the count is a ticket reference"),
+    ("lowercase id", "r10 — the count is a ticket reference"),
+    ("colon separator", "R10: the count is a ticket reference"),
+):
+    rc, out, err = run_waiver(line)
+    check(f"waiver with an {label} is accepted: exit 0", rc == 0, f"rc={rc} err={err}")
+
+# A line that names the field but no parseable rule says so, rather than
+# reporting a rule named after the whole rest of the line.
+rc, out, err = run_waiver("the count thing is wrong")
+check("waiver with no parseable rule id: exit 1", rc == 1, f"rc={rc} err={err}")
+check("malformed waiver: says malformed, not unknown-rule",
+      "doesn't parse" in err, f"err={err!r}")
+
+# A waiver for a rule that never fires announces nothing: there was no
+# finding to silence, so there is nothing for a reader to know about.
+rc, out, err = run_waiver("R10 — the count is a ticket reference")
+check("unused waiver stays quiet on stderr", "waived" not in err, f"err={err!r}")
+
 # R12 prints its id with a prime (#132 replaced the original R12 with a
 # narrower one). A human typing either spelling into a waiver must find the
 # same rule, or the recourse the block message names doesn't work.
@@ -1728,6 +1776,9 @@ if os.path.isdir(ARCHIVE_DIR):
                 rc, out, err = run_linter(state, "--repo-root", waiver_root, "--audit-id", "DEC-audit")
                 check("waived R10 on a mutation that fires it: exit 0", rc == 0, f"rc={rc} err={err}")
                 check("waived R10: the pass names the waiver", "R10 waived" in out, f"out={out!r}")
+                # And on stderr, the only channel dispatch-guard forwards.
+                check("waived R10: the waiver is announced on stderr too",
+                      "waived" in err, f"err={err!r}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

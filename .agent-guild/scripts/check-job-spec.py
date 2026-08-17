@@ -516,7 +516,16 @@ CLAUSE_CEILINGS = {"light": 5, "standard": 8, "deep": None}
 
 WEIGHT_LINE_RE = re.compile(r"(?m)^\*\*Job weight\*\*:\s*(.*)$")
 OVERRUN_LINE_RE = re.compile(r"(?m)^\*\*Ceiling overrun\*\*:\s*(.*)$")
-LINT_EXCEPTION_RE = re.compile(r"(?m)^\*\*Lint exception\*\*:\s*(\S+)[ \t]*[—:-]?[ \t]*(.*)$")
+# The id is matched narrowly rather than as `(\S+)`, so `R10—misread` reads
+# as R10 with a reason instead of as a rule named "R10—misread". This repo's
+# own prose style chains em dashes with no surrounding spaces, which is
+# exactly the input a greedy capture swallows.
+LINT_EXCEPTION_RE = re.compile(
+    r"(?m)^\*\*Lint exception\*\*:[ \t]*([Rr]\d+['′’]?)[ \t]*[—–:-]*[ \t]*(.*)$"
+)
+# A line that names the field but nothing that parses as a rule id at all.
+# Kept separate so R20 can say "malformed" rather than "unknown rule".
+LINT_EXCEPTION_ANY_RE = re.compile(r"(?m)^\*\*Lint exception\*\*:[ \t]*(.*)$")
 
 PROOF = "proof"
 HEURISTIC = "heuristic"
@@ -528,11 +537,19 @@ HEURISTIC = "heuristic"
 # paperwork is wrong OR the rule misread it, and only that second kind is
 # waivable—see rule_R20, which refuses a waiver against anything else.
 #
-# The four heuristics are the rules #132's adversarial review produced false
-# positives from: R2 guesses which backtick span anchors a citation, R9
-# pattern-matches an instruction to pass while filing a defect, R10 reads a
-# count above a list, R12' compares near-duplicate sentences. All four carry
-# constants tuned against a single seven-task corpus.
+# The line is what a rule does, not whether it has misfired yet. R2 guesses
+# which backtick span anchors a citation, R9 pattern-matches an instruction
+# to pass while filing a defect, R10 reads a count above a list, R12'
+# compares near-duplicate sentences across artifacts. Each infers a defect
+# from prose, and all four carry constants tuned against a single seven-task
+# corpus.
+#
+# Classify a new rule by that question alone. #132's review is suggestive
+# rather than decisive here: it produced false positives in R2, R9 and R10,
+# and also in R4's preamble scan—and R4 stays a proof, because what went
+# wrong there was the scope it searched rather than an inference it drew,
+# and it was fixed in #138. A rule that has never misfired can still infer,
+# which is R12's position.
 RULE_CLASS = {
     "R1": PROOF, "R2": HEURISTIC, "R3": PROOF, "R4": PROOF, "R5": PROOF,
     "R6": PROOF, "R7": PROOF, "R8": PROOF, "R9": HEURISTIC,
@@ -568,21 +585,40 @@ def rule_class_of(msg):
 
 def parse_lint_exceptions(text):
     """{rule_id: reason} from the constitution's preamble. Repeatable, one
-    rule per line, mirroring `**Ceiling overrun**:`—a waiver is a decision
-    about one rule, and one line per decision keeps a reason free to contain
-    whatever punctuation it needs. A reason that is empty or still carries
-    the template's `<` placeholder recorded nothing, so it does not count,
-    same as R18 reads an empty overrun line as absent."""
+    rule per line—a waiver is a decision about one rule, and one line per
+    decision keeps a reason free to contain whatever punctuation it needs.
+
+    Run through scoped() like every other prose scanner in this file, so a
+    waiver inside a fenced block or an HTML comment is not live. That is not
+    a hypothetical: the shipped constitution template opens its preamble
+    with a multi-line `<!--`, so preamble comments are the norm here, and
+    commenting a line out is the universal way to turn it OFF. A waiver that
+    switched ON when commented out would be the worst possible direction for
+    this particular mechanism to fail in.
+
+    A reason that is empty or still carries the template's `<` placeholder
+    recorded nothing, and the id is kept with an empty reason so R20 can
+    refuse it by name rather than the line vanishing silently. First
+    non-empty reason wins, so a stale placeholder appended below a real
+    reason can't blank it.
+    """
     boundary = NEXT_H2_OR_H3_RE.search(text)
-    preamble = text[:boundary.start()] if boundary else text
+    preamble = scoped(text[:boundary.start()] if boundary else text)
     out = {}
     for m in LINT_EXCEPTION_RE.finditer(preamble):
-        rid = normalize_rule_id(m.group(1).rstrip("—-"))
+        rid = normalize_rule_id(m.group(1)).upper()
         reason = m.group(2).strip()
         if reason.startswith("<"):
             reason = ""
+        if out.get(rid):
+            continue
         out[rid] = reason
-    return out
+    malformed = [
+        m.group(1).strip()
+        for m in LINT_EXCEPTION_ANY_RE.finditer(preamble)
+        if not LINT_EXCEPTION_RE.match(m.group(0))
+    ]
+    return out, malformed
 
 
 class WeightInfo:
@@ -697,8 +733,18 @@ def rule_R20(ctx):
 
     An empty reason is refused because the reason is the point. The waiver
     costs a line either way; what makes it worth having is the record of why
-    a rule was silenced, which is what a later tuning pass reads.
+    a rule was silenced, which is what a later tuning pass reads. Note this
+    is stricter than R18 is about an empty `**Ceiling overrun**:` line, which
+    is simply ignored: an overrun line under budget waives nothing, so an
+    empty one is harmless, while an empty waiver line is a request to
+    silence a rule with no case made for it.
     """
+    for raw in ctx.malformed_exceptions:
+        return (
+            f"R20 lint-exception: constitution.md has a **Lint exception** line "
+            f"whose rule id doesn't parse ({raw!r}); write it as `**Lint "
+            "exception**: R10 — <why>`, with the rule id first"
+        )
     for rid, reason in sorted(ctx.lint_exceptions.items()):
         cls = RULE_CLASS.get(rid)
         if cls is None:
@@ -716,17 +762,19 @@ def rule_R20(ctx):
         if not reason:
             return (
                 f"R20 lint-exception: constitution.md waives {rid} with no reason "
-                "recorded; the reason is what a later pass at the rule reads, so "
-                "an unexplained waiver is refused the way an empty **Ceiling "
-                "overrun** line is"
+                "recorded; the reason is what a later pass at the rule reads, and "
+                "silencing a rule is not something this linter will do on an "
+                "unexplained request"
             )
     return None
 
 
 def _heuristic_list():
+    # Sort through normalize_rule_id so a primed key like R12' can be added
+    # to RULE_CLASS without int() choking on the prime.
     names = sorted(
         (r for r, c in RULE_CLASS.items() if c == HEURISTIC),
-        key=lambda r: int(r[1:]),
+        key=lambda r: int(normalize_rule_id(r)[1:] or 0),
     )
     return "waivable: " + ", ".join(names)
 
@@ -1879,7 +1927,7 @@ class Context:
     # Context by hand (the module-scope-load audience above) keeps working;
     # R17 reads a missing weight as its missing-line finding either way.
     def __init__(self, clauses, tasks, weight=None, trailing_sections=(),
-                 lint_exceptions=None):
+                 lint_exceptions=None, malformed_exceptions=()):
         self.clauses = clauses
         self.tasks = tasks
         self.weight = weight
@@ -1887,6 +1935,7 @@ class Context:
         # Defaults empty for the same hand-built-Context audience as weight:
         # no waivers is the ordinary state, and R20 has nothing to check.
         self.lint_exceptions = lint_exceptions or {}
+        self.malformed_exceptions = malformed_exceptions
 
 
 def load_context(state_dir, compose_brief):
@@ -1903,7 +1952,7 @@ def load_context(state_dir, compose_brief):
     clauses = parse_constitution(const_text)
     weight = parse_weight_line(const_text)
     trailing_sections = parse_trailing_sections(const_text)
-    lint_exceptions = parse_lint_exceptions(const_text)
+    lint_exceptions, malformed_exceptions = parse_lint_exceptions(const_text)
 
     task_paths = sorted(glob.glob(os.path.join(state_dir, "tasks", "*.md")))
     tasks = []
@@ -1913,7 +1962,8 @@ def load_context(state_dir, compose_brief):
             return None, err
         tasks.append(task)
 
-    return Context(clauses, tasks, weight, trailing_sections, lint_exceptions), None
+    return Context(clauses, tasks, weight, trailing_sections,
+                   lint_exceptions, malformed_exceptions), None
 
 
 def run_rules(ctx, audit_id, repo_root):
@@ -2332,6 +2382,18 @@ def main():
 
     note = f" ({', '.join(waived)} waived)" if waived else ""
     print(f"OK: {args.state} passes check-job-spec ({args.audit_id}){note}")
+    if waived:
+        # Also on stderr, because a pass that leaned on a waiver is the one
+        # thing about this run a reader must not miss, and stdout is the
+        # channel this whole design is built around nobody reading:
+        # dispatch-guard captures both and forwards only stderr. A silenced
+        # rule nobody can see is what the waiver was introduced to replace,
+        # so it would be a poor joke to announce it where the gate is deaf.
+        sys.stderr.write(
+            f"job-spec: passed with {', '.join(waived)} waived by a "
+            "**Lint exception** line in constitution.md. That rule did fire; "
+            "a recorded reason is why it isn't blocking.\n"
+        )
     return 0
 
 

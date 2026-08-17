@@ -144,7 +144,7 @@ def write_fake_linter(proj, exit_code, stderr_line="job-spec: fake finding at T-
                        sleep_seconds=None):
     """A stand-in for scripts/check-job-spec.py. dispatch-guard depends on
     that CLI's exit code and stderr and nothing else, so a fake with a
-    hardcoded exit drives all three branches. Using the real linter would tie
+    hardcoded exit drives all four branches. Using the real linter would tie
     these cases to its lint rules, and a rule change would then break the
     hook suite for a reason that has nothing to do with the hook.
 
@@ -1349,7 +1349,7 @@ rc, out, err = run_hook("dispatch-guard.py",
 check("auditor w/o Audit-ID → exit 2", rc == 2, f"rc={rc}")
 
 # auditor: paperwork linter gate (#132). These drive a fake standing in for
-# check-job-spec.py's CLI contract (exit 0/1/3); what's under test is how the
+# check-job-spec.py's CLI contract (exit 0/1/3/4); what's under test is how the
 # hook reacts to each exit, not whether any particular lint rule is right.
 write_fake_linter(proj, 0)
 rc, out, err = run_hook("dispatch-guard.py",

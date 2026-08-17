@@ -59,10 +59,8 @@ Verified 2026-07-31: `SubagentStop` fires on codex-cli 0.145.0 at agent completi
 
 That method earned itself on 2026-08-12. #134's step 0 spike concluded that guild hooks never fire for workflow-spawned agents, and the finding only holds because the same dispatch was run through the ordinary Agent path in the same session and was refused. Silence alone would have proven nothing. The question here stays open; what's settled is that the control is worth the extra minute.
 
-## Should a Gating Heuristic Announce Itself?
+## Should a Gating Heuristic Announce Itself? — SETTLED by #139
 
-`check-job-spec.py` refuses an auditor dispatch on the first rule that fires, and eleven rules all block identically. Seven of them prove: a cited line exists, a script is executable, the graph is acyclic. Four infer, each carrying constants tuned against a single seven-task corpus. `run_rules` already orders them proofs-first and its docstring says so, but nothing downstream carries the distinction.
+Yes, and it gets a way out. Every rule declares its class in `RULE_CLASS`; a violation exits 1 when the rule proved the defect and 4 when it inferred one, with the class in the `job-spec: ` line. Both still block, because #132 had already ruled out warn-only: `dispatch-guard` reads stderr and discards stdout, so a non-blocking rule prints where nobody looks.
 
-The failure modes are not symmetric. A proof that fires means the paperwork is wrong; an inferring rule that fires may mean the rule misread the prose, and on a misread the job stops with no recourse short of `PAUSED`, which stands down every gate rather than the one that misfired. #132's adversarial review produced false positives in R2, R10, R4's preamble scan, and R9. Three are fixed; R9's is documented at the rule as a deliberate trade, because the only fix that closes it re-blinds the rule on three real sentences.
-
-So the original worry runs in both directions. #132 warned that approximating judgment gives false confidence; the measured cost so far is the reverse, where a misfire deadlocks rather than under-catches. Tracked as #139, which lays out three directions and picks none, because choosing needs evidence about how often heuristics misfire in real jobs and there is exactly one corpus so far. Warn-only is already ruled out (see [[antipatterns]]).
+The recourse is a `**Lint exception**: R10 — <why>` line in the constitution preamble, one per rule, guarded by a new proof rule R20 that refuses a waiver naming a proof rule, an unknown id, or no reason. Waiving a proof would suppress a real defect, which is the one thing the mechanism must not buy. The auditor is chartered to judge whether the reason is honest, the same division `**Ceiling overrun**` already had.

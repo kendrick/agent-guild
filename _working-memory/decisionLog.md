@@ -14,6 +14,18 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-17: A DEC Round Runs Every Runnable Clause, And A Fork Still Fails Its Clause
+
+**Source:** #196, shipped as PR #201
+
+**Context:** The whole execution requirement sat under `## CON-audit`. `## DEC-audit` had three reading passes and nothing to run, even though both incidents behind #191 were DEC rounds acting past their charter. Two questions had to be answered to close it, and the first draft got both wrong.
+
+**Decision:** A DEC round runs every clause whose check is a command and reads the `checker-judgment:` rubrics, the same boundary the CON section already drew. And a fork found at DEC still fails its clause, keyed `C-N`, with the task-level repair named alongside it.
+
+**Alternatives considered:** Scoping execution to only the clauses the reading passes "reopen" (rejected—the test for reopened was true of every clause, since an excerpt is a compression of its clause and R6 refuses an orphan; and the archive said the opposite of what the proposal claimed, with r0 and r1 running all five runnable clauses). Routing a fork to `T-NNN` when a task excerpt could settle it (rejected after three attempts—`## DEC-audit` already says "File both, the re-cut and the clause," so the cheap repair was never being lost, and the paragraph below it names a clause left standing for the next decomposition as the harm to avoid). The cost objection to running everything was itself the declined cache argument returning by the side door, since [[the apparatus cache is declined]] on the grounds that rebuilding is a finding source.
+
+**Note on method:** four adversarial rounds, and each of the first three found a merge-blocker the 320-test suite could not. The third invoked the conventions rule about cutting a mechanism two rounds have broken, which is what retired the routing. The section ended at +19 lines where the first draft was +43.
+
 ## 2026-08-16: The Apparatus Cache Is Declined, Because Rebuilding It Is A Variance Oracle
 
 **Source:** #122, partially shipped as PR #199; the alternative filed as #198

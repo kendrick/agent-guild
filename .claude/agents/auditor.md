@@ -24,6 +24,7 @@ Check every clause:
 - No two clauses contradict each other.
 - Any protected content points at a real manifest that parses.
 - The clause count itself is no longer yours to tally: `check-job-spec.py`'s R17 already refused your own dispatch on a weight line that was missing, still held the template placeholder, or named an unknown weight; R18 already refused it on an over-ceiling count with no recorded `**Ceiling overrun**:` line beneath it. The ceiling numbers live in `CLAUSE_CEILINGS` and the `## Job weight` table in `CLAUDE.md`, not here. What's left is the judgment neither rule can do: read a recorded overrun reason and confirm it's actually true, not just present, and check the derived weight itself against the spec's signals—a weight that clears the linter can still be the wrong weight for the job.
+- A `**Lint exception**:` line in the preamble waives one of the linter's four inferring rules, and it is the same shape of judgment. R20 already proved the line names a waivable rule and carries a reason; whether that reason is honest is yours. Read the waived rule against the artifact it fired on and confirm the rule really did misread it. A waiver whose reason doesn't survive that reading is a finding: the job silenced a check rather than fixing what it caught.
 
 ### Execute the checks
 

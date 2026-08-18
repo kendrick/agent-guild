@@ -26,7 +26,10 @@ dispatch, this blocks unless:
     stays reached when that work is revised (#110, #161);
   - for an auditor, .agent-guild/scripts/check-job-spec.py doesn't reject the
     paperwork first—so an opus auditor is never spent on a defect a stdlib
-    script could have proven in about two seconds (#132).
+    script could have proven in about two seconds (#132). That script exits 1
+    when a rule proved the defect and 4 when a rule inferred it; both block,
+    and the block message says which, because only the second kind can be
+    wrong about correct paperwork (#139).
 
 Dispatching a CON-audit also fingerprints the constitution against the round
 the auditor is about to write, which is what a later worker's gate compares.
@@ -202,6 +205,12 @@ def _job_spec_block(ident):
         )
         return None
     if proc.returncode == 0:
+        # A pass can still carry news: a `**Lint exception**` line waived a
+        # heuristic that did fire (#139). That doesn't block—the waiver is
+        # the whole point—but it must not be invisible, and this gate is the
+        # only place a human reliably sees the linter at all.
+        if "waived" in proc.stderr:
+            sys.stderr.write(f"dispatch-guard: {proc.stderr.strip()}\n")
         return None
     if proc.returncode == 3:
         return (
@@ -210,6 +219,24 @@ def _job_spec_block(ident):
             f"paperwork is sound—fix whatever check-job-spec choked on, then "
             f"reproduce with: {reproduce}"
         )
+    if proc.returncode == 4:
+        # A heuristic fired (#139). It still blocks—a rule that infers is
+        # right more often than not, and #132 rejected making these warn-only
+        # because this hook reads stderr and discards stdout, so a
+        # non-blocking rule would produce output nobody ever sees. What
+        # changes is what the reader is told. Three of the four inferring
+        # rules produced false positives when #132's review measured them, so
+        # "rewrite the artifact until the rule shuts up" is the wrong first
+        # move here in a way it never is for a proof. The linter's own stderr
+        # carries the waiver syntax.
+        detail = proc.stderr.strip() or "check-job-spec exited 4 (heuristic)"
+        return _join_sentence(
+            detail,
+            "That rule infers its defect rather than proving one, so it can "
+            "be wrong about correct paperwork. Read the finding before you "
+            f"rewrite the artifact to satisfy it. Reproduce with: {reproduce}",
+        )
+
     detail = proc.stderr.strip() or f"check-job-spec exited {proc.returncode}"
     return _join_sentence(
         detail,

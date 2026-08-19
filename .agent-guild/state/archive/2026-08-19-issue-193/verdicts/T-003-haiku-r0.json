@@ -1,0 +1,24 @@
+{
+  "vendor": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "task_id": "T-003",
+  "checker": "checker-deterministic",
+  "verdict": "pass",
+  "timestamp": "2026-08-19T00:45:30Z",
+  "duration_ms": null,
+  "cost_usd": null,
+  "findings": [
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "All four consumer commands exited 0 and the published trees match a fresh build.",
+      "evidence": "check-build.sh exit 0: test_check_job_spec.py (230 passed), check-job-spec.py --self-test (OK), test_hooks.py (324 passed), build-plugin.py --check (OK)"
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "The working tree diff touches only the source files and their generated views, with no unrelated files.",
+      "evidence": "check-diff-scope.py exit 0: 6 paths in scope (.agent-guild/scripts/check-job-spec.py, .agent-guild/scripts/test_check_job_spec.py, plugin/project-template/.agent-guild/scripts/check-job-spec.py, plugin/project-template/.agent-guild/scripts/test_check_job_spec.py, plugins/agent-guild/project-template/.agent-guild/scripts/check-job-spec.py, plugins/agent-guild/project-template/.agent-guild/scripts/test_check_job_spec.py)"
+    }
+  ]
+}

@@ -799,6 +799,89 @@ else:
                 check("P4: R10 named", rule_hit(err, "R10"), f"err={err!r}")
                 check("P4: no traceback", "Traceback" not in err, f"err={err!r}")
 
+        # ---------------------------------------------------------- M7 (R10 adjacency, #193)
+        # The relaxation this job adds: an adjective sitting between the
+        # count and the plural noun it governs must still be caught. Same
+        # real sentence M3 mutates (T-006's openQuestions bullet, a line
+        # ending in ':' immediately above a three-item list)—M3 itself
+        # doesn't exercise the relaxation, since its mutated noun still
+        # sits right after the number. Here an adjective goes between them,
+        # so the token immediately after "four" is "separate", which does
+        # not end in "s". Reverting the relaxation to matching only that
+        # one token goes silent on this exact input—the failure the
+        # relaxation exists to close.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-006.md"),
+                "record three findings",
+                "record four separate findings",
+                "M7",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("M7 count separated from its noun by an adjective: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
+                check("M7: R10 named", rule_hit(err, "R10"), f"err={err!r}")
+                check("M7: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # -------------------------------------------- R21: checker routing (#193)
+        # T-001 cites C-2 and C-7, both checker-judgment rubric clauses in
+        # this corpus's own constitution, and ships with the correct
+        # routing, checker: checker-judgment. Flipping that one line to
+        # checker-deterministic is the exact defect R21 exists to catch:
+        # that agent runs scripts and exercises no judgment, so a
+        # rubric-citing task can never be checked. No archived task carries
+        # this shape on its own—until this job nothing refused it—so the
+        # mutation is what makes it reachable. Nothing else in the linter
+        # reads the checker: field, so removing R21 leaves this fixture
+        # silent (exit 0) with the mutation still in place.
+        print("R21: checker routing (#193)")
+
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-001.md"),
+                "checker: checker-judgment",
+                "checker: checker-deterministic",
+                "R21",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("R21 deterministic task citing a rubric clause: exit 1 (proof)", rc == 1, f"rc={rc} err={err}")
+                check("R21: R21 named", rule_hit(err, "R21"), f"err={err!r}")
+                check("R21: task named", "T-001" in err, f"err={err!r}")
+                check("R21: offending clause named", "C-2" in err, f"err={err!r}")
+                check("R21: no traceback", "Traceback" not in err, f"err={err!r}")
+
+        # -------------------------------- R2: anchor text in the diagnostic (#193)
+        # The same stale citation M1 mutates above, proving R2 still
+        # fires—this proves the NEW half of the diagnostic survives: the
+        # anchor text itself, not just the rule id. Stripping the anchor
+        # back out of r2_anchor_message while leaving every line number it
+        # reports intact would leave M1 green (it only checks R2 fired) and
+        # turn this case red on its own.
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "state")
+            copy_corpus_state(state)
+            ok = mutate(
+                os.path.join(state, "tasks", "T-001.md"),
+                ".agent-guild/scripts/compose-brief.py:64",
+                ".agent-guild/scripts/compose-brief.py:58",
+                "R2-anchor",
+            )
+            if ok:
+                rc, out, err = run_linter(state, "--repo-root", fixture_root, "--audit-id", "DEC-audit")
+                check("R2-anchor stale code citation: exit 4 (heuristic)", rc == 4, f"rc={rc} err={err}")
+                check("R2-anchor: R2 named", rule_hit(err, "R2"), f"err={err!r}")
+                check(
+                    "R2-anchor: anchor text itself quoted in the diagnostic, not just its line numbers",
+                    "val[0] == val[-1]" in err,
+                    f"err={err!r}",
+                )
+                check("R2-anchor: no traceback", "Traceback" not in err, f"err={err!r}")
+
         # -------------------------------------------------- R15: owns shape (#162)
         # A one-task fixture rather than the corpus, because what's under
         # test is a single entry's spelling and the corpus has no bad ones.

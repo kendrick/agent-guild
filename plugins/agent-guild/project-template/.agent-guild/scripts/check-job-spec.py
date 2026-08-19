@@ -18,18 +18,29 @@ masks something provable—and only the FIRST violation found is reported:
 
     R6 clause wiring         R4 check form            R2 citation anchor
     R7 dependency DAG        R5 check runnable        R9 verdict contradiction
-    R17 weight line          R1 citation resolves     R10 count vs list
-    R18 clause ceiling       R3 citation shape        R12' cross-artifact count
-    R19 baseline value       R8 build ordering
-    R15 owns shape           R16 build serialization
+    R21 checker routing      R1 citation resolves     R10 count vs list
+    R17 weight line          R3 citation shape        R12' cross-artifact count
+    R18 clause ceiling       R8 build ordering
+    R19 baseline value       R16 build serialization
+    R15 owns shape
     R13 ownership overlap
     R14 dep rationale
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
-depend on, order, or own yet), so R6, R7, R15, R13, R14, R8, and R16 are
-skipped; every other rule runs over constitution.md alone. `--audit-id
+depend on, order, or own yet), so R6, R7, R21, R15, R13, R14, R8, and R16
+are skipped; every other rule runs over constitution.md alone. `--audit-id
 DEC-audit`: everything runs, and an empty `tasks/` is itself an R6
 failure—a decomposition that produced no tasks decomposed nothing.
+
+R21 routes a task to the right checker family: a `checker-deterministic`
+task citing a clause whose constitution check is `checker-judgment:` is
+refused, because that agent runs scripts and exercises no judgment and
+the rubric cannot be applied at all. It reads the clause's kind off
+constitution.md, never off the task's own `check_method` paraphrase—a
+task's prose can disagree with the clause it names—and it runs ahead of
+every heuristic (R2, R9, R10, R12' per RULE_CLASS) so paperwork carrying
+both a routing defect and an inferred one reports the unwaivable proof
+first.
 
 R17 and R18 (#160) run under both audit ids—the constitution is input to
 both—and R17 before R18, so a constitution with no usable weight reports
@@ -321,12 +332,15 @@ class TaskFile:
     way as `artifacts` (see load_task_file) but empty by default, since the
     field is opt-in and predates every archived corpus. `dep_rationale` is R14's
     input the same way (#125): a list of `(task_id_or_None, text)` pairs,
-    empty by default for the same reason `owns` is.
+    empty by default for the same reason `owns` is. `checker` is R21's input
+    (#193): the raw `checker:` frontmatter value, read here rather than
+    inferred from `check_method`, because a task's own prose can disagree
+    with the clause it cites.
     """
 
     def __init__(self, path, label, task_id, title, clauses, deps, artifacts,
                  owns, dep_rationale, check_method_text, check_method_map,
-                 spec_excerpt_text, spec_excerpt_start_line):
+                 spec_excerpt_text, spec_excerpt_start_line, checker=""):
         self.path = path
         self.label = label
         self.id = task_id
@@ -336,6 +350,7 @@ class TaskFile:
         self.artifacts = artifacts
         self.owns = owns
         self.dep_rationale = dep_rationale
+        self.checker = checker
         self.check_method_text = check_method_text
         self.check_method_map = check_method_map
         self.spec_excerpt_text = spec_excerpt_text
@@ -405,7 +420,7 @@ def load_task_file(path, compose_brief):
         path=path, label=label,
         task_id=fm.get("id", "").strip(), title=fm.get("title", "").strip(),
         clauses=clauses, deps=deps, artifacts=artifacts, owns=owns,
-        dep_rationale=dep_rationale,
+        dep_rationale=dep_rationale, checker=fm.get("checker", "").strip(),
         check_method_text=check_method_text, check_method_map=check_method_map,
         spec_excerpt_text=spec_excerpt or "", spec_excerpt_start_line=spec_excerpt_start_line,
     )
@@ -555,7 +570,7 @@ RULE_CLASS = {
     "R6": PROOF, "R7": PROOF, "R8": PROOF, "R9": HEURISTIC,
     "R10": HEURISTIC, "R12": HEURISTIC, "R13": PROOF, "R14": PROOF,
     "R15": PROOF, "R16": PROOF, "R17": PROOF, "R18": PROOF, "R19": PROOF,
-    "R20": PROOF,
+    "R20": PROOF, "R21": PROOF,
 }
 
 
@@ -871,12 +886,12 @@ def anchor_spans(text):
 
 
 def nearest_anchor(text, citation_offset, exclude):
-    """The anchor-span content closest to `citation_offset`, scoped to the
-    citation's own sentence—None if nothing qualifies. Distance is
-    absolute: an anchor can sit either before its citation ("exactly as
-    `...` already do, see `compose-brief.py:64`") or after it ("see
-    `helper.py:6` for the reference implementation (`...`)"), and both
-    shapes appear in the corpus this rule has to pass.
+    """(start, content) of the anchor-span closest to `citation_offset`,
+    scoped to the citation's own sentence—(None, None) if nothing
+    qualifies. Distance is absolute: an anchor can sit either before its
+    citation ("exactly as `...` already do, see `compose-brief.py:64`") or
+    after it ("see `helper.py:6` for the reference implementation
+    (`...`)"), and both shapes appear in the corpus this rule has to pass.
 
     #132's adversarial review found the BLOCKER this guards against:
     `candidates[0]` used to mean "the first anchor span anywhere in the
@@ -885,16 +900,21 @@ def nearest_anchor(text, citation_offset, exclude):
     citation's sentence and picking the nearest span by distance is what
     keeps both real shapes working while refusing to let a span from a
     different sentence stand in for either.
+
+    `start` is returned alongside the content (#193) so a caller can report
+    where the anchor itself sits in the citing document—a markdown list
+    introduced by a colon keeps a sentence open across every bullet, so the
+    anchor can land several lines from the citation it's scoped to.
     """
     sent_start, sent_end = sentence_bounds(text, citation_offset)
-    best_dist, best_content = None, None
+    best_dist, best_start, best_content = None, None, None
     for start, end, content in anchor_spans(text):
         if content == exclude or start < sent_start or end > sent_end:
             continue
         dist = start - citation_offset if start >= citation_offset else citation_offset - end
         if best_dist is None or dist < best_dist:
-            best_dist, best_content = dist, content
-    return best_content
+            best_dist, best_start, best_content = dist, start, content
+    return best_start, best_content
 
 
 def is_excluded_citation_path(path):
@@ -912,6 +932,33 @@ def find_citations(text):
             continue
         out.append((m.start(), path, m.group(2)))
     return out
+
+
+def r2_anchor_message(anchor, label, src_line, path, lineno, actual_line, anchor_line):
+    """The R2 diagnostic, built as its own named seam (#193/C-9) rather than
+    inlined in `check_citation_rules`, so a later check can strip the
+    quoted anchor back out while every older R2 case—that it fires at all,
+    at exit 4—keeps passing. `anchor` is the exact span `nearest_anchor`
+    matched, quoted `!r` the way this file already quotes spans elsewhere
+    (R3, R12').
+
+    Names where the anchor sits in the CITING document, not just the two
+    target-file line numbers R2 already reports—a citation can open a
+    markdown list with a colon and keep the sentence (and the anchor
+    lookup) open across every bullet, so the anchor can land several lines
+    from the citation itself, or share its line exactly. Both read
+    correctly: `dotfiles#22` cost two rounds to an author permuting prose
+    with no way to tell a wrong citation from a wrongly matched anchor.
+    """
+    if anchor_line == src_line:
+        where = f"on this same line ({label}:{src_line})"
+    else:
+        where = f"at {label}:{anchor_line}"
+    return (
+        f"R2 citation-anchor: {label}:{src_line} cites {path}:{lineno} quoting "
+        f"{anchor!r}, which sits {where} in the citing document—but that code "
+        f"is actually at {path}:{actual_line}"
+    )
 
 
 def check_citation_rules(regions, repo_root, want_rule):
@@ -967,7 +1014,7 @@ def check_citation_rules(regions, repo_root, want_rule):
                 # proximity (see nearest_anchor)—a region can carry more
                 # than one citation, or an unrelated code aside, and
                 # neither may stand in for a citation it isn't next to.
-                anchor = nearest_anchor(text, offset, f"{path}:{lineno}")
+                anchor_start, anchor = nearest_anchor(text, offset, f"{path}:{lineno}")
                 if anchor is None:
                     continue  # nothing nearby to check this citation against
                 target_stripped = " ".join(target_line.split())
@@ -983,9 +1030,10 @@ def check_citation_rules(regions, repo_root, want_rule):
                         actual_line = i
                         break
                 if actual_line is not None:
-                    return (
-                        f"R2 citation-anchor: {label}:{src_line} cites {path}:{lineno} "
-                        f"but the quoted code is at {path}:{actual_line}"
+                    return r2_anchor_message(
+                        anchor, label=label, src_line=src_line, path=path,
+                        lineno=lineno, actual_line=actual_line,
+                        anchor_line=line_of(anchor_start),
                     )
                 # The anchor text is absent from the WHOLE target file, not
                 # just the cited line. That's evidence this span isn't this
@@ -1035,6 +1083,54 @@ def classify_check_text(text):
     if re.match(r"^\.agent-guild/scripts/\S+", t):
         return "script", t
     return None, None
+
+
+# ---------------------------------------------------------------------------
+# R21: checker routing (#193). CLAUDE.md's routing table assigns a checker
+# by clause KIND: a clause checked by a script routes to
+# checker-deterministic, a clause checked by a rubric routes to
+# checker-judgment. Only the harmful direction gets a rule—a
+# checker-deterministic task can't apply a rubric at all, since that agent
+# runs scripts and exercises no judgment. A checker-judgment task holding
+# script clauses is safe (house precedent in the archive) and stays legal.
+#
+# The kind is read off `clause.check_text`, the constitution's own field,
+# never off the task's `check_method` paraphrase of it. A task's own prose
+# can disagree with the clause it names—`check_method` is free text a
+# worker or decompose step wrote, and reading it instead would report
+# whichever clause the paraphrase happens to mention rather than the one
+# that's actually unreachable. 36 of the archive's 40 tasks cite more than
+# one clause, so a paraphrase-reading variant reports the wrong clause on
+# most of the corpus it would ever run against.
+#
+# PROOF, not HEURISTIC: a checker-deterministic agent literally cannot run
+# a rubric, so this proves the paperwork is broken rather than guessing at
+# it. That's also why it has to run ahead of every heuristic in run_rules
+# (R2, R9, R10, R12' per RULE_CLASS)—paperwork carrying both a routing
+# defect and an inferred one must report the unwaivable proof, not the
+# waivable guess a heuristic would offer first.
+# ---------------------------------------------------------------------------
+
+def rule_R21(ctx, audit_id):
+    if audit_id == "CON-audit":
+        return None  # no tasks yet to route
+    for task in ctx.tasks:
+        if task.checker != "checker-deterministic":
+            continue
+        for cid in task.clauses:
+            clause = ctx.clauses.get(cid)
+            if clause is None:
+                continue  # an unknown clause id is R6's finding, not this one
+            kind, _ = classify_check_text(clause.check_text)
+            if kind == "judgment":
+                return (
+                    f"R21 checker-routing: {task.label} declares checker: "
+                    f"checker-deterministic but cites {cid}, whose "
+                    "constitution check is checker-judgment:—that agent runs "
+                    "scripts and exercises no judgment, so the rubric can't "
+                    "be applied"
+                )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1676,9 +1772,34 @@ def _is_excluded_count_context(text, match):
 # each verified against all 3 archives" showed the reverse: the true count
 # ("four") sits earlier, with an unrelated number ("3", agreeing with the
 # list by coincidence) sitting last.
+#
+# The noun doesn't have to be the very next token (#193). "Four further
+# rules constrain how:" is caught exactly like "Four rules constrain
+# how:"—one or more modifiers may sit between the count and the plural
+# noun it governs. This walks forward over whatever words are there
+# without ever classifying them: no fixed adjective list, no er/ly/ing/ed
+# suffix gate, because either one is exactly what a modifier invented at
+# run time defeats. It only ever asks the same question the strict
+# version asked of the single word right after the count—does THIS word
+# end in "s"—repeated a bounded number of times, so a number elsewhere in
+# the sentence is never credited with governing a plural noun it has
+# nothing to do with.
+_MODIFIER_WORD_RE = re.compile(r"[A-Za-z][A-Za-z-]*")
+_MAX_GOVERNING_WORDS = 4
+
+
 def _governs_plural_noun(text, match):
-    tail = text[match.end():].lstrip()
-    return re.match(r"[A-Za-z][A-Za-z-]*s\b", tail) is not None
+    tail = text[match.end():]
+    for _ in range(_MAX_GOVERNING_WORDS):
+        tail = tail.lstrip()
+        m = _MODIFIER_WORD_RE.match(tail)
+        if not m:
+            return False
+        word = m.group(0)
+        if word.endswith("s"):
+            return True
+        tail = tail[m.end():]
+    return False
 
 
 LIST_ITEM_RE = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+")
@@ -1985,6 +2106,7 @@ def run_rules(ctx, audit_id, repo_root):
     steps = (
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
+        lambda: rule_R21(ctx, audit_id),
         lambda: rule_R17(ctx),
         lambda: rule_R18(ctx),
         lambda: rule_R20(ctx),

@@ -1,0 +1,96 @@
+{
+  "task_id": "CON-audit",
+  "checker": "auditor",
+  "vendor": "anthropic",
+  "model": "claude-opus-5",
+  "verdict": "fail",
+  "findings": [
+    {
+      "clause_id": "C-9",
+      "severity": "major",
+      "description": "The FAIL-on-empty rule does not fire on C-9's own first failing example, because the third git read is unscoped and the expression admits two readings that disagree there. The rubric says: \"and `git status --porcelain` for an untracked file if that is empty ... If every read is empty, no cases were added and this clause FAILS; an empty read is never a pass.\" Built exactly that failing example (vC9: all three linter changes landed, `test_check_job_spec.py` reverted to untouched, generated trees rebuilt) and ran all three reads. Read 1 `git diff HEAD -- .agent-guild/scripts/test_check_job_spec.py` = 0 lines. Read 2 `git diff $(git merge-base main HEAD)..HEAD -- ...` = 0 lines. Read 3 `git status --porcelain` = 3 lines (` M check-job-spec.py` plus both generated copies). So \"every read is empty\" is FALSE and the clause's own backstop stands down on the case it was written for. Scoped to the suite path, `git status --porcelain -- .agent-guild/scripts/test_check_job_spec.py` = 0 lines and the rule fires correctly. Two readings of one expression, materially different programs, and the constitution settles neither: reads 1 and 2 carry an explicit `-- <path>` and read 3 does not, so a checker copying the pattern scopes it and a checker copying the text does not. FIX: pin the path, `git status --porcelain -- .agent-guild/scripts/test_check_job_spec.py`, and say it is for a suite file git does not yet track. No mechanism change; one path argument in C-9's rubric.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC9 \u2014 git diff HEAD: 0 lines; merge-base diff: 0 lines; git status --porcelain: 3 lines; git status --porcelain -- <suite>: 0 lines"
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "major",
+      "description": "`wrapper_is_live` fails with a message that asserts the opposite of the truth when the seam's parameter is not named `anchor`, and the rubric offers no route from that failure to the real cause. C-9's text requires \"a function named `r2_anchor_message`, taking the matched text as a parameter named `anchor`\", but the probe checks only `\"def r2_anchor_message\" in pristine` for the name and enforces the PARAMETER name implicitly, through `bound.arguments.get(\"anchor\")` inside STRIP_ANCHOR_WRAPPER. Built vSeam: refA with that parameter renamed `anchor`->`matched` and nothing else changed \u2014 same diagnostic byte for byte, C-5's probe green, the suite green including M11, which asserts the anchor is quoted. The probe reports `FAIL R2 diagnostic: the wrapper actually strips the anchor at runtime` and then `FAIL R2 diagnostic: removing the quoted anchor turns the suite red / rc=0 - no case asserts the anchor is quoted`. That second sentence is provably false against the suite it just ran. This is r6's blocker relocated from quoting style to parameter name: the r7 repair made the wrapper indifferent to how the anchor is quoted and left it dependent on what the parameter is called. The rubric's two escape hatches both miss it \u2014 the mutation-did-not-turn-red hatch names only the R10 caller factoring, and \"If the probe reports no `r2_anchor_message` seam, that IS a finding\" does not fire, because the seam IS reported present. FIX: one sentence in the rubric \u2014 a `wrapper_is_live` FAIL means the wrapper could not reach the anchor, so check the seam's parameter name against this clause's requirement and re-check the R2 case by hand before ruling anything about coverage. Better still, have the probe name the mismatch: if `anchor` is not in the bound arguments, say so instead of reporting a coverage gap.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vSeam \u2014 probe.py suite-coverage: 'the wrapper actually strips the anchor at runtime' FAIL and 'no case asserts the anchor is quoted' FAIL, against a suite whose M11 case passes"
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "minor",
+      "description": "The history guard's clause-count enumeration omits r6, and `REVISION r7` labels two different revisions. The guard reads: \"the constitution was eight clauses through r2, nine at r3, ten at r4 and r5, and is nine again now that C-9's machinery was cut and C-10 folded into it.\" Checked against the rounds themselves: `CON-audit-r5.md` judges C-1 through C-10 (ten); `CON-audit-r6.md` judges C-1 through C-9 (nine) and its second blocker names \"the r7 fold\" as something it read. So CON-audit r6 read NINE, and an enumeration running \"ten at r4 and r5 ... nine now\" leaves a reader to place r6 at ten \u2014 the exact misreading the guard exists to prevent. The label is doubled for the same reason: the note at the top (repairs after CON-audit r6) and the note at the bottom (the C-9 cut and the C-10 fold, which r6 already read) both open `REVISION r7`, and they bracket the whole history from opposite ends. FIX: \"nine at r6 and now\", and give the cut/fold note the revision number that actually carried it.",
+      "evidence": "constitution.md:52-60 (guard), :62 and :313 (both 'REVISION r7'); verdicts/CON-audit-r5.md rows C-1..C-10, CON-audit-r6.md rows C-1..C-9"
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "minor",
+      "description": "The guard's exemption sentence names itself and SPEC DIVERGENCE but not `RULE NUMBERING`, which sits below both and carries live instruction. The sentence is \"This paragraph and the SPEC DIVERGENCE ruling above it are not part of that history,\" and the guard's boundary is \"Everything from `REVISION r1` onward is a history.\" `RULE NUMBERING` (constitution.md:110-112) sits below the guard, below the top REVISION r7 note, above REVISION r1 \u2014 outside the declared history by the boundary rule, but named nowhere as live, and a decompose step told to \"excerpt the clauses rather than that history\" has no reason to keep it. What it carries is real: R21 is the number because R20 is taken by #139, this pushes #190's proof rule to R22, and #190's own issue text still says R20. R21 survives in C-3's and C-4's headings, so the number itself is not lost \u2014 the reason is. FIX: name RULE NUMBERING in the exemption sentence, or move it above the guard beside SPEC DIVERGENCE.",
+      "evidence": "constitution.md:52-60 vs :110-112"
+    },
+    {
+      "clause_id": "C-1",
+      "severity": "info",
+      "description": "PASSES, and it discriminates. baseline red, honoured \u2014 `check-baselines.py` runs it against the untouched tree and it exits nonzero there, which is the failing example. GREEN against refA (relaxation in `_governs_plural_noun`) and refB (relaxation in `find_r10_violation`): every one of the five fixed adjectives and all three run-time nonces fires, and `Three further rules constrain how:` over three bullets stays silent. RED against vC2, whose over-relaxation is caught by C-2 rather than here \u2014 correctly, since C-1 asks only that the rule fire through a modifier. The r3/r4/r5/r6 attacks on the nonce all re-run clean: letters only, no fixed affix, never ending in `s`, and the drawn tokens print.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 probe.py r10-adjective exit 0 both; untouched tree exit nonzero"
+    },
+    {
+      "clause_id": "C-2",
+      "severity": "info",
+      "description": "PASSES, and it discriminates in both directions. baseline green, honoured. GREEN against refA and refB: eleven archives swept, R10 silent on every one, and the control confirms the same call fires on a known-bad fixture. RED against vC2, where the relaxation is widened to `.*?[A-Za-z][A-Za-z-]*s\\b` (any plural later on the line): three archives report a mismatch and the probe exits 1 \u2014 while C-1 stays green on that same variant, which is the split that makes the pair worth having.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 probe.py r10-corpus exit 0; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC2 \u2014 exit 1, 3 archive FAILs"
+    },
+    {
+      "clause_id": "C-3",
+      "severity": "info",
+      "description": "PASSES, and it discriminates on all three of its claims. baseline red, honoured (no rule R21 on the untouched tree). GREEN against refA and refB. RED against vC3a, which reads the task's own `check_method` paraphrase instead of the constitution \u2014 nine assertions fail, so CON-audit r0's blocker stays caught. RED against vC3b, which places R21 between R9 and R10: `placement/R2` fails with the R2 heuristic reported at exit 4 ahead of the routing proof, so CON-audit r2's finding stays caught too. The `RULE_CLASS` PROOF entry and the does-NOT-name-C-1 discrimination both hold.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 probe.py r21-unsafe exit 0; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC3a \u2014 9 FAILs; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC3b \u2014 placement/R2 FAILs at rc=4"
+    },
+    {
+      "clause_id": "C-4",
+      "severity": "info",
+      "description": "PASSES, and it discriminates. baseline green, honoured, and green for the right reason \u2014 it guards against R21 over-firing, not against R21 being absent. GREEN against refA and refB. RED against vC4, which compares the two fields for equality rather than for the one harmful direction: both legal shapes are refused at exit 1.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 probe.py r21-safe exit 0; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC4 \u2014 'neither legal shape trips R21' FAIL, rc=1"
+    },
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "PASSES as a rubric, and the fixture change is safe. The new `ANCHOR_TEXT` carries both quote characters and still qualifies as an anchor span (45 chars, contains spaces), the markdown backticks around it still parse, and cases A, B and C still mean what they meant. Read the printed blocks against refA and refB: [A] names the anchor and `(at tasks/T-001.md:24)`, [B] names it and `(on that same line)`, [C] reads `(nothing emitted)`. Both quoting styles read as sentences a person can rule on, which is what the rubric asks. It discriminates twice over: vC5b, with the silence guard replaced by a report, exits 1 and takes [C] down, so the exit code the rubric leads with settles it before any reading; and vC5a, whose message drops the quoted anchor while keeping every number, exits 0 with [A]/[B] visibly missing the quotation, which is the ruling the rubric hands to a human.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 probe.py r2-anchor exit 0; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC5b \u2014 exit 1, case C fires; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC5a \u2014 exit 0, [A]/[B] carry no anchor"
+    },
+    {
+      "clause_id": "C-6",
+      "severity": "info",
+      "description": "PASSES, and it discriminates. baseline green, honoured. GREEN against refA and refB \u2014 all four commands exit 0, with 227 suite cases, 12 self-test fixtures, 324 hook cases, and `build-plugin.py --check` clean. RED against vC6, refA with the generated trees left at HEAD: `--check` reports the published trees no longer match a fresh build, which is the clause's own failing example.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 check-build.sh bundle exit 0; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC6 \u2014 exit 1"
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "PASSES, and the r6 pin holds. baseline green, honoured. GREEN against refA and refB on an uncommitted working tree \u2014 6 paths in scope, the two authored files and their four generated copies. RED against vC7, refA plus a one-line append to `.agent-guild/hooks/dispatch-guard.py`: `out of scope: .agent-guild/hooks/dispatch-guard.py`, exit 1. That is the clause's own failing example, and the clause is honest about what it cannot see \u2014 it says so in its own text.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 check-diff-scope.py exit 0, 6 paths; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC7 \u2014 exit 1"
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "PASSES, and it discriminates. baseline green, honoured. GREEN against refA and refB. RED against vC8, refA with `import regex` added: exit 1. Both halves of the check earn their place \u2014 the exec_module half would catch an import that resolves nowhere, the AST half catches one that resolves on this machine and not on a user's.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB \u2014 exit 0; /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC8 \u2014 exit 1"
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "SCOPE NOTE on what does work, so the two majors above are not read as a verdict on the mechanism. The r7 repairs land. The `!r` case is genuinely fixed: refB quotes with `!r`, `wrapper_is_live` reports ok, and the anchor-strip mutation turns the suite red \u2014 r6's blocker is closed. The seam declaration is back in the text and behaves: refN, an inline diagnostic with no `r2_anchor_message`, fails on the seam and nothing else, and the rubric routes that to the seam requirement rather than to coverage. `revert_adjacency`'s detail now agrees with the rubric, and refB's caller-side factoring produces exactly the informative FAIL the rubric describes \u2014 I followed its instruction, undid the relaxation by hand at `find_r10_violation`'s predicate, and the suite went red on M9, which is the answer it promises. The staged-tree repair works: with the suite staged, `git diff HEAD` reads 73 lines where the old `git diff` read 0. And the `.gitignore:5-6` citation is accurate, with 378 tracked files under `archive/` exactly as the preamble says. It discriminates: vC9, with the suite untouched, fails all three mutations.",
+      "evidence": "/private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refB, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refN, /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/vC9 \u2014 probe.py suite-coverage; staged-tree read verified in /private/tmp/claude-501/-Users-k-arnett-repos-agent-guild/04cdd59b-df0a-4d08-9548-8314384b636a/scratchpad/conr7.sVMbjB/refA"
+    },
+    {
+      "clause_id": "C-9",
+      "severity": "info",
+      "description": "Carried forward, no ruling needed this round: `probe_suite_coverage`'s docstring still opens \"`.agent-guild/state/` is gitignored in full,\" the claim C-9's own text was corrected for in r7. It is never printed, so no checker ruling turns on it, but the harness the clause hands the checker now disagrees with the clause. Worth a line whenever the probe is next touched.",
+      "evidence": ".agent-guild/state/checks/probe.py:702-704"
+    }
+  ],
+  "timestamp": "2026-08-18T22:15:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

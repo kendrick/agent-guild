@@ -14,6 +14,16 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-20: Don't read a directory's existence as consent
+
+**Tried:** #98's jurisdiction guard as shipped in 0.7.0: every gate returned 0 unless `isdir(.agent-guild)` held, on the theory that the directory means init ran.
+
+**What broke:** the guild's own gitignore makes the theory false. Init gitignores `.agent-guild/state/*`, so a `git rm` of every tracked payload file leaves the state tree standing, and the gates read that debris as consent: stop-gate wrote `stop-gate.state`, dispatch-guard wrote `dispatches.log` plus an in-flight marker, and subagent-return's `_unidentifiable` append landed too, because the leftover tree supplied the `state/log/` its missing `makedirs` could never create in a bare repo. A repo had no way to decline a user-scope install except permanently gitignoring a file it never wanted.
+
+**Why we backed out:** existence proves that something made a directory, not that anyone consented to hooks acting there. The property jurisdiction needs is "removing the payload removes the guild," and only a tracked file has it — `git rm` takes `.agent-guild/CLAUDE.md` along with the rest of the payload (#213).
+
+**Don't suggest:** `isdir`, or any existence-of-directory test, as evidence that an installer ran or a feature was opted into. Test the tracked marker, and route new predicates through `_lib.guild_initialized()` rather than writing another copy — #213 had to fix three independent derivations of this one rule, and the Codex adapter's walk-up was mid-fix stopping one level below the real root.
+
 ## 2026-08-16: Don't key a cache on a digest its own producer wrote
 
 **Tried:** #122's per-artifact cache key. A cached reference implementation would carry a `.sha256` of the document it transcribes, written by the auditor that built it, reusing #110's `file_sha256` plus sidecar shape. A later round compares that digest against the live document and skips the build on a match.

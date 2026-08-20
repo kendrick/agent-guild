@@ -14,6 +14,68 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-20: Jurisdiction Is The Tracked Marker, Not The Directory
+
+**Source:** #98 and #212, shipped as PRs #210 (v0.7.0) and #213 (v0.7.1, closes #212)
+
+**Context:** Installing the Claude plugin at user scope fires the hooks in every repo on the machine. Two gates wrote state before checking jurisdiction—the stop gate's clean-slate branch and dispatch-guard's auditor path, which carries no task file to check—leaving partial `.agent-guild/` skeletons in repos that never ran init. The 0.7.0 fix guarded on `isdir(.agent-guild)`, and that read a leftover state tree as consent: init gitignores `state/*`, so `git rm` of every tracked payload file leaves the tree standing, and with it the gates kept writing (`stop-gate.state`, `dispatches.log`, an in-flight marker, `return-gate.log`).
+
+**Decision:** jurisdiction is `isfile(.agent-guild/CLAUDE.md)`, tested by `_lib.guild_initialized()`; every gate returns 0 without it. The helper copies `paused()`'s never-raises contract, because `_lib.run()` turns any exception into exit 2 and a raise here would block the Stop of every session in every unrelated repo. `project_dir()`'s two-up fallback and `codex-hook-adapter.py`'s independent walk-up test the same file, so the predicates can no longer disagree about what an initialized project is. Gates with no reachable write today (`orchestrator-write-guard`) carry the guard anyway, for the shape. Every released payload back to v0.3.1 ships the marker, so no upgrade loses jurisdiction.
+
+**Alternatives considered:** keeping the directory test (rejected—a repo had no way to decline a user-scope install except permanently gitignoring a file it never wanted; see [[antipatterns]]). Note for the suite: `fresh_proj()` now writes the marker and backs 104 setups; without it every gate returns 0 unconditionally and the suite passes while proving nothing.
+
+## 2026-08-20: A Drifted Payload File Preserves And Continues
+
+**Source:** #183 narrow cut, shipped as PR #211; the issue stays open
+
+**Context:** `_preflight_payload` aborted the whole install when any existing payload file differed from source, before any copying ran. A project pinned to an older release differs by definition, so re-running init—the documented upgrade path—could never deliver the net-new files a release ships. 0.7.0 made it bite: first net-new payload scripts since 0.6.0, with the plugin-scope auditor role telling every CON-audit to run `check-baselines.py`.
+
+**Decision:** conflicts preserve and continue. `_preflight_payload` returns the list, `install()` warns on stdout naming each preserved file, and the summary counts them in their own `preserved` term so "unchanged" keeps meaning matches-source. `_require_beneath` still runs over every file—the symlink-redirect guard has to see all of them. A drifted file still never upgrades in place; telling "you edited this" from "the guild moved" needs per-file provenance the installer does not keep, which is the half of #183 still open.
+
+**Gotcha worth its own line:** `_copy_owned` (agents, skills, Codex project hooks) overwrites on every re-init; `_copy_missing` (the payload) preserves. The tree layout hides this—the Codex hooks sit inside `.agent-guild/` and look like payload. Nothing pins the upgrade half; flagged on #183 as the durable fix.
+
+## 2026-08-20: Return Identity Reads The Hook Input, Not The Transcript Tail
+
+**Source:** #206
+
+**Context:** `id_from_transcript` ended on `tool_ids[-1]`—the right answer while dispatches are serial and a coin flip the moment a wave goes out in one message, the shape the contract requires. On #193 a checker and a worker went out together, the checker resolved to the worker's task, the wrong marker sat in-flight for the full hour, and the gate exited 0.
+
+**Decision:** `ident_for_return` reads the hook input. It narrows by the returning agent's own type, then by that agent's child transcript (`<session>/subagents/agent-<agent_id>.jsonl`, layout confirmed against live session data), then by which dispatches are still in flight—strongest evidence first. It never refuses: an unresolved id becomes `_unidentifiable`, which exits 0, skips every check below, and logs that it guessed. Declining would switch the gate off on the exact shape every wave uses.
+
+**Alternatives considered:** raising on ambiguity (rejected—a worse failure than the bug it replaced); ranking marker liveness above the child transcript (rejected—the one marker that survives a TTL is as likely the sibling's as the returner's). A test for that second change caught `(os.altsep or "")`, an empty string and so a substring of everything, silently killing the tier it guarded.
+
+## 2026-08-20: Apparatus Is Diffed Across Rounds, Not Cached
+
+**Source:** #198, shipped as PR #205; #122 closed. Settles the parked question in [[openQuestions]].
+
+**Context:** the written entry condition was met—#193's run kept both DEC apparatus directories, two consecutive DEC rounds against unchanged constitution bytes. The evidence went to #198's side: DEC r0 settled R21's audit-id guard silently, in both its implementations, on the same axis r1 built both ways and filed against C-3. A silent settlement is only visible with the two directories side by side; a within-round sweep cannot catch a fork the round never saw as one.
+
+**Decision:** a predecessor's apparatus is a comparand, never a starting point. Build your own first, open the predecessor only after, diff what was built from matching source, file material divergences against the clause in the within-round fork's shape, record agreement in one line. Materiality is decided by running the clause's harness against both readings—an axis it accepts both ways is the contract leaving it free. Scoping is per document via a `SOURCE.sha256` each round writes as it builds; a job-wide byte key was rejected because the CON stamp covers CON dispatches alone and task files move between DEC rounds while the clauses sit still, so it would either never fire or fire wrongly. Apparatus therefore stands until the job ends; teardown still deletes rather than archives (ownership stays with #200, venue enforcement with #118).
+
+## 2026-08-20: The Mutation Clause Is Step-3 Guidance, Not A Per-Job Reinvention
+
+**Source:** #156, shipped as PR #209
+
+**Context:** `mutation` appeared nowhere in the kit, yet four archived jobs reinvented the clause that proves an instrument discriminates, and each omission cost audit rounds—the courier-lane C-5 took three just to find a legal venue.
+
+**Decision:** constitution step 3 carries the family: venue and enumeration rules scoped to a working tree, the rule that a survivor is not automatically a finding, and the four recurring vacuity shapes. Step 2 gets the producer-side fork rule, since a contract you can build two ways is an audit FAIL and nothing told an author so. Two placement rules are load-bearing: venue and enumeration go in the check line so no checker infers them, and the survivor rule goes in the clause text, because a check line spelling out a conditional pass trips R9. Verified by writing a constitution against the guidance and linting it under both audit ids, not by reading the rules.
+
+## 2026-08-20: Delegating Notes Are Proved Against The Schedule
+
+**Source:** #190, shipped as PR #208
+
+**Context:** a clause can hand part of its coverage to others ("this binds coverage, not correctness, which is why C-2, C-3, C-4 exist"). Whether the note is true is a fact about the schedule—a clause checked before the artifact it must read exists covers nothing—and #143 measured that catching one came down to where a round's attention landed.
+
+**Decision:** R22 walks the graph: for each clause naming other clause ids, it resolves the tasks carrying each and fails when every named clause is carried only by tasks strictly upstream of the delegator's own carriers. Only `text` and `note` are scanned—`check` and `failing example` name ids for non-delegation reasons, and since R20 refuses a waiver against a proof, a false positive there would have no recourse short of `state/PAUSED`. Precision wins that trade at a stated price: a delegation written into a `check` field goes uncaught. First sweep found a real one, #117's C-1 leaning on a C-2 that never reads its cases; `_corpus.py` repairs the suite's copy and the archive stays as it shipped.
+
+## 2026-08-19: A Lint Rule Announces Whether It Proved Or Guessed
+
+**Source:** #139 (PR #202, 2026-08-17) and #193 (PR #203, 2026-08-19); answers the question [[openQuestions]] carried as settled
+
+**Context:** `check-job-spec.py` has proving rules and inferring rules and blocked identically on both. Warn-only was already ruled out by #132—`dispatch-guard` reads stderr and discards stdout, so a non-blocking rule prints where nobody looks.
+
+**Decision:** `RULE_CLASS` declares every rule's class in one place; a violation exits 1 when proved and 4 when inferred, class named in the `job-spec:` line, both still blocking. The recourse is a `**Lint exception**: R10 — <why>` line in the constitution's preamble, one per rule, guarded by R20, which refuses a waiver naming a proof rule, an unknown id, or no reason; whether the reason is honest is auditor judgment. The adversarial read caught two holes before ship: the waiver scanner skipped `scoped()`, so a commented-out waiver was a live one, and the waived-note record went only to stdout. #193 then fixed the worst heuristic edges: R10 walks past intervening modifiers keyed on no word list, new proof R21 fails a task routing a `checker-judgment:` clause to checker-deterministic (clause kind read from the constitution, not the task's paraphrase, and it runs ahead of every heuristic), and R2 quotes the anchor it matched instead of two bare line numbers.
+
 ## 2026-08-17: A DEC Round Runs Every Runnable Clause, And A Fork Still Fails Its Clause
 
 **Source:** #196, shipped as PR #201

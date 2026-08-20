@@ -454,6 +454,13 @@ def _unidentifiable(reason):
 
 
 def main(data):
+    # Jurisdiction (see _lib's design rules). No path here is known to reach a
+    # write in an uninitialized repo—_unidentifiable's log append has no
+    # makedirs to create the tree with—but the shape is what the rule bans, and
+    # a later makedirs added in good faith shouldn't quietly turn it into #98.
+    if not _lib.guild_initialized():
+        return 0
+
     # Intended scope: this hook fires on SubagentStop, so it only ever sees ONE
     # subagent's return at a time, and `ident` below is that subagent's own
     # Task-ID/Audit-ID. There's no separate in-subagent no-op to add—the scoping

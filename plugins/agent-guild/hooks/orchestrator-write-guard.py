@@ -33,6 +33,12 @@ import _lib  # noqa: E402
 
 
 def main(data):
+    # Jurisdiction (see _lib's design rules). Already a no-op here today, since
+    # no_job_active() reads state that doesn't exist and reports no job. Stated
+    # explicitly so the rule has one shape across all four gates.
+    if not _lib.guild_initialized():
+        return 0
+
     # PreToolUse fires inside subagents, so scope this gate to the main session:
     # a worker writing its assigned deliverable carries an agent_id and passes.
     if _lib.in_subagent(data):

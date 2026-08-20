@@ -3130,5 +3130,55 @@ rc, out, err = run_hook_path(copied_script, {}, project_rooted)
 check("project-rooted + copy-in settings.json → no double-registration warning",
       rc == 0 and "registered twice" not in out, f"rc={rc} out={out!r}")
 
+# --------------------------------------------- jurisdiction: uninitialized repos (issue #98)
+print("jurisdiction: uninitialized repos (issue #98)")
+
+# A user-scope plugin install fires every hook in every repo on the machine,
+# not just ones that ran init. Each gate below must no-op before writing
+# anything—the bare root never gets a .agent-guild/ of its own.
+
+bare = tempfile.mkdtemp(prefix="ag-jurisdiction-stop-")
+rc, out, err = run_hook("stop-gate.py", {}, bare)
+check("stop-gate.py, bare repo → exit 0", rc == 0, f"rc={rc} err={err}")
+check("stop-gate.py, bare repo → no .agent-guild/ created",
+      not os.path.exists(os.path.join(bare, ".agent-guild")))
+
+bare = tempfile.mkdtemp(prefix="ag-jurisdiction-dispatch-")
+# An auditor, not a worker: a worker dispatch is rejected for its missing task
+# file before it reaches _log/mark_in_flight, so it would pass this fixture even
+# unguarded. CON-audit needs no task file and does reach the write.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_name": "Task",
+                         "tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: CON-audit\nplease audit"}}, bare)
+check("dispatch-guard.py, bare repo → exit 0", rc == 0, f"rc={rc} err={err}")
+check("dispatch-guard.py, bare repo → no .agent-guild/ created",
+      not os.path.exists(os.path.join(bare, ".agent-guild")))
+
+bare = tempfile.mkdtemp(prefix="ag-jurisdiction-return-")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": "/dev/null"}, bare)
+check("subagent-return.py, bare repo → exit 0", rc == 0, f"rc={rc} err={err}")
+check("subagent-return.py, bare repo → no .agent-guild/ created",
+      not os.path.exists(os.path.join(bare, ".agent-guild")))
+
+bare = tempfile.mkdtemp(prefix="ag-jurisdiction-write-")
+rc, out, err = run_hook("orchestrator-write-guard.py",
+                        {"tool_input": {"file_path": os.path.join(bare, "README.md")}}, bare)
+check("orchestrator-write-guard.py, bare repo → exit 0", rc == 0, f"rc={rc} err={err}")
+check("orchestrator-write-guard.py, bare repo → no .agent-guild/ created",
+      not os.path.exists(os.path.join(bare, ".agent-guild")))
+
+# Regression: the clean-slate branch still runs in an INITIALIZED project—the
+# guard above must be narrow, not a blanket no-op that swallows the real case.
+proj = fresh_proj()
+state_file = os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")
+check("stop-gate.py, initialized project → state file absent before run",
+      not os.path.exists(state_file))
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("stop-gate.py, initialized project, clean slate → exit 0", rc == 0, f"rc={rc} err={err}")
+check("stop-gate.py, initialized project, clean slate → stop-gate.state written",
+      os.path.exists(state_file))
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

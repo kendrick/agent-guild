@@ -544,6 +544,12 @@ def _task_digest(tid, status, retries, verdicts, fresh_markers):
 
 
 def main(data):
+    # Jurisdiction (see _lib's design rules). The clean-slate branch below
+    # writes stop-gate.state unconditionally, so without this the first Stop in
+    # any repo on the machine manufactures .agent-guild/. That's #98 as filed.
+    if not _lib.guild_initialized():
+        return 0
+
     # Supported hosts stamp agent_id on a subagent-scoped stop input. A
     # subagent's turn ending is subagent-return's jurisdiction, not this gate's—
     # this gate exists to hold open the ORCHESTRATOR's turn, and a subagent has

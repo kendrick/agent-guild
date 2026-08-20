@@ -462,6 +462,14 @@ def _stamp_audited_content():
 
 
 def main(data):
+    # Jurisdiction (see _lib's design rules). An auditor dispatch carries no
+    # task file to check, so it clears legality in any repo and reaches _log
+    # and mark_in_flight below—enough to manufacture .agent-guild/ somewhere
+    # that never ran init. A worker dispatch can't get that far; the auditor
+    # path is the reachable one.
+    if not _lib.guild_initialized():
+        return 0
+
     # Intended scope: no in_subagent no-op here, and none is needed. Unlike
     # stop-gate or orchestrator-write-guard, this hook doesn't constrain the
     # orchestrator's own turn—it constrains every Task/Agent dispatch, wherever

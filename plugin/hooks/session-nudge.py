@@ -154,7 +154,7 @@ def main(data):
 
     # No .agent-guild/ at all: the project has shown no intent to use the
     # guild, so say nothing (see the module docstring's asymmetry note).
-    if not os.path.isdir(os.path.join(root, ".agent-guild")):
+    if not _lib.guild_initialized():
         return 0
 
     missing = _missing_pieces(root, host)

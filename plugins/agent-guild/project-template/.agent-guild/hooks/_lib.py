@@ -13,6 +13,12 @@ Design rules every hook here obeys:
   Escape hatch. If .agent-guild/state/PAUSED exists, every hook exits 0—checked before any
   logic that could throw, so a genuinely broken hook is still escapable.
 
+  Jurisdiction. Init owns creation of .agent-guild/; a gate that finds none
+  exits 0 before touching disk. A user-scope plugin install fires these
+  hooks in every repo on the machine, not just the ones that ran init, so a
+  gate that writes state before checking jurisdiction manufactures
+  .agent-guild/ in repos that never asked for it.
+
 Stdlib only: this runs wherever python3 does, with no install step, so the kit
 stays copy-in portable.
 """
@@ -188,6 +194,20 @@ def paused():
     """True if the user has parked the gates. Must never raise."""
     try:
         return os.path.exists(state_path("PAUSED"))
+    except Exception:
+        return False
+
+
+def guild_initialized():
+    """True if this repo has ever run init. Must never raise—including
+    project_dir()'s own RuntimeError, which a user-scope plugin install
+    triggers constantly: every hook fires in every repo on the machine, most
+    of which have no .agent-guild/ at all. _lib.run() turns any raised
+    exception into exit 2 (block), so a raise here would block the Stop of
+    every session in every unrelated repo, which is strictly worse than the
+    bug this check exists to fix."""
+    try:
+        return os.path.isdir(os.path.join(project_dir(), ".agent-guild"))
     except Exception:
         return False
 

@@ -127,6 +127,15 @@ Host-specific ownership stays narrow:
 
 All three preserve unrelated project guidance, agents, skills, hook groups, configuration, and global host state.
 
+Re-running init upgrades some of what it installed and preserves the rest, and the split does not follow the directory layout:
+
+| Class | What a re-run does |
+| --- | --- |
+| Agents, skills, and the Codex project hooks | init overwrites each file whose shipped bytes differ (`_copy_owned`) |
+| The payload: `.agent-guild/CLAUDE.md`, `scripts/`, `templates/`, `schemas/` | init lands each missing file and preserves each differing one, naming it in a warning (`_copy_missing`) |
+
+The Codex project hooks land only on the repo-local `--project-skills` route, and they sit inside `.agent-guild/` like the payload does. Even so, `install()` splits them out of the payload before the drift check runs, so they upgrade on every re-init. A drifted payload file never upgrades in place, because the installer keeps no record of what it shipped and cannot tell a local edit from a version gap. That record is #183.
+
 ## Verify A Fresh Project
 
 Run these shared checks from the initialized project:

@@ -64,3 +64,44 @@ def add_owns(state_dir):
         assert inserted, f"{name}: no artifacts: field found to derive owns from"
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(out) + "\n")
+
+
+C_1_FALSE_DELEGATION = (
+    "which is exactly why C-2 exists and is checked by a different agent "
+    "reading different evidence"
+)
+C_1_REPAIRED = (
+    "which is why correctness is checked separately, by a different agent "
+    "reading different evidence"
+)
+
+
+def repair_c1_delegation(state_dir):
+    """Drop the false delegating note from C-1 in `state_dir`'s copied
+    constitution, so the corpus lints clean under R22 (#190).
+
+    The archive on disk is left exactly as it shipped—this repairs the
+    COPY, the same contract `add_owns` works under. The defect is real and
+    R22 proves it: C-1's note leans on C-2 for the correctness its own six
+    cases don't assert, but C-2 is carried by T-001 and checks
+    `ledger-append.py` by exercising it directly, so nothing in C-2 ever
+    reads those cases. Six tests asserting nothing would satisfy both
+    clauses and no round would notice—#100 hit the same shape and its
+    DEC-audit r0 caught it there, which is the asymmetry #143 measured and
+    #190 mechanized.
+
+    Repaired rather than left firing because the corpus is this suite's
+    clean baseline: R22 runs early, so leaving it would mask the planted
+    defect in every corpus-mutation case downstream of it and the suite
+    would stop testing the rules those cases exist for. Filed separately
+    against the archive itself."""
+    path = os.path.join(state_dir, "constitution.md")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    if C_1_FALSE_DELEGATION not in text:
+        raise AssertionError(
+            "repair_c1_delegation: the #117 corpus no longer carries C-1's "
+            "delegating note verbatim; re-derive the repair against the archive"
+        )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text.replace(C_1_FALSE_DELEGATION, C_1_REPAIRED))

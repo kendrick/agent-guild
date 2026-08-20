@@ -19,15 +19,16 @@ masks something provable—and only the FIRST violation found is reported:
     R6 clause wiring         R4 check form            R2 citation anchor
     R7 dependency DAG        R5 check runnable        R9 verdict contradiction
     R21 checker routing      R1 citation resolves     R10 count vs list
-    R17 weight line          R3 citation shape        R12' cross-artifact count
-    R18 clause ceiling       R8 build ordering
-    R19 baseline value       R16 build serialization
+    R22 delegation schedule  R3 citation shape        R12' cross-artifact count
+    R17 weight line          R8 build ordering
+    R18 clause ceiling       R16 build serialization
+    R19 baseline value
     R15 owns shape
     R13 ownership overlap
     R14 dep rationale
 
 `--audit-id CON-audit`: `state/tasks/` is expected empty (nothing to wire,
-depend on, order, or own yet), so R6, R7, R21, R15, R13, R14, R8, and R16
+depend on, order, or own yet), so R6, R7, R21, R22, R15, R13, R14, R8, and R16
 are skipped; every other rule runs over constitution.md alone. `--audit-id
 DEC-audit`: everything runs, and an empty `tasks/` is itself an R6
 failure—a decomposition that produced no tasks decomposed nothing.
@@ -570,7 +571,7 @@ RULE_CLASS = {
     "R6": PROOF, "R7": PROOF, "R8": PROOF, "R9": HEURISTIC,
     "R10": HEURISTIC, "R12": HEURISTIC, "R13": PROOF, "R14": PROOF,
     "R15": PROOF, "R16": PROOF, "R17": PROOF, "R18": PROOF, "R19": PROOF,
-    "R20": PROOF, "R21": PROOF,
+    "R20": PROOF, "R21": PROOF, "R22": PROOF,
 }
 
 
@@ -1489,6 +1490,109 @@ def _transitive_deps(task_id, by_id, seen=None):
     return seen
 
 
+# ---------------------------------------------------------------------------
+# R22: delegation vs the schedule (#190). A clause can hand part of its own
+# coverage to other clauses—"this binds coverage, not correctness, which is
+# why C-2, C-3, and C-4 exist." Whether that note is true is not a fact about
+# the constitution. It is a fact about the schedule, because a clause checked
+# before the artifact it would have to read exists covers nothing.
+#
+# #143 measured how reliably an auditor catches one. Eight blind DEC rounds
+# against a reconstructed #100 r1 constitution, each given the charter
+# verbatim: every run filed four to six real findings, no charter caught all
+# three planted defects every time, and the miss rotated between rounds
+# rather than shrinking. The reading that fits is that a round files roughly
+# a fixed number of findings whatever its charter says, so prose steers which
+# defects a round reaches, not how many. This rule takes one class out of
+# that competition entirely.
+#
+# Only `text` and `note` are scanned, and that scoping is what keeps this a
+# proof. A delegation of coverage is a normative claim about what this clause
+# does not have to cover, and both archived instances carry theirs in a
+# `- **note**:` line—so `text` alone would miss the shape the rule exists for.
+# The other two fields mention clause ids for reasons that are not
+# delegations: `check` cross-references another clause to explain how to run
+# this one (#100's C-4 cites C-2 to justify why a fixture can't exist), and
+# `failing example` reaches for one by analogy (#117's C-9). Scanning either
+# fires on correct paperwork, and a proof cannot be waived—R20 refuses—so a
+# false positive here has no recourse short of state/PAUSED. Precision wins
+# that trade. The cost is real and worth naming: a delegation written into a
+# `check` field goes uncaught (2026-07-14's C-1 hands agent and skill
+# presence to C-2 exactly that way). `scoped()` runs first, so a mention
+# inside a fenced example or an HTML comment doesn't count, and the heading
+# line is skipped—the id in it is the clause's own.
+#
+# Carriers come from task frontmatter `clauses:`, never from `check_method`'s
+# paraphrase of it, for the reason R21 gives above. A clause with no carrier
+# and a mention of a clause id that doesn't exist are both R6's findings, so
+# this rule steps over them rather than reporting them twice.
+#
+# PROOF, not HEURISTIC: it fires only when the DAG settles the question
+# outright—every named clause carried only by tasks strictly upstream of
+# every task carrying the delegating clause. One named clause sharing a task,
+# or carried by a task neither upstream nor downstream, is not provably early,
+# and the rule claims only what the graph proves. That is also why it sits
+# here rather than earlier: `_transitive_deps` recurses unguarded and is safe
+# only behind R7's acyclicity proof, the same reason R13 and R8 run after R7.
+# ---------------------------------------------------------------------------
+
+CLAUSE_MENTION_RE = re.compile(r"\bC-\d+\b")
+
+
+DELEGATING_FIELDS = ("text", "note")
+
+
+def _delegated_clause_ids(clause, all_clauses):
+    """The other clause ids named in `clause`'s `text` and `note` fields, in
+    numeric order. Continuation lines count: #117's C-1 carries a bulleted
+    list under `text`, and a mention there reads the same as one on the
+    field's own line."""
+    field = None
+    named = set()
+    for line in scoped(clause.block_text).split("\n")[1:]:
+        m = CLAUSE_FIELD_RE.match(line.strip())
+        if m:
+            field = m.group(1).strip().lower()
+        if field in DELEGATING_FIELDS:
+            named.update(CLAUSE_MENTION_RE.findall(line))
+    named -= {clause.id}
+    return sorted((c for c in named if c in all_clauses), key=lambda c: int(c[2:]))
+
+
+def rule_R22(ctx, audit_id):
+    if audit_id == "CON-audit" or not ctx.tasks:
+        return None  # no schedule yet to read a note against; empty tasks/ is R6's
+    by_id = {t.id: t for t in ctx.tasks}
+    upstream = {t.id: _transitive_deps(t.id, by_id) for t in ctx.tasks}
+    carriers = {}
+    for task in ctx.tasks:
+        for cid in task.clauses:
+            carriers.setdefault(cid, []).append(task)
+
+    for cid in sorted(ctx.clauses, key=lambda c: int(c[2:])):
+        mine = carriers.get(cid)
+        if not mine:
+            continue  # an uncited clause is R6's finding
+        leaned = []
+        for other in _delegated_clause_ids(ctx.clauses[cid], ctx.clauses):
+            theirs = carriers.get(other)
+            if not theirs:
+                break  # also R6's finding
+            if not all(t.id in upstream[m.id] for m in mine for t in theirs):
+                break  # not provably early, so this clause proves nothing
+            leaned.append(f"{other} ({', '.join(t.label for t in theirs)})")
+        else:
+            if leaned:
+                return (
+                    f"R22 delegation-schedule: constitution.md {cid}, carried by "
+                    f"{', '.join(t.label for t in mine)}, leans on "
+                    f"{'; '.join(leaned)}—every one of those is checked by a task "
+                    f"strictly upstream, so all of that checking completes before "
+                    f"{', '.join(t.id for t in mine)} produces anything"
+                )
+    return None
+
+
 def rule_R8(ctx, audit_id):
     if audit_id == "CON-audit" or not ctx.tasks:
         return None  # empty tasks/ under DEC-audit is already an R6 failure
@@ -2107,6 +2211,7 @@ def run_rules(ctx, audit_id, repo_root):
         lambda: rule_R6(ctx, audit_id),
         lambda: rule_R7(ctx, audit_id),
         lambda: rule_R21(ctx, audit_id),
+        lambda: rule_R22(ctx, audit_id),
         lambda: rule_R17(ctx),
         lambda: rule_R18(ctx),
         lambda: rule_R20(ctx),
@@ -2366,7 +2471,8 @@ def self_test():
     # this issue exists to establish (#139).
     declared = set(RULE_CLASS)
     for rid in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10",
-                "R12", "R13", "R14", "R15", "R16", "R17", "R18", "R19", "R20"):
+                "R12", "R13", "R14", "R15", "R16", "R17", "R18", "R19", "R20",
+                "R21", "R22"):
         if rid not in declared:
             failures.append(f"RULE_CLASS is missing an entry for {rid}")
 

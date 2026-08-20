@@ -115,7 +115,7 @@ This is Claude's repo-local route. Do not also enable the Claude plugin in that 
 
 ## What Init Owns
 
-Every route installs the same `.agent-guild/` project payload and runtime state directories. The installer is idempotent, preserves existing files it does not own, and fails before writing when it finds malformed ownership markers, redirected managed paths, or conflicting managed content.
+Every route installs the same `.agent-guild/` project payload and runtime state directories. The installer is idempotent and preserves existing files it does not own. It fails before writing when it finds malformed ownership markers or a managed path redirected outside the project. A payload file that has drifted from the shipped source is preserved instead—the installer warns and keeps going, landing whatever payload files are still missing.
 
 Host-specific ownership stays narrow:
 

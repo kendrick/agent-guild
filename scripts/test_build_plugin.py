@@ -1406,6 +1406,109 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         ),
     )
 
+    # #183: a conflicting payload file used to abort the whole install, so a
+    # project that had already run init once could never receive a release's
+    # net-new payload scripts. Reproduce that shape directly: install, drift
+    # one shipped file and delete another, then re-init and confirm the
+    # missing file lands while the drifted one is preserved byte-for-byte.
+    stale_payload_project = os.path.join(tmp, "stale-payload-project")
+    os.makedirs(stale_payload_project)
+    stale_first_install = subprocess.run(
+        [sys.executable, claude_installer, "claude", stale_payload_project],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    check(
+        "the stale-payload scenario installs cleanly the first time",
+        stale_first_install.returncode == 0,
+        f"rc={stale_first_install.returncode} stderr={stale_first_install.stderr!r}",
+    )
+
+    drifted_relative = os.path.join("scripts", "check-job-spec.py")
+    drifted_path = os.path.join(
+        stale_payload_project, ".agent-guild", drifted_relative
+    )
+    drifted_bytes = b"# locally modified payload file; do not overwrite\n"
+    with open(drifted_path, "wb") as f:
+        f.write(drifted_bytes)
+
+    missing_relative = os.path.join("scripts", "check-baselines.py")
+    missing_path = os.path.join(
+        stale_payload_project, ".agent-guild", missing_relative
+    )
+    os.remove(missing_path)
+
+    stale_reinstall = subprocess.run(
+        [sys.executable, claude_installer, "claude", stale_payload_project],
+        capture_output=True,
+        text=True,
+        env=install_env,
+    )
+    with open(drifted_path, "rb") as f:
+        after_reinstall = f.read()
+    warning_lines = [
+        line
+        for line in stale_reinstall.stdout.splitlines()
+        if line.startswith(
+            "WARNING: local Agent Guild payload differs"
+        )
+    ]
+    summary_match = re.search(
+        r"payload=(\d+) updated/(\d+) unchanged/(\d+) preserved",
+        stale_reinstall.stdout,
+    )
+    check(
+        "re-init lands a net-new payload file instead of aborting",
+        stale_reinstall.returncode == 0
+        and os.path.isfile(missing_path),
+        (
+            f"rc={stale_reinstall.returncode} "
+            f"missing_landed={os.path.isfile(missing_path)} "
+            f"stdout={stale_reinstall.stdout!r} "
+            f"stderr={stale_reinstall.stderr!r}"
+        ),
+    )
+    check(
+        "re-init preserves a drifted payload file byte-for-byte",
+        after_reinstall == drifted_bytes,
+        f"after_reinstall={after_reinstall!r}",
+    )
+    check(
+        "re-init warns naming exactly the drifted file and nothing else",
+        len(warning_lines) == 1
+        and warning_lines[0]
+        == (
+            "WARNING: local Agent Guild payload differs; preserved "
+            f"without writes: .agent-guild/{drifted_relative}"
+        ),
+        f"warning_lines={warning_lines!r}",
+    )
+    check(
+        "re-init's summary line carries the preserved count",
+        summary_match is not None and summary_match.group(3) == "1",
+        f"stdout={stale_reinstall.stdout!r}",
+    )
+    # The preserved file lives in _copy_missing's "unchanged" bucket, since the
+    # target exists. Splitting it back out is the whole point of the third
+    # term—without this the count would still read as if nothing had drifted.
+    first_total = re.search(
+        r"payload=(\d+) updated/(\d+) unchanged", stale_first_install.stdout
+    )
+    check(
+        "re-init's counts conserve the payload without double-counting the preserved file",
+        summary_match is not None
+        and first_total is not None
+        and summary_match.group(1) == "1"
+        and (
+            int(summary_match.group(1))
+            + int(summary_match.group(2))
+            + int(summary_match.group(3))
+        )
+        == (int(first_total.group(1)) + int(first_total.group(2))),
+        f"first={stale_first_install.stdout!r} reinstall={stale_reinstall.stdout!r}",
+    )
+
     codex_plugin_project = os.path.join(tmp, "codex-plugin-project")
     os.makedirs(codex_plugin_project)
     codex_plugin_install = subprocess.run(

@@ -193,6 +193,12 @@ def _codex_section(project_skills):
 
 
 def _preflight_payload(project_root, payload_files):
+    # #183: this used to raise on the first conflict, so any project that
+    # had already run init once could never receive a later release's
+    # net-new payload files. Return the conflicts instead and let the
+    # caller decide what to do with them. The `_require_beneath`
+    # symlink-redirect guard still has to run over every file, so the loop
+    # itself doesn't change.
     conflicts = []
     target_root = os.path.join(project_root, ".agent-guild")
     _require_beneath(project_root, target_root)
@@ -202,11 +208,7 @@ def _preflight_payload(project_root, payload_files):
         _require_beneath(target_root, target)
         if os.path.exists(target) and not _same_file(source, target):
             conflicts.append(os.path.join(".agent-guild", relative))
-    if conflicts:
-        raise InstallError(
-            "local Agent Guild payload differs; preserved without writes: "
-            + ", ".join(conflicts)
-        )
+    return conflicts
 
 
 def _copy_missing(source_root, target_root, relative_files):
@@ -449,7 +451,7 @@ def install(host, project_root, project_skills=False):
                 )
             )
 
-    _preflight_payload(project_root, payload_files)
+    payload_conflicts = _preflight_payload(project_root, payload_files)
     target_payload = os.path.join(project_root, ".agent-guild")
 
     target_agents = os.path.join(project_root, ".codex", "agents")
@@ -484,6 +486,12 @@ def install(host, project_root, project_skills=False):
     payload_copied, payload_unchanged = _copy_missing(
         SOURCE_PAYLOAD, target_payload, payload_files
     )
+    # A conflicting file already exists on disk, so `_copy_missing` counts it
+    # as unchanged along with every file that's genuinely untouched. Split it
+    # back out here so "unchanged" keeps meaning "matches source" rather than
+    # "matches source, or differs and we left it alone anyway."
+    payload_preserved = len(payload_conflicts)
+    payload_unchanged -= payload_preserved
     agents_updated = agents_unchanged = 0
     if host == "codex":
         agents_updated, agents_unchanged = _copy_owned(
@@ -526,10 +534,19 @@ def install(host, project_root, project_skills=False):
             "twice. Remove the project settings hook block or disable the "
             "plugin locally—never add or rewrite settings automatically."
         )
+    if payload_conflicts:
+        print(
+            "WARNING: local Agent Guild payload differs; preserved "
+            "without writes: " + ", ".join(payload_conflicts)
+        )
+    payload_summary = (
+        f"payload={payload_copied} updated/{payload_unchanged} unchanged/"
+        f"{payload_preserved} preserved"
+    )
     print(
         "OK: Agent Guild project install "
-        f"(host={host}; payload={payload_copied} updated/"
-        f"{payload_unchanged} unchanged; agents={agents_updated} updated/"
+        f"(host={host}; {payload_summary}; "
+        f"agents={agents_updated} updated/"
         f"{agents_unchanged} unchanged; skills={skills_updated} updated/"
         f"{skills_unchanged} unchanged; hooks={hooks_updated} updated/"
         f"{hooks_unchanged} unchanged; "

@@ -440,7 +440,7 @@ def _unidentifiable(reason):
         "subagent-return could not identify this subagent's task: " + reason
         + ". Letting it finish instead of hanging; the stop-gate will catch the "
         "still-open task on the main side. If this recurs, the host transcript "
-        "shape probably changed—see id_from_transcript and its fixtures."
+        "shape probably changed—see _lib.dispatch_candidates and its fixtures."
     )
     try:
         # A wave's members return concurrently, so this append is too (#164);
@@ -456,10 +456,15 @@ def _unidentifiable(reason):
 def main(data):
     # Intended scope: this hook fires on SubagentStop, so it only ever sees ONE
     # subagent's return at a time, and `ident` below is that subagent's own
-    # Task-ID/Audit-ID, read from its own dispatch. There's no separate
-    # in-subagent no-op to add—the scoping is structural, not a data.get()
-    # check—and it's exactly what keeps this gate from ever demanding anything
-    # of a sibling task the returning subagent was never dispatched on.
+    # Task-ID/Audit-ID. There's no separate in-subagent no-op to add—the scoping
+    # is structural, not a data.get() check—and it's what keeps this gate from
+    # ever demanding anything of a sibling task the returning subagent was never
+    # dispatched on. That last part was an assumption rather than a fact until
+    # #204: the transcript alone can only offer the LAST dispatch it recorded,
+    # which is a coin flip once a wave goes out in one message, so ident_for_return
+    # narrows on what this hook input knows about the agent that is returning.
+    # Ambiguity it can't settle arrives here as an exception and routes to
+    # _unidentifiable, which clears nothing.
     agent = _lib.bare_agent(data.get("agent_type", ""))
     if agent not in _lib.GUILD_AGENTS:
         return 0  # matcher should exclude these, but don't assume
@@ -469,7 +474,7 @@ def main(data):
         return _unidentifiable(f"transcript_path missing or unreadable ({transcript!r})")
 
     try:
-        ident = _lib.id_from_transcript(transcript)
+        ident = _lib.ident_for_return(data)
     except Exception as exc:
         return _unidentifiable(f"no id readable from the transcript ({exc})")
 

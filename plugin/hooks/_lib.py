@@ -808,23 +808,32 @@ def _id_in(text):
     return found[0][1] if found else None
 
 
-def id_from_transcript(transcript_path):
-    """Extract the Task-ID / Audit-ID / Audition-ID a subagent was dispatched
-    with. FRAGILE: both Claude Code and Codex document their transcript JSONL
-    as unstable. Any failure to find an id raises, and the caller turns that
-    into a loud, non-hanging return warning.
+def dispatch_candidates(transcript_path):
+    """Every agent dispatch a transcript records, in document order, as
+    `(ident, agent)` pairs, plus the ids found in plain user text.
 
-    Claude's SubagentStop supplies the parent transcript, where the id lives in
-    the last assistant Task/Agent tool_use input. Codex supplies the child
-    transcript explicitly, where the opening prompt is currently a
-    response_item message or event_msg user_message. We scan both records, plus
-    Codex function_call dispatches, so this parser remains one shared
-    compatibility boundary rather than a host-specific policy fork.
+    FRAGILE: both Claude Code and Codex document their transcript JSONL as
+    unstable. Claude's SubagentStop supplies the parent transcript, where the id
+    lives in an assistant Task/Agent tool_use input. Codex supplies the child
+    transcript explicitly, where the opening prompt is currently a response_item
+    message or event_msg user_message. We scan both records, plus Codex
+    function_call dispatches, so this parser remains one shared compatibility
+    boundary rather than a host-specific policy fork.
+
+    The pairs are what let a returning subagent be told apart from its wave
+    siblings. The contract dispatches a wave as parallel Task calls in ONE
+    assistant message, so position identifies nobody: on #193 a checker and a
+    worker went out together and the checker's return resolved to the worker's
+    task, leaking a marker for the full TTL (#204). `agent` is the type the
+    dispatch asked for, or "" where the record doesn't say, and a caller must
+    read "" as matching anything—a host that stops reporting the type should
+    degrade to the old ambiguity rather than narrow every candidate away and
+    identify nobody at all.
     """
     with open(transcript_path, encoding="utf-8") as f:
         raw_lines = f.readlines()
 
-    tool_ids = []  # from assistant Task/Agent dispatches, in document order
+    tool_dispatches = []  # (ident, agent) per dispatch, in document order
     user_ids = []  # from role:user message text, in document order
     for line in raw_lines:
         line = line.strip()
@@ -852,11 +861,12 @@ def id_from_transcript(transcript_path):
                         and block.get("type") == "tool_use"
                         and block.get("name") in _DISPATCH_TOOLS
                     ):
-                        got = _id_in(
-                            _dispatch_prompt(block.get("input") or {})
-                        )
+                        tool_input = block.get("input") or {}
+                        got = _id_in(_dispatch_prompt(tool_input))
                         if got:
-                            tool_ids.append(got)
+                            tool_dispatches.append(
+                                (got, _dispatched_agent(tool_input))
+                            )
 
             if (
                 record.get("type") == "function_call"
@@ -879,7 +889,7 @@ def id_from_transcript(transcript_path):
                     # (#68).
                     got = bare_id(arguments.get("task_name"))[1]
                 if got:
-                    tool_ids.append(got)
+                    tool_dispatches.append((got, _dispatched_agent(arguments)))
 
             role = msg.get("role") if isinstance(msg, dict) else None
             role = role or record.get("role") or record.get("type")
@@ -893,14 +903,183 @@ def id_from_transcript(transcript_path):
                 if got:
                     user_ids.append(got)
 
-    if tool_ids:
-        return tool_ids[-1]
-    if user_ids:
-        return user_ids[-1]
-    raise ValueError(
+    return tool_dispatches, user_ids
+
+
+def _dispatched_agent(tool_input):
+    """The bare agent type a dispatch record asked for, or "" if it doesn't say.
+    Claude puts it in the Task input's `subagent_type`, Codex in the
+    function_call arguments' `agent_type`."""
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in ("subagent_type", "agent_type"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            return bare_agent(value.strip())
+    return ""
+
+
+def _no_id_error(transcript_path):
+    return ValueError(
         f"no Task-ID/Audit-ID/Audition-ID found in any agent dispatch or "
         f"user message of {transcript_path}"
     )
+
+
+def _child_transcript(data, parent):
+    """The returning subagent's OWN transcript, where its opening prompt names
+    the task it was dispatched for. Claude writes it under the parent's session
+    directory as `<session>/subagents/agent-<agent_id>.jsonl`—confirmed against
+    live session data, five ids for five. A host may hand the path over
+    directly instead. None when nothing readable turns up, which is an ordinary
+    outcome rather than an error."""
+    direct = data.get("agent_transcript_path")
+    if isinstance(direct, str) and os.path.isfile(direct):
+        return direct
+    agent_id = data.get("agent_id")
+    if not isinstance(agent_id, str):
+        return None
+    agent_id = agent_id.strip()
+    # The id lands inside a path, so anything that could climb out of the
+    # session directory disqualifies it. A host is not the threat here; a
+    # malformed field is.
+    separators = {os.sep, os.altsep} - {None, ""}
+    if (
+        not agent_id
+        or os.path.isabs(agent_id)
+        or "\0" in agent_id
+        or ".." in agent_id
+        or any(sep in agent_id for sep in separators)
+    ):
+        return None
+    name = f"agent-{agent_id}.jsonl"
+    session_dir = parent[: -len(".jsonl")] if parent.endswith(".jsonl") else None
+    probes = [os.path.join(os.path.dirname(parent), name)]
+    if session_dir:
+        probes.insert(0, os.path.join(session_dir, "subagents", name))
+    for probe in probes:
+        if os.path.isfile(probe):
+            return probe
+    return None
+
+
+def _ident_from_child(data, parent, candidates):
+    """Which of `candidates` the returning agent's own transcript claims, or
+    None. Exact identity where it is available at all: the child's opening
+    prompt is the dispatch this agent actually received.
+
+    Codex is excluded because its child prompt is encrypted, which is the whole
+    reason its id rides `task_name` (#71).
+    """
+    if str(data.get("hook_host") or "").strip().lower() == "codex":
+        return None
+    child = _child_transcript(data, parent)
+    if not child:
+        return None
+    try:
+        _child_tools, child_users = dispatch_candidates(child)
+    except (OSError, ValueError):
+        return None
+    # The dispatch prompt is the earliest labeled id in the child's user turns;
+    # everything after it is tool results and follow-ups, which routinely name
+    # other tasks. Trust it only where it names a dispatch we already found in
+    # the parent, so a stray id in a tool result can never invent a candidate.
+    if child_users and child_users[0] in candidates:
+        return child_users[0]
+    return None
+
+
+def _log_ambiguous_return(agent, candidates, chosen):
+    """Say out loud that identity was guessed rather than determined. Nothing
+    downstream reads this; it exists so a mis-attributed return leaves a trace
+    to find later, the way #204 itself was only findable because the checker
+    happened to say something."""
+    msg = (
+        f"subagent-return could not separate this {agent} return from its wave "
+        f"siblings ({', '.join(candidates)}); attributing it to {chosen}, the "
+        "last matching dispatch. If this recurs, the host stopped supplying "
+        "the per-agent transcript that tells siblings apart—see "
+        "_lib._child_transcript."
+    )
+    try:
+        with open(state_path("log", "return-gate.log"), "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+    sys.stderr.write(msg + "\n")
+
+
+def ident_for_return(data):
+    """The id of the subagent whose SubagentStop this is, narrowed against
+    everything the hook input knows about it.
+
+    The transcript alone can only offer its LAST dispatch, which is right while
+    dispatches are serial and a coin flip once a wave goes out in one message
+    (#204). So each tier narrows the ambiguity the one above it left, exact
+    evidence before heuristics: the agent's own type, then its own transcript,
+    then which dispatches are still in flight.
+
+    What it never does is decline to answer. An exception here becomes
+    `_unidentifiable`, which exits 0 and skips the protocol check, the verdict
+    validation, and the courier identity check alike—so refusing to guess would
+    disable the gate on exactly the shape the contract dispatches every wave in,
+    rather than merely misreading it. The floor is therefore the reading this
+    gate always had, logged as a guess when that is what it is.
+    """
+    transcript = data.get("transcript_path")
+    agent = bare_agent(data.get("agent_type", ""))
+    tool_dispatches, user_ids = dispatch_candidates(transcript)
+
+    if not tool_dispatches:
+        # No wave treatment needed here, and none possible. This fallback only
+        # fires when the transcript records ZERO dispatch tool calls, and a wave
+        # is by definition two or more dispatch records, so the parallel shape
+        # can never reach it. What does reach it is a child transcript with one
+        # opening prompt (#71), and the earliest labeled id is that prompt—the
+        # later ones are tool results, which name whatever the agent happened to
+        # read.
+        if user_ids:
+            return user_ids[0]
+        raise _no_id_error(transcript)
+
+    # Tier 1: the type this return says it is. A dispatch that recorded no type
+    # matches anything, and a narrowing that matches nothing falls back to the
+    # full set rather than identifying nobody—a host that stops reporting the
+    # type must degrade to the old ambiguity, not to a confident wrong answer.
+    matched = [(i, a) for i, a in tool_dispatches if not a or a == agent]
+    if not matched:
+        matched = tool_dispatches
+
+    # Dedupe keeping the LAST occurrence, so the tail stays the most recent
+    # dispatch even where a rework re-dispatched an id already in the list.
+    uniq = []
+    for ident, _agent in matched:
+        if ident in uniq:
+            uniq.remove(ident)
+        uniq.append(ident)
+    if len(uniq) == 1:
+        return uniq[0]
+
+    # Tier 2: the agent's own transcript. This outranks the marker sweep below
+    # because it is evidence rather than inference—a marker says only that some
+    # dispatch has not been cleared yet, and the one survivor of a TTL can
+    # easily be the sibling rather than the returner.
+    own = _ident_from_child(data, transcript, uniq)
+    if own:
+        return own
+
+    # Tier 3: which of them is still out. A parent transcript accumulates every
+    # dispatch of the whole session, so most candidates are already home.
+    live = set(in_flight())
+    alive = [i for i in uniq if f"{i}--{agent}" in live]
+    if len(alive) == 1:
+        return alive[0]
+
+    # Nothing separates them. Take the last matching dispatch, which is what
+    # this gate read before any of this existed, and say that it was a guess.
+    candidates = alive or uniq
+    _log_ambiguous_return(agent, candidates, candidates[-1])
+    return candidates[-1]
 
 
 def _dispatch_prompt(tool_input):

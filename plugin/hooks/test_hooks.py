@@ -305,6 +305,66 @@ def dispatch_transcript(proj, prompt, user_text=None, tool="Task"):
     return path
 
 
+def wave_dispatch_transcript(proj, dispatches, filename="tx.jsonl"):
+    """The shape the orchestrator contract REQUIRES for a wave: ONE assistant
+    message whose content carries N parallel Task tool_use blocks (#204).
+    `dispatches` is a list of (prompt, subagent_type). Unlike dispatch_transcript
+    (always exactly one tool_use, always subagent_type worker-standard), this is
+    what lets a test prove which of several SIMULTANEOUS dispatches a returning
+    subagent's identity resolves to."""
+    path = os.path.join(proj, ".agent-guild", "state", "log", filename)
+    content = [{"type": "text", "text": "Dispatching the wave now."}]
+    for i, (prompt, subagent_type) in enumerate(dispatches):
+        content.append({
+            "type": "tool_use",
+            "id": f"toolu_{i:02d}",
+            "name": "Task",
+            "input": {"subagent_type": subagent_type, "prompt": prompt},
+        })
+    with open(path, "w") as f:
+        f.write('{"type":"system","message":{"role":"system","content":"boot"}}\n')
+        f.write(json.dumps({"type": "assistant", "message": {
+            "role": "assistant", "content": content}}) + "\n")
+    return path
+
+
+def serial_dispatch_transcript(proj, first, second, filename="tx.jsonl"):
+    """Two dispatches in SEPARATE assistant messages—the ordinary serial
+    (non-wave) shape, one Task tool_use per turn—as opposed to
+    wave_dispatch_transcript's single message carrying several. `first` and
+    `second` are (prompt, subagent_type) pairs, written in that document
+    order. Exists for #204's serial-regression guards, which need position
+    (earlier vs. later message) to differ from marker liveness so a test can
+    tell which one the resolver actually used."""
+    path = os.path.join(proj, ".agent-guild", "state", "log", filename)
+    with open(path, "w") as f:
+        f.write('{"type":"system","message":{"role":"system","content":"boot"}}\n')
+        for prompt, subagent_type in (first, second):
+            f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Dispatching now."},
+                {"type": "tool_use", "name": "Task", "input": {
+                    "subagent_type": subagent_type, "prompt": prompt}},
+            ]}}) + "\n")
+    return path
+
+
+def child_transcript(proj, first_ident, later_ident, filename="child.jsonl"):
+    """A subagent's OWN transcript, as Codex-style tiering step 4 reads it: the
+    FIRST user message carries the id it was actually dispatched with, and a
+    LATER user message merely mentions a different id in passing (e.g. a
+    status note about a sibling task)—proving the resolver has to prefer the
+    first mention over any later one, not just scan for a match anywhere."""
+    path = os.path.join(proj, ".agent-guild", "state", "log", filename)
+    with open(path, "w") as f:
+        f.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": f"Task-ID: {first_ident}\nBuild it."}]}}) + "\n")
+        f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Working on it now."}]}}) + "\n")
+        f.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": f"By the way, {later_ident} is also in flight."}]}}) + "\n")
+    return path
+
+
 # --------------------------------------------------------- _lib.project_dir
 print("_lib.py project_dir() fallback")
 sys.path.insert(0, HOOKS)
@@ -2727,6 +2787,231 @@ check("no task file → exit 0 loud, no hang",
       rc == 0 and "could not identify" in err, err)
 check("no task file → its in-flight marker is cleared",
       not os.path.exists(gone_marker), gone_marker)
+
+# ------------------------------------- subagent-return: wave-safe identity (#204)
+print("subagent-return.py: wave-safe identity (#204)")
+
+# The #193 repro: a wave dispatches T-001's checker and T-002's worker as TWO
+# parallel tool_use blocks in ONE assistant message. The old id_from_transcript
+# took tool_ids[-1]—the LAST dispatch in the message—so every returning
+# subagent resolved to T-002, no matter which of the two actually called home.
+# The checker's return leaked its own in-flight marker forever (bounded only by
+# the TTL) because clear_in_flight("T-002", "checker-judgment") cleared nothing:
+# no such marker existed.
+proj_193 = fresh_proj()
+seed_verdict_toolchain(proj_193)
+write_task(proj_193, "T-001", status="checking", checker="checker-judgment",
+           executor_model="sonnet", retries=0)
+write_verdict_json(proj_193, "T-001-sonnet-r0.json",
+                    task_id="T-001", checker="checker-judgment", verdict="pass")
+write_task(proj_193, "T-002", status="needs-check", artifacts="[out.html]")
+write_in_flight_marker(proj_193, "T-001", "checker-judgment")
+write_in_flight_marker(proj_193, "T-002", "worker-standard")
+t001_checker_marker = _in_flight_path(proj_193, "T-001", "checker-judgment")
+t002_worker_marker = _in_flight_path(proj_193, "T-002", "worker-standard")
+tx_193 = wave_dispatch_transcript(proj_193, [
+    ("Task-ID: T-001\nCheck it.", "checker-judgment"),
+    ("Task-ID: T-002\nBuild it.", "worker-standard"),
+])
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "checker-judgment", "transcript_path": tx_193}, proj_193)
+check("#193: checker's return in a wave → exit 0", rc == 0, f"rc={rc} err={err}")
+check("#193: checker's return clears its OWN marker (T-001), not the sibling's",
+      not os.path.exists(t001_checker_marker), t001_checker_marker)
+check("#193: checker's return leaves T-002's still-live worker marker alone",
+      os.path.exists(t002_worker_marker), t002_worker_marker)
+
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_193}, proj_193)
+check("#193: worker's own return in the same wave → exit 0", rc == 0, f"rc={rc} err={err}")
+check("#193: worker's return clears its own marker (T-002)",
+      not os.path.exists(t002_worker_marker), t002_worker_marker)
+
+# Auditor riding in a wave alongside a worker. Without narrowing candidates to
+# the returning agent's OWN type first, last-wins hands the auditor the
+# worker's Task-ID instead of its own Audit-ID, and the block message ends up
+# naming a task the auditor was never dispatched on.
+proj_auditor_wave = fresh_proj()
+dec_pass(proj_auditor_wave)
+write_task(proj_auditor_wave, "T-010", status="needs-check", artifacts="[out.html]")
+tx_auditor_wave = wave_dispatch_transcript(proj_auditor_wave, [
+    ("Audit-ID: DEC-audit", "auditor"),
+    ("Task-ID: T-010\nBuild it.", "worker-standard"),
+])
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "auditor", "transcript_path": tx_auditor_wave}, proj_auditor_wave)
+check("auditor return in a wave with a worker → exit 0", rc == 0, f"rc={rc} err={err}")
+check("auditor return in a wave → stderr never names the worker's Task-ID",
+      "T-010" not in err, err)
+
+# Two same-typed dispatches in one wave (two worker-standard tasks) with BOTH
+# markers live, and no child transcript to separate them. Nothing can identify
+# this return, so the floor is the reading the gate had before #204: the last
+# matching dispatch, said out loud as a guess.
+#
+# The tempting answer is to decline instead, and it is wrong. Declining raises,
+# which becomes _unidentifiable, which exits 0 having skipped the protocol
+# check, the verdict validation, and the courier identity check—so the wave
+# shape the contract dispatches every job in would turn the return gate off
+# rather than merely confuse it. A guess keeps enforcement running against one
+# of the two, which is what today already does, and leaves a trace to find.
+proj_ambig = fresh_proj()
+write_task(proj_ambig, "T-003", status="needs-check", artifacts="[a.html]")
+write_task(proj_ambig, "T-004", status="needs-check", artifacts="[b.html]")
+write_in_flight_marker(proj_ambig, "T-003", "worker-standard")
+write_in_flight_marker(proj_ambig, "T-004", "worker-standard")
+t003_marker = _in_flight_path(proj_ambig, "T-003", "worker-standard")
+t004_marker = _in_flight_path(proj_ambig, "T-004", "worker-standard")
+tx_ambig = wave_dispatch_transcript(proj_ambig, [
+    ("Task-ID: T-003\nBuild it.", "worker-standard"),
+    ("Task-ID: T-004\nBuild it.", "worker-standard"),
+])
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_ambig}, proj_ambig)
+check("same-type ambiguity → exit 0, still enforcing, no hang", rc == 0, f"rc={rc} err={err}")
+check("same-type ambiguity → says out loud that identity was guessed",
+      "could not separate" in err and "T-003" in err and "T-004" in err, err)
+check("same-type ambiguity → the guess is the last matching dispatch (T-004)",
+      not os.path.exists(t004_marker), t004_marker)
+check("same-type ambiguity → the sibling it did not pick keeps its marker",
+      os.path.exists(t003_marker), t003_marker)
+
+# Same ambiguity, but the returning subagent's OWN child transcript is
+# available and its FIRST user message names T-003—so it should resolve
+# cleanly to T-003 without touching T-004 at all.
+proj_child = fresh_proj()
+write_task(proj_child, "T-003", status="needs-check", artifacts="[a.html]")
+write_task(proj_child, "T-004", status="needs-check", artifacts="[b.html]")
+write_in_flight_marker(proj_child, "T-003", "worker-standard")
+write_in_flight_marker(proj_child, "T-004", "worker-standard")
+t003_marker_c = _in_flight_path(proj_child, "T-003", "worker-standard")
+t004_marker_c = _in_flight_path(proj_child, "T-004", "worker-standard")
+tx_child = wave_dispatch_transcript(proj_child, [
+    ("Task-ID: T-003\nBuild it.", "worker-standard"),
+    ("Task-ID: T-004\nBuild it.", "worker-standard"),
+])
+own_tx_child = child_transcript(proj_child, "T-003", "T-004")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_child,
+     "agent_transcript_path": own_tx_child, "agent_id": "sub-child-1"}, proj_child)
+check("child transcript resolves the same-type tie → exit 0", rc == 0, f"rc={rc} err={err}")
+check("child transcript resolution → T-003's marker is cleared",
+      not os.path.exists(t003_marker_c), t003_marker_c)
+check("child transcript resolution → T-004's marker is left alone",
+      os.path.exists(t004_marker_c), t004_marker_c)
+
+# The same tie, resolved the way a real Claude host actually presents it: no
+# agent_transcript_path field (that one is the Codex adapter's own invention),
+# just agent_id plus the on-disk layout `<session>/subagents/agent-<id>.jsonl`.
+# Confirmed against live session data before this was written, so the probe is
+# the production path rather than a hypothetical—if it ever stops resolving,
+# every same-type wave falls back to guessing.
+proj_probe = fresh_proj()
+write_task(proj_probe, "T-003", status="needs-check", artifacts="[a.html]")
+write_task(proj_probe, "T-004", status="needs-check", artifacts="[b.html]")
+write_in_flight_marker(proj_probe, "T-003", "worker-standard")
+write_in_flight_marker(proj_probe, "T-004", "worker-standard")
+t003_marker_p = _in_flight_path(proj_probe, "T-003", "worker-standard")
+t004_marker_p = _in_flight_path(proj_probe, "T-004", "worker-standard")
+tx_probe = wave_dispatch_transcript(proj_probe, [
+    ("Task-ID: T-003\nBuild it.", "worker-standard"),
+    ("Task-ID: T-004\nBuild it.", "worker-standard"),
+], filename="a1b2c3d4.jsonl")
+session_dir = os.path.join(os.path.dirname(tx_probe), "a1b2c3d4", "subagents")
+os.makedirs(session_dir, exist_ok=True)
+os.rename(child_transcript(proj_probe, "T-003", "T-004"),
+          os.path.join(session_dir, "agent-a7f729506ab6b630e.jsonl"))
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_probe,
+     "agent_id": "a7f729506ab6b630e"}, proj_probe)
+check("agent_id alone finds the child transcript → exit 0", rc == 0, f"rc={rc} err={err}")
+check("agent_id probe resolves T-003, clearing its marker",
+      not os.path.exists(t003_marker_p), t003_marker_p)
+check("agent_id probe leaves the sibling's marker alone",
+      os.path.exists(t004_marker_p), t004_marker_p)
+check("agent_id probe resolved rather than guessed",
+      "could not separate" not in err, err)
+
+# A traversing agent_id must not send the probe climbing out of the session
+# directory. The threat here is a malformed field, not a hostile host.
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_probe,
+     "agent_id": "../../../etc/agent-evil"}, proj_probe)
+check("a traversing agent_id is refused, not followed", rc == 0, f"rc={rc} err={err}")
+
+# Marker liveness is inference; the agent's own transcript is evidence. Here
+# T-005's worker is still out but its marker has aged past the TTL, while a
+# LATER T-006 dispatch is live. Trusting the one surviving marker would resolve
+# T-006 and delete a live sibling's marker—the exact harm subagent-return
+# refuses to risk—so the child transcript has to outrank it.
+proj_aged = fresh_proj()
+write_task(proj_aged, "T-005", status="needs-check", artifacts="[x.html]")
+write_task(proj_aged, "T-006", status="assigned")
+write_in_flight_marker(proj_aged, "T-006", "worker-standard")
+t006_marker_aged = _in_flight_path(proj_aged, "T-006", "worker-standard")
+tx_aged = serial_dispatch_transcript(
+    proj_aged,
+    ("Task-ID: T-005\nBuild it.", "worker-standard"),
+    ("Task-ID: T-006\nBuild it.", "worker-standard"))
+own_tx_aged = child_transcript(proj_aged, "T-005", "T-006")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_aged,
+     "agent_transcript_path": own_tx_aged, "agent_id": "sub-aged-1"}, proj_aged)
+check("an aged-out marker doesn't hand the return to a live sibling", rc == 0, f"rc={rc} err={err}")
+check("the live sibling's marker survives someone else's return",
+      os.path.exists(t006_marker_aged), t006_marker_aged)
+
+# Serial regression guards: two ordinary (non-wave) dispatches in SEPARATE
+# assistant messages, T-005 earlier and T-006 later.
+#
+# Variant A: only T-005 has a live marker. Position alone (last-wins) would
+# pick T-006, which has no task file at all here—so a wrong resolution is
+# distinguishable from a right one by whether T-006 shows up anywhere. Marker
+# narrowing has to win over raw document position.
+proj_serial_a = fresh_proj()
+write_task(proj_serial_a, "T-005", status="needs-check", artifacts="[x.html]")
+write_in_flight_marker(proj_serial_a, "T-005", "worker-standard")
+t005_marker = _in_flight_path(proj_serial_a, "T-005", "worker-standard")
+tx_serial_a = serial_dispatch_transcript(
+    proj_serial_a,
+    ("Task-ID: T-005\nBuild it.", "worker-standard"),
+    ("Task-ID: T-006\nBuild it.", "worker-standard"),
+)
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_serial_a}, proj_serial_a)
+check("serial dispatch, only the EARLIER marker live → exit 0", rc == 0, f"rc={rc} err={err}")
+check("serial dispatch, only the earlier marker live → resolves T-005, not T-006",
+      "T-006" not in err, err)
+check("serial dispatch, only the earlier marker live → T-005's marker is cleared",
+      not os.path.exists(t005_marker), t005_marker)
+
+# Variant B: no markers at all. This is the shape every marker-less test above
+# already relies on, so the legacy last-wins fallback has to survive the new
+# tiering untouched: with nothing live to narrow by, the LATER dispatch (T-006)
+# still wins.
+proj_serial_b = fresh_proj()
+write_task(proj_serial_b, "T-006", status="needs-check", artifacts="[y.html]")
+tx_serial_b = serial_dispatch_transcript(
+    proj_serial_b,
+    ("Task-ID: T-005\nBuild it.", "worker-standard"),
+    ("Task-ID: T-006\nBuild it.", "worker-standard"),
+)
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "worker-standard", "transcript_path": tx_serial_b}, proj_serial_b)
+check("serial dispatch, no markers at all → exit 0, legacy last-wins still resolves T-006",
+      rc == 0, f"rc={rc} err={err}")
+check("serial dispatch, no markers at all → stderr never claims it couldn't identify",
+      "could not identify" not in err, err)
 
 # ------------------------------------------------------ orchestrator-write-guard
 print("orchestrator-write-guard.py")

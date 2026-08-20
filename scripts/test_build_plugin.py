@@ -1220,6 +1220,11 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
     os.makedirs(os.path.dirname(audition_results), exist_ok=True)
     with open(audition_results, "w", encoding="utf-8") as f:
         f.write('{"candidate":"user-runtime-data"}\n')
+    managed_hook = os.path.join(
+        project_root, ".agent-guild", "hooks", "_lib.py"
+    )
+    with open(managed_hook, "w", encoding="utf-8") as f:
+        f.write("stale edited hook\n")
     stale_agents_md = first_agents_md.replace(
         section, f"{section_start}\nstale generated section\n{section_end}"
     )
@@ -1263,6 +1268,33 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
         and updated_unrelated == 'name = "unrelated"\n'
         and updated_audition_results
         == '{"candidate":"user-runtime-data"}\n',
+        (
+            f"rc={update_install.returncode} "
+            f"stdout={update_install.stdout!r} "
+            f"stderr={update_install.stderr!r}"
+        ),
+    )
+    # The other half of the #183 split, which the tree layout hides: the Codex
+    # hooks sit inside .agent-guild/ and look like payload, but install() splits
+    # them out of the payload set before preflight runs, so a local edit
+    # upgrades on re-init instead of being preserved, and never earns the
+    # payload's "preserved" warning or a slot in its preserved count.
+    check(
+        "the Codex initializer overwrites an edited repo-local hook on re-init",
+        update_install.returncode == 0
+        and filecmp.cmp(
+            managed_hook,
+            os.path.join(
+                codex_out,
+                "project-template",
+                ".agent-guild",
+                "hooks",
+                "_lib.py",
+            ),
+            shallow=False,
+        )
+        and "hooks/_lib.py" not in update_install.stdout
+        and "hooks=1 updated" in update_install.stdout,
         (
             f"rc={update_install.returncode} "
             f"stdout={update_install.stdout!r} "

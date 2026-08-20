@@ -22,7 +22,7 @@ The design reference for the Job 2 epic. Job 1 (the `/job` intake skill, the pro
 
 **Init** (`/agent-guild:init`, explicit-only): idempotent project setup — copy the contract if missing, add the `@.agent-guild/CLAUDE.md` import line with a provenance comment, create the state directories, gitignore state, copy the scripts/templates payload skipping existing files. Never overwrites without asking.
 
-**Nudge** (`session-nudge.py`, `startup` matcher): speaks only on partial init — `.agent-guild/` exists but the state dirs or the import line are missing. Zero-evidence projects stay silent, because a user-scope install must never nag unrelated repos; fresh adopters find init through the READMEs.
+**Nudge** (`session-nudge.py`, `startup` matcher): speaks only on partial init—`.agent-guild/CLAUDE.md` exists but the state dirs or the import line are missing. Zero-evidence projects stay silent, because a user-scope install must never nag unrelated repos; fresh adopters find init through the READMEs.
 
 **Marketplace and docs**: generated Claude and Codex marketplace views, manifests with `author` as an object, one canonical install guide, a separate maintainer build reference, a publishing checklist, one host-neutral smoke lifecycle with thin launch drills, and a documented footgun: enabling a plugin alongside the same repo-local hooks double-registers the gates.
 

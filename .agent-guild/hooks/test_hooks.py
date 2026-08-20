@@ -52,7 +52,24 @@ def copy_in_hooks(proj):
     os.makedirs(dst, exist_ok=True)
     for name in ("session-nudge.py", "_lib.py"):
         shutil.copy(os.path.join(HOOKS, name), os.path.join(dst, name))
+    # The marker (#212): without it guild_initialized() is False and the
+    # double-registration assertions below would pass by jurisdiction
+    # short-circuit instead of by exercising the check they're named for.
+    open(os.path.join(proj, ".agent-guild", "CLAUDE.md"), "w").close()
     return os.path.join(dst, "session-nudge.py")
+
+
+def files_under_agent_guild(root):
+    """Relative paths of every file under root's .agent-guild/, for diffing
+    before/after a state-only fixture. Those fixtures start with real content
+    already in state/log/, so a bare "does .agent-guild/ exist" check can't
+    tell init-owned files from ones a gate wrote without jurisdiction."""
+    base = os.path.join(root, ".agent-guild")
+    found = []
+    for dirpath, _dirs, filenames in os.walk(base):
+        for name in filenames:
+            found.append(os.path.relpath(os.path.join(dirpath, name), base))
+    return set(found)
 
 
 def write_settings_json(proj, hooks_obj):
@@ -76,6 +93,10 @@ def fresh_proj():
     d = tempfile.mkdtemp(prefix="ag-hooktest-")
     for sub in ("tasks", "verdicts", "disputes", "notes", "log"):
         os.makedirs(os.path.join(d, ".agent-guild", "state", sub))
+    # The tracked opt-in marker (#212): guild_initialized() now keys off this
+    # file, not the directory, so every fixture needs it or all four gates
+    # short-circuit to exit 0 and the suite stops testing anything.
+    open(os.path.join(d, ".agent-guild", "CLAUDE.md"), "w").close()
     return d
 
 
@@ -373,18 +394,33 @@ import _lib as lib_mod  # noqa: E402  (needs sys.path set up first)
 _orig_file = lib_mod.__file__
 _orig_env = os.environ.pop("CLAUDE_PROJECT_DIR", None)
 try:
-    # Candidate WITH .agent-guild/ present (the copied-into-a-repo case) →
-    # accepted. Point __file__ at a fake .../pkg/hooks/_lib.py so the
-    # two-dirs-up math lands on our scratch tree instead of the real repo.
+    # Candidate WITH the .agent-guild/CLAUDE.md marker present (the
+    # copied-into-a-repo case) → accepted. Point __file__ at a fake
+    # .../pkg/hooks/_lib.py so the two-dirs-up math lands on our scratch tree
+    # instead of the real repo.
     scratch_ok = tempfile.mkdtemp(prefix="ag-projdir-ok-")
     os.makedirs(os.path.join(scratch_ok, ".agent-guild"))
+    open(os.path.join(scratch_ok, ".agent-guild", "CLAUDE.md"), "w").close()
     lib_mod.__file__ = os.path.join(scratch_ok, "pkg", "hooks", "_lib.py")
     got = lib_mod.project_dir()
-    check("fallback: candidate with .agent-guild/ → accepted",
+    check("fallback: candidate with .agent-guild/CLAUDE.md marker → accepted",
           os.path.realpath(got) == os.path.realpath(scratch_ok), f"got={got}")
 
-    # Candidate WITHOUT .agent-guild/ (the plugin case: two-up lands beside
-    # the plugin, not in the user's project) → raises RuntimeError naming it.
+    # Candidate with a BARE .agent-guild/ and no marker—the #212 git-rm
+    # leftover—is not evidence of init either → raises RuntimeError.
+    scratch_bare = tempfile.mkdtemp(prefix="ag-projdir-bare-")
+    os.makedirs(os.path.join(scratch_bare, ".agent-guild"))
+    lib_mod.__file__ = os.path.join(scratch_bare, "pkg", "hooks", "_lib.py")
+    raised_right = False
+    try:
+        lib_mod.project_dir()
+    except RuntimeError as e:
+        raised_right = ".agent-guild" in str(e)
+    check("fallback: bare .agent-guild/, no marker → raises RuntimeError",
+          raised_right)
+
+    # Candidate WITHOUT .agent-guild/ at all (the plugin case: two-up lands
+    # beside the plugin, not in the user's project) → raises RuntimeError.
     scratch_bad = tempfile.mkdtemp(prefix="ag-projdir-bad-")
     lib_mod.__file__ = os.path.join(scratch_bad, "pkg", "hooks", "_lib.py")
     raised_right = False
@@ -395,6 +431,7 @@ try:
     check("fallback: candidate without .agent-guild/ → raises RuntimeError",
           raised_right)
     shutil.rmtree(scratch_ok, ignore_errors=True)
+    shutil.rmtree(scratch_bare, ignore_errors=True)
     shutil.rmtree(scratch_bad, ignore_errors=True)
 finally:
     lib_mod.__file__ = _orig_file
@@ -3048,8 +3085,19 @@ zero_evidence = tempfile.mkdtemp(prefix="ag-nudge-zero-")
 rc, out, err = run_hook("session-nudge.py", {}, zero_evidence)
 check("no .agent-guild/ at all → silent, exit 0", rc == 0 and out == "", f"rc={rc} out={out!r}")
 
+# A bare .agent-guild/ with no marker is the #212 git-rm leftover: init's
+# state dirs are gitignored and survive removing every tracked payload file,
+# so this is indistinguishable from "never ran init" and must stay silent.
+bare_no_marker = tempfile.mkdtemp(prefix="ag-nudge-nomarker-")
+os.makedirs(os.path.join(bare_no_marker, ".agent-guild"))
+rc, out, err = run_hook("session-nudge.py", {}, bare_no_marker)
+check("bare .agent-guild/, no marker → silent, exit 0",
+      rc == 0 and out == "", f"rc={rc} out={out!r}")
+
+# Genuine half-init: marker present, state dirs missing → still nudges.
 partial_no_state_dirs = tempfile.mkdtemp(prefix="ag-nudge-nostate-")
 os.makedirs(os.path.join(partial_no_state_dirs, ".agent-guild"))
+open(os.path.join(partial_no_state_dirs, ".agent-guild", "CLAUDE.md"), "w").close()
 rc, out, err = run_hook("session-nudge.py", {}, partial_no_state_dirs)
 check("state dirs missing → nudges, mentions init", rc == 0 and "init" in out, f"rc={rc} out={out!r}")
 check("state dirs missing → exactly one stdout line", out.count("\n") == 1, f"out={out!r}")
@@ -3168,6 +3216,59 @@ rc, out, err = run_hook("orchestrator-write-guard.py",
 check("orchestrator-write-guard.py, bare repo → exit 0", rc == 0, f"rc={rc} err={err}")
 check("orchestrator-write-guard.py, bare repo → no .agent-guild/ created",
       not os.path.exists(os.path.join(bare, ".agent-guild")))
+
+# #212: a STATE-ONLY .agent-guild/ (state/ dirs exist, no CLAUDE.md marker)
+# is what a `git rm` of the guild's tracked payload leaves behind—init's
+# state/ is gitignored, so it survives removing every tracked file. That is
+# not consent, and each gate must stay just as inert as it is against a
+# root with no .agent-guild/ at all.
+
+state_only = tempfile.mkdtemp(prefix="ag-jurisdiction-stop-stateonly-")
+os.makedirs(os.path.join(state_only, ".agent-guild", "state", "log"))
+before = files_under_agent_guild(state_only)
+rc, out, err = run_hook("stop-gate.py", {}, state_only)
+check("stop-gate.py, state-only (no marker) → exit 0", rc == 0, f"rc={rc} err={err}")
+check("stop-gate.py, state-only (no marker) → nothing new written",
+      files_under_agent_guild(state_only) == before,
+      f"before={before} after={files_under_agent_guild(state_only)}")
+
+state_only = tempfile.mkdtemp(prefix="ag-jurisdiction-dispatch-stateonly-")
+os.makedirs(os.path.join(state_only, ".agent-guild", "state", "log"))
+before = files_under_agent_guild(state_only)
+# Same auditor + Audit-ID: CON-audit shape as the bare-repo case above, for the
+# same reason: a worker dispatch dies on its missing task file before it ever
+# reaches a write, so it would pass this fixture unguarded too.
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_name": "Task",
+                         "tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: CON-audit\nplease audit"}},
+                        state_only)
+check("dispatch-guard.py, state-only (no marker) → exit 0", rc == 0, f"rc={rc} err={err}")
+check("dispatch-guard.py, state-only (no marker) → nothing new written",
+      files_under_agent_guild(state_only) == before,
+      f"before={before} after={files_under_agent_guild(state_only)}")
+
+state_only = tempfile.mkdtemp(prefix="ag-jurisdiction-return-stateonly-")
+os.makedirs(os.path.join(state_only, ".agent-guild", "state", "log"))
+before = files_under_agent_guild(state_only)
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "worker-standard", "transcript_path": "/dev/null"},
+                        state_only)
+check("subagent-return.py, state-only (no marker) → exit 0", rc == 0, f"rc={rc} err={err}")
+check("subagent-return.py, state-only (no marker) → nothing new written",
+      files_under_agent_guild(state_only) == before,
+      f"before={before} after={files_under_agent_guild(state_only)}")
+
+state_only = tempfile.mkdtemp(prefix="ag-jurisdiction-write-stateonly-")
+os.makedirs(os.path.join(state_only, ".agent-guild", "state", "log"))
+before = files_under_agent_guild(state_only)
+rc, out, err = run_hook("orchestrator-write-guard.py",
+                        {"tool_input": {"file_path": os.path.join(state_only, "README.md")}},
+                        state_only)
+check("orchestrator-write-guard.py, state-only (no marker) → exit 0", rc == 0, f"rc={rc} err={err}")
+check("orchestrator-write-guard.py, state-only (no marker) → nothing new written",
+      files_under_agent_guild(state_only) == before,
+      f"before={before} after={files_under_agent_guild(state_only)}")
 
 # Regression: the clean-slate branch still runs in an INITIALIZED project—the
 # guard above must be narrow, not a blanket no-op that swallows the real case.

@@ -9,12 +9,15 @@ user. This hook is that one nudge: on session start, print a single line
 pointing at the host's init skill when the project looks like it meant to use
 the guild but didn't finish setting it up.
 
-Zero-evidence silence beats discoverability: with no .agent-guild/ directory
-at all, we say nothing, even though a one-line "hey, agent-guild is available"
-would help someone who's never heard of it. A user-scope plugin install runs
-this hook in EVERY project the user opens, guild or not, so the only safe
-default is silence until the project itself shows intent (a .agent-guild/
-directory). Nagging unrelated repos on every session start would make the
+Zero-evidence silence beats discoverability: with no .agent-guild/CLAUDE.md
+marker on disk, we say nothing, even though a one-line "hey, agent-guild is
+available" would help someone who's never heard of it. A user-scope plugin
+install runs this hook in EVERY project the user opens, guild or not, so the
+only safe default is silence until the project itself shows intent—and a bare
+.agent-guild/ directory isn't that: init's state/ dirs are gitignored, so a
+`git rm` of the guild's tracked payload can leave them standing with no
+marker behind (#212). The marker is tracked, so removing it removes the
+intent too. Nagging unrelated repos on every session start would make the
 plugin something people disable, not adopt.
 
 Double-registration is the other thing worth a nudge for. The guild ships two
@@ -152,8 +155,9 @@ def main(data):
             )
             return 0
 
-    # No .agent-guild/ at all: the project has shown no intent to use the
-    # guild, so say nothing (see the module docstring's asymmetry note).
+    # No marker: the project has shown no intent to use the guild—or it once
+    # did and a `git rm` took the marker back out—so say nothing either way
+    # (see the module docstring's asymmetry note and #212).
     if not _lib.guild_initialized():
         return 0
 

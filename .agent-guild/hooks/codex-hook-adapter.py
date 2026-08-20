@@ -68,7 +68,11 @@ def _project_root(cwd):
         raise AdapterError(f"hook cwd is not a directory: {cwd!r}")
 
     while True:
-        if os.path.isdir(os.path.join(current, ".agent-guild")):
+        # A bare .agent-guild/ isn't jurisdiction—see _lib's marker check
+        # (issue #212)—so this walk-up has to test the same file _lib does,
+        # or it can stop at a leftover state tree one level below the real
+        # (marker-bearing) project root and hand every gate the wrong root.
+        if os.path.isfile(os.path.join(current, ".agent-guild", "CLAUDE.md")):
             return current
         if os.path.exists(os.path.join(current, ".git")):
             return current

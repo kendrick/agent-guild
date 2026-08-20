@@ -464,9 +464,9 @@ def _stamp_audited_content():
 def main(data):
     # Jurisdiction (see _lib's design rules). An auditor dispatch carries no
     # task file to check, so it clears legality in any repo and reaches _log
-    # and mark_in_flight below—enough to manufacture .agent-guild/ somewhere
-    # that never ran init. A worker dispatch can't get that far; the auditor
-    # path is the reachable one.
+    # and mark_in_flight below—enough to write state/ somewhere that never ran
+    # init, or that ran it and had every payload file removed since (#212). A
+    # worker dispatch can't get that far; the auditor path is the reachable one.
     if not _lib.guild_initialized():
         return 0
 

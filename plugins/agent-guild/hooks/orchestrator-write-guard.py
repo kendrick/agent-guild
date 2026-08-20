@@ -34,8 +34,9 @@ import _lib  # noqa: E402
 
 def main(data):
     # Jurisdiction (see _lib's design rules). Already a no-op here today, since
-    # no_job_active() reads state that doesn't exist and reports no job. Stated
-    # explicitly so the rule has one shape across all four gates.
+    # no_job_active() reads state that doesn't exist (or that exists with no
+    # marker, per #212) and reports no job. Stated explicitly so the rule has
+    # one shape across all four gates.
     if not _lib.guild_initialized():
         return 0
 

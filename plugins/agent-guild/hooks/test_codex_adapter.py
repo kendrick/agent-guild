@@ -432,6 +432,12 @@ class CodexAdapterTest(unittest.TestCase):
                     self.project, ".agent-guild", "state", name
                 )
             )
+        # The tracked opt-in marker (#212): guild_initialized() now keys off
+        # this file, not the directory, so without it every gate in this
+        # suite would short-circuit to exit 0 regardless of what's tested.
+        open(
+            os.path.join(self.project, ".agent-guild", "CLAUDE.md"), "w"
+        ).close()
 
     def tearDown(self):
         self.tempdir.cleanup()
@@ -1257,6 +1263,33 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("$agent-guild:init", result.stdout)
         self.assertNotIn("/agent-guild:init", result.stdout)
+
+    def test_state_only_agent_guild_is_not_jurisdiction_through_adapter(self):
+        """Issue #212: init's state/ dirs are gitignored, so a `git rm` of the
+        guild's tracked payload can leave a state-only .agent-guild/ standing
+        with no CLAUDE.md marker in it. _project_root()'s walk-up carries its
+        own independent copy of the .agent-guild test and has to treat that
+        the same way _lib.guild_initialized() does downstream, or it hands
+        the gate a project root the marker check would otherwise refuse."""
+        bare = tempfile.mkdtemp(prefix="ag-codex-jurisdiction-stateonly-")
+        try:
+            os.makedirs(os.path.join(bare, ".agent-guild", "state", "log"))
+            nested = os.path.join(bare, "packages", "demo")
+            os.makedirs(nested)
+            state_file = os.path.join(
+                bare, ".agent-guild", "state", "log", "stop-gate.state"
+            )
+            payload = codex_input(
+                "Stop",
+                nested,
+                stop_hook_active=False,
+                last_assistant_message="Done.",
+            )
+            result = self.run_adapter("stop-gate", payload)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(os.path.exists(state_file))
+        finally:
+            shutil.rmtree(bare, ignore_errors=True)
 
     def test_wrong_event_for_gate_fails_closed(self):
         payload = codex_input(

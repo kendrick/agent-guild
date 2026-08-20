@@ -109,13 +109,13 @@ $job <issue|file|url>
 
 ### Manual Claude Copy-In
 
-If you do not want the Claude plugin, copy `.claude/` and `.agent-guild/` from this repository into the target project. Merge the `hooks` object from `.claude/settings.json` if the project already has that file; do not overwrite unrelated settings. Add `@.agent-guild/CLAUDE.md` to the root `CLAUDE.md`, add `.agent-guild/state/` to `.gitignore`, and create the state subdirectories.
+If you do not want the Claude plugin, copy `.claude/` and `.agent-guild/` from this repository into the target project. That copy carries `.agent-guild/CLAUDE.md`, the file the hook gates look for. Merge the `hooks` object from `.claude/settings.json` if the project already has that file; do not overwrite unrelated settings. Add `@.agent-guild/CLAUDE.md` to the root `CLAUDE.md`, add `.agent-guild/state/` to `.gitignore`, and create the state subdirectories.
 
 This is Claude's repo-local route. Do not also enable the Claude plugin in that project.
 
 ## What Init Owns
 
-Every route installs the same `.agent-guild/` project payload and runtime state directories. The installer is idempotent and preserves existing files it does not own. It fails before writing when it finds malformed ownership markers or a managed path redirected outside the project. A payload file that has drifted from the shipped source is preserved instead—the installer warns and keeps going, landing whatever payload files are still missing.
+Every route installs the same `.agent-guild/` project payload and runtime state directories. Every hook gate looks for `.agent-guild/CLAUDE.md` before running, so that file, not the `.agent-guild/` directory, is what makes a project initialized. The file is tracked, so removing the payload removes the Guild from the project. The installer is idempotent and preserves existing files it does not own. It fails before writing when it finds malformed ownership markers or a managed path redirected outside the project. A payload file that has drifted from the shipped source is preserved instead—the installer warns and keeps going, landing whatever payload files are still missing.
 
 Host-specific ownership stays narrow:
 

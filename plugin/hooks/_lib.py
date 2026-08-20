@@ -13,11 +13,14 @@ Design rules every hook here obeys:
   Escape hatch. If .agent-guild/state/PAUSED exists, every hook exits 0—checked before any
   logic that could throw, so a genuinely broken hook is still escapable.
 
-  Jurisdiction. Init owns creation of .agent-guild/; a gate that finds none
-  exits 0 before touching disk. A user-scope plugin install fires these
-  hooks in every repo on the machine, not just the ones that ran init, so a
-  gate that writes state before checking jurisdiction manufactures
-  .agent-guild/ in repos that never asked for it.
+  Jurisdiction. Init owns writing the tracked marker .agent-guild/CLAUDE.md;
+  a gate that finds none exits 0 before touching disk. A bare .agent-guild/
+  is not evidence of that—init also adds state/ to .gitignore, so `git rm`
+  of every tracked payload file leaves the state tree standing with no
+  marker in it. A user-scope plugin install fires these hooks in every repo
+  on the machine, not just the ones that ran init, so a gate that writes
+  state before checking jurisdiction manufactures state in repos that never
+  asked for it, or that asked and then said no.
 
 Stdlib only: this runs wherever python3 does, with no install step, so the kit
 stays copy-in portable.
@@ -173,14 +176,15 @@ def project_dir():
     candidate = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
-    if os.path.isdir(os.path.join(candidate, ".agent-guild")):
+    if os.path.isfile(os.path.join(candidate, ".agent-guild", "CLAUDE.md")):
         return candidate
     raise RuntimeError(
         f"project_dir(): CLAUDE_PROJECT_DIR is unset/invalid and the "
-        f"two-dirs-up fallback candidate {candidate!r} has no .agent-guild/ "
-        f"directory. This is likely _lib.py running from inside a plugin "
-        f"install, where two-up is the plugin's parent, not the user's "
-        f"project—set CLAUDE_PROJECT_DIR instead of trusting the guess."
+        f"two-dirs-up fallback candidate {candidate!r} has no "
+        f".agent-guild/CLAUDE.md marker. This is likely _lib.py running from "
+        f"inside a plugin install, where two-up is the plugin's parent, not "
+        f"the user's project—set CLAUDE_PROJECT_DIR instead of trusting the "
+        f"guess."
     )
 
 
@@ -207,7 +211,9 @@ def guild_initialized():
     every session in every unrelated repo, which is strictly worse than the
     bug this check exists to fix."""
     try:
-        return os.path.isdir(os.path.join(project_dir(), ".agent-guild"))
+        return os.path.isfile(
+            os.path.join(project_dir(), ".agent-guild", "CLAUDE.md")
+        )
     except Exception:
         return False
 

@@ -545,8 +545,9 @@ def _task_digest(tid, status, retries, verdicts, fresh_markers):
 
 def main(data):
     # Jurisdiction (see _lib's design rules). The clean-slate branch below
-    # writes stop-gate.state unconditionally, so without this the first Stop in
-    # any repo on the machine manufactures .agent-guild/. That's #98 as filed.
+    # writes stop-gate.state unconditionally, so without this the first Stop
+    # in any repo on the machine—or any repo that ran `git rm` on the guild
+    # and kept the gitignored state tree—writes into it. That's #98 and #212.
     if not _lib.guild_initialized():
         return 0
 

@@ -58,7 +58,7 @@ import _lib  # noqa: E402
 
 # A dispatch's own id is written as a line, per .agent-guild/CLAUDE.md ("as a
 # line in the prompt"). _lib.labeled_ids/_id_in find a labeled id ANYWHERE in a
-# blob of text, including mid-sentence—exactly right for id_from_transcript's
+# blob of text, including mid-sentence—exactly right for dispatch_candidates'
 # more forgiving return-time parse (a transcript can narrate or quote an id
 # without meaning to identify the return), but wrong here: .agent-guild/CLAUDE.md
 # itself quotes `Audit-ID: CON-audit` mid-sentence, and any dispatch whose prompt
@@ -535,7 +535,7 @@ def main(data):
         # id-resolution path where blocking on ambiguity is right: a human
         # (or the orchestrator) is about to send the dispatch, so a block
         # here is actionable in a way the same ambiguity is NOT at return
-        # time (see id_from_transcript / subagent-return.py, which
+        # time (see _lib.ident_for_return / subagent-return.py, which
         # deliberately never blocks on it).
         distinct = []
         seen = set()

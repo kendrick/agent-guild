@@ -230,6 +230,59 @@ def codex_transcript(project, text, shape="response_item"):
     return path
 
 
+def codex_wave_transcript(project):
+    """Two dispatches recorded in the one parent transcript a wave produces:
+    T-001 sent as worker-standard, T-002 as worker-bulk, each its own
+    call_id, same encrypted-`message` shape as `codex_transcript`'s
+    `function_call` branch. `id_from_transcript`'s `tool_ids[-1]` fallback
+    resolves every return against this transcript to T-002 regardless of
+    which of the two is actually returning—the gap `ident_for_return` closes
+    by narrowing on the returning agent's `agent_type` first (#204)."""
+    path = os.path.join(
+        project, ".agent-guild", "state", "log", "wave_function_call.jsonl"
+    )
+    records = [
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "spawn_agent",
+                "namespace": "collaboration",
+                "arguments": json.dumps(
+                    {
+                        "task_name": "t_001",
+                        "agent_type": "worker-standard",
+                        "fork_turns": "none",
+                        "message": LIVE_DISPATCH["tool_input"]["message"],
+                    }
+                ),
+                "call_id": "call_wave0001AAAAAAAAAAAAAA",
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "spawn_agent",
+                "namespace": "collaboration",
+                "arguments": json.dumps(
+                    {
+                        "task_name": "t_002",
+                        "agent_type": "worker-bulk",
+                        "fork_turns": "none",
+                        "message": LIVE_DISPATCH["tool_input"]["message"],
+                    }
+                ),
+                "call_id": "call_wave0002BBBBBBBBBBBBBB",
+            },
+        },
+    ]
+    with open(path, "w", encoding="utf-8") as stream:
+        for record in records:
+            stream.write(json.dumps(record) + "\n")
+    return path
+
+
 def seed_verdict_toolchain(project):
     scripts = os.path.join(project, ".agent-guild", "scripts")
     schemas = os.path.join(project, ".agent-guild", "schemas")
@@ -858,6 +911,86 @@ class CodexAdapterTest(unittest.TestCase):
         )
         self.assertEqual(fallback.returncode, 0, fallback.stderr)
         self.assertIn("could not identify", fallback.stderr)
+
+    def test_return_narrows_a_wave_by_the_returning_agent_type(self):
+        # #204: `id_from_transcript`'s `tool_ids[-1]` fallback ignores which
+        # agent is actually returning and always resolves to the LAST
+        # dispatch in the transcript. In a two-task wave that means the first
+        # task's own worker gets attributed to the second task's dispatch.
+        # T-002 sits at `assigned` with no artifacts, so a wrong resolution
+        # here trips "Protocol incomplete for T-002"—this is the failure
+        # `ident_for_return` narrowing by `agent_type` is meant to close.
+        write_task(
+            self.project,
+            "T-001",
+            status="needs-check",
+            artifacts="[README.md]",
+        )
+        write_task(self.project, "T-002", status="assigned")
+        transcript = codex_wave_transcript(self.project)
+        payload = codex_input(
+            "SubagentStop",
+            self.project,
+            agent_transcript_path=transcript,
+            agent_id="019fa0c0-worker-a",
+            agent_type="worker-standard",
+            stop_hook_active=False,
+            last_assistant_message="Done.",
+        )
+        result = self.run_adapter("subagent-return", payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("T-002", result.stderr)
+
+    def test_return_narrows_the_mirrored_wave_member_too(self):
+        # The other half of the same wave: worker-bulk returning against the
+        # same transcript has to resolve to T-002, its own dispatch, not
+        # T-001's. T-002 is genuinely at `assigned` with no artifacts here,
+        # so this one legitimately blocks—on T-002, not on a task this agent
+        # was never dispatched on.
+        write_task(
+            self.project,
+            "T-001",
+            status="needs-check",
+            artifacts="[README.md]",
+        )
+        write_task(self.project, "T-002", status="assigned")
+        transcript = codex_wave_transcript(self.project)
+        payload = codex_input(
+            "SubagentStop",
+            self.project,
+            agent_transcript_path=transcript,
+            agent_id="019fa0c0-worker-b",
+            agent_type="worker-bulk",
+            stop_hook_active=False,
+            last_assistant_message="Done.",
+        )
+        result = self.run_adapter("subagent-return", payload)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("Protocol incomplete for T-002", result.stderr)
+
+    def test_single_dispatch_transcript_still_resolves_by_task_name(self):
+        # Regression guard for the ordinary, non-wave case #204 must not
+        # disturb: one dispatch, one returning agent, resolved via the same
+        # `task_name` path #71 established. No narrowing decision to make
+        # here—there's only ever one dispatch to narrow against.
+        write_task(
+            self.project,
+            "T-077",
+            status="needs-check",
+            artifacts="[README.md]",
+        )
+        transcript = codex_transcript(self.project, "t_077", "function_call")
+        payload = codex_input(
+            "SubagentStop",
+            self.project,
+            agent_transcript_path=transcript,
+            agent_id="019fa0c0-worker",
+            agent_type="worker-standard",
+            stop_hook_active=False,
+            last_assistant_message="Done.",
+        )
+        result = self.run_adapter("subagent-return", payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_read_only_in_family_checker_returns_its_verdict_inline(self):
         # Issue #68. A Codex in-family checker is sandbox read-only, so the

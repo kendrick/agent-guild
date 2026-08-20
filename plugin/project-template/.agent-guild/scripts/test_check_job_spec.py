@@ -28,7 +28,9 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(SCRIPTS_DIR, "check-job-spec.py")
 
 sys.path.insert(0, SCRIPTS_DIR)
-from _corpus import ARCHIVE_117 as ARCHIVE_DIR, add_owns  # noqa: E402
+from _corpus import (  # noqa: E402
+    ARCHIVE_117 as ARCHIVE_DIR, add_owns, repair_c1_delegation,
+)
 
 passed = failed = 0
 
@@ -95,6 +97,7 @@ def copy_corpus_state(state_dir):
         os.path.join(ARCHIVE_DIR, "tasks"), os.path.join(state_dir, "tasks")
     )
     add_weight_line(state_dir)
+    repair_c1_delegation(state_dir)
 
 
 WEIGHT_LINE_TEXT = (
@@ -1862,6 +1865,215 @@ if os.path.isdir(ARCHIVE_DIR):
                 # And on stderr, the only channel dispatch-guard forwards.
                 check("waived R10: the waiver is announced on stderr too",
                       "waived" in err, f"err={err!r}")
+
+# --------------------------------------------------- R22: delegation vs schedule (#190)
+print("R22: delegation vs schedule (#190)")
+
+# R22 (slug delegation-schedule) does not exist in this tree yet—these
+# fixtures are written against its spec (issue #190) ahead of the rule
+# itself, so the "fires" case below is EXPECTED to fail against today's
+# linter (it will observe exit 0, since nothing checks for this defect
+# yet) while the three "stays silent" cases are expected to pass, because
+# what they actually prove is that the fixtures clear every rule that DOES
+# exist today. That is the whole point of writing them now: once R22
+# lands, the "fires" case's assertions start passing with no fixture
+# changes, and a regression in R22 itself would show up as one of the
+# silent cases turning noisy.
+#
+# The rule, per #190: for each constitution clause, collect the OTHER
+# clause ids named anywhere in that clause's own body (bare `C-N`
+# mentions, self-reference excluded, ids the constitution doesn't define
+# ignored). A clause naming none is silent. Otherwise, resolve carriers
+# from task frontmatter `clauses:` lists and fail only when EVERY named
+# clause's carriers are ALL strictly upstream (transitive `deps`) of EVERY
+# task carrying the delegating clause.
+
+
+def delegation_clause_block(n, mentions=()):
+    """One `### C-N:` block. `mentions` names other clause ids in the
+    **text** field, the way a real delegating clause would read ("this is
+    established by C-2 and C-3")—R22 scans a clause's whole body, but
+    **text** is where a human actually writes a delegation note, so
+    planting the mention there is the realistic case rather than an
+    artificial one. Silent (no mentions) when `mentions` is empty, the
+    same opt-in shape clause_block above uses for the count/list rules."""
+    note = f" Established by {', '.join(mentions)}." if mentions else ""
+    return (
+        f"### C-{n}: clause {n}\n"
+        f"- **text**: Clause {n} states a falsifiable standard.{note}\n"
+        f"- **check**: checker-judgment: confirm clause {n}'s standard holds.\n"
+        f"- **severity**: minor\n"
+        f"- **failing example**: clause {n}'s standard is violated.\n"
+    )
+
+
+def delegation_constitution(mentions_by_clause):
+    """A deep-weight constitution (unbounded ceiling, so no R22 case
+    couples to a clause count the way R17/R18's cases must) with one block
+    per key in `mentions_by_clause` (1..max key, contiguous), each block's
+    mentions taken from that key's value."""
+    n_clauses = max(mentions_by_clause)
+    blocks = "\n".join(
+        delegation_clause_block(n, mentions_by_clause.get(n, ()))
+        for n in range(1, n_clauses + 1)
+    )
+    return f"""# Constitution: R22 fixture
+
+**Job weight**: deep, synthetic fixture; deep so no case couples to a clause count
+
+## Clauses
+
+{blocks}
+
+## Protected content
+
+- none.
+
+## Non-goals
+
+- none.
+"""
+
+
+def delegation_task(task_id, clause_ids, deps=()):
+    """One task file citing every id in `clause_ids` (order preserved,
+    >=1) with `deps` on other task ids. weighted_task above can't express
+    this: it hardcodes `deps: []` and a single `clauses: [C-1]`, and R22's
+    fixtures need multi-clause tasks wired into an explicit dep chain."""
+    clauses_str = ", ".join(clause_ids)
+    deps_str = ", ".join(deps)
+    check_lines = "\n".join(
+        f"  {cid}: checker-judgment: confirm clause {cid[2:]}'s standard holds."
+        for cid in clause_ids
+    )
+    artifact = f"artifact-{task_id}.txt"
+    return f"""---
+id: {task_id}
+title: Delegation fixture {task_id}
+spec: .agent-guild/state/spec.md#one
+clauses: [{clauses_str}]
+executor: worker-standard
+executor_model: sonnet
+checker: checker-judgment
+check_method: >-
+{check_lines}
+status: pending
+retries: 0
+max_retries: 2
+deps: [{deps_str}]
+escalations: []
+artifacts:
+  - {artifact}
+---
+
+## Spec excerpt
+
+Writes {artifact}.
+"""
+
+
+def write_delegation_state(d, constitution_text, tasks):
+    """`tasks`: list of {{"id", "clauses": [...], "deps": [...]}}. Mirrors
+    write_synthetic_state's shape, but delegates to delegation_task so
+    each entry can carry more than one clause and an explicit dep list—
+    write_synthetic_state hardcodes both away."""
+    state = os.path.join(d, "state")
+    os.makedirs(os.path.join(state, "tasks"))
+    write_lines(os.path.join(state, "constitution.md"), constitution_text.splitlines())
+    for t in tasks:
+        write_lines(
+            os.path.join(state, "tasks", f"{t['id']}.md"),
+            delegation_task(t["id"], t["clauses"], t.get("deps", [])).splitlines(),
+        )
+    return state
+
+
+# ---- Case 1: fires. C-1 (carried by T-003) names C-2 and C-3; C-2 is
+# carried by T-001, C-3 by T-002; T-003 deps on T-002 deps on T-001, so
+# both named clauses' carriers are strictly upstream of C-1's carrier.
+with tempfile.TemporaryDirectory() as d:
+    doc = delegation_constitution({1: ("C-2", "C-3"), 2: (), 3: ()})
+    check("R22 fires fixture: C-1 mentions C-2 and C-3", "Established by C-2, C-3." in doc, doc)
+    state = write_delegation_state(d, doc, [
+        {"id": "T-001", "clauses": ["C-2"], "deps": []},
+        {"id": "T-002", "clauses": ["C-3"], "deps": ["T-001"]},
+        {"id": "T-003", "clauses": ["C-1"], "deps": ["T-002"]},
+    ])
+    with open(os.path.join(state, "tasks", "T-003.md"), encoding="utf-8") as f:
+        t003 = f.read()
+    check("R22 fires fixture: T-003 carries C-1 and deps on T-002",
+          "clauses: [C-1]" in t003 and "deps: [T-002]" in t003, t003)
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    # EXPECTED RED against today's ruleless baseline: rc comes back 0 with
+    # empty stderr, so every one of these assertions is expected to fail
+    # until R22 exists. Left as ordinary check() calls (not skipped or
+    # inverted) because that failure IS the deliverable: this is the
+    # observed-RED half of the red/green pair #190 asks for.
+    check("R22 fires: exit 1", rc == 1, f"rc={rc} err={err}")
+    check("R22 fires: [proof] tag literal in stderr", "[proof]" in err, f"err={err!r}")
+    check("R22 fires: R22 named", rule_hit(err, "R22"), f"err={err!r}")
+    check("R22 fires: delegating clause C-1 named", "C-1" in err, f"err={err!r}")
+    check("R22 fires: leaned-on clause C-2 named", "C-2" in err, f"err={err!r}")
+    check("R22 fires: leaned-on clause C-3 named", "C-3" in err, f"err={err!r}")
+    check("R22 fires: carrier T-001 named", "T-001" in err, f"err={err!r}")
+    check("R22 fires: carrier T-002 named", "T-002" in err, f"err={err!r}")
+    check("R22 fires: carrier T-003 named", "T-003" in err, f"err={err!r}")
+    check("R22 fires: no traceback", "Traceback" not in err, f"err={err!r}")
+
+# ---- Case 2: silent, same task. Same shape, except C-2 moves onto T-003
+# itself—the same task that carries the delegating clause C-1—so C-2's
+# carrier is not strictly upstream of (nor distinct from) T-003.
+with tempfile.TemporaryDirectory() as d:
+    doc = delegation_constitution({1: ("C-2", "C-3"), 2: (), 3: ()})
+    check("R22 same-task fixture: C-1 mentions C-2 and C-3", "Established by C-2, C-3." in doc, doc)
+    state = write_delegation_state(d, doc, [
+        {"id": "T-002", "clauses": ["C-3"], "deps": []},
+        {"id": "T-003", "clauses": ["C-1", "C-2"], "deps": ["T-002"]},
+    ])
+    with open(os.path.join(state, "tasks", "T-003.md"), encoding="utf-8") as f:
+        t003 = f.read()
+    check("R22 same-task fixture: T-003 carries both C-1 and C-2",
+          "clauses: [C-1, C-2]" in t003, t003)
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R22 same-task: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("R22 same-task: stderr empty", err == "", f"err={err!r}")
+
+# ---- Case 3: silent, unordered. C-2 stays upstream of T-003 (via T-001),
+# but C-3 moves to T-004, an independent branch with no dep edge to or
+# from T-003 in either direction—neither a transitive dep nor a
+# transitive dependent.
+with tempfile.TemporaryDirectory() as d:
+    doc = delegation_constitution({1: ("C-2", "C-3"), 2: (), 3: ()})
+    check("R22 unordered fixture: C-1 mentions C-2 and C-3", "Established by C-2, C-3." in doc, doc)
+    state = write_delegation_state(d, doc, [
+        {"id": "T-001", "clauses": ["C-2"], "deps": []},
+        {"id": "T-003", "clauses": ["C-1"], "deps": ["T-001"]},
+        {"id": "T-004", "clauses": ["C-3"], "deps": []},
+    ])
+    with open(os.path.join(state, "tasks", "T-003.md"), encoding="utf-8") as f:
+        t003 = f.read()
+    with open(os.path.join(state, "tasks", "T-004.md"), encoding="utf-8") as f:
+        t004 = f.read()
+    check("R22 unordered fixture: T-003 deps only on T-001, not T-004",
+          "deps: [T-001]" in t003 and "T-004" not in t003, t003)
+    check("R22 unordered fixture: T-004 carries C-3 with no deps",
+          "clauses: [C-3]" in t004 and "deps: []" in t004, t004)
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R22 unordered: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("R22 unordered: stderr empty", err == "", f"err={err!r}")
+
+# ---- Case 4: silent, no mentions. C-1's body names no other clause id at
+# all, so R22 has nothing to collect and nothing to check.
+with tempfile.TemporaryDirectory() as d:
+    doc = delegation_constitution({1: ()})
+    check("R22 no-mentions fixture: body carries no 'Established by' note",
+          "Established by" not in doc, doc)
+    state = write_delegation_state(d, doc, [
+        {"id": "T-001", "clauses": ["C-1"], "deps": []},
+    ])
+    rc, out, err = run_linter(state, "--repo-root", d, "--audit-id", "DEC-audit")
+    check("R22 no-mentions: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("R22 no-mentions: stderr empty", err == "", f"err={err!r}")
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

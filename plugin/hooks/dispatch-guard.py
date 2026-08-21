@@ -606,7 +606,20 @@ def main(data):
         if ident == "CON-audit":
             _stamp_audited_content()
         _log(raw, ident, override or _lib.DEFAULT_MODEL[agent])
-        _lib.mark_in_flight(ident, agent)
+        # Recorded so the return gate can refuse an auditor that filed
+        # nothing at the round it was commissioned for, instead of
+        # validating whatever the previous round's file still holds and
+        # approving a verdict this auditor never wrote (#175). Computed here
+        # rather than trusted from the return, because a read-only Codex
+        # auditor's inline verdict never touches disk on its own—the round
+        # has to come from something the dispatch itself pinned down.
+        #
+        # _stamp_audited_content() two lines up computes the same round for
+        # CON, and nothing writes a verdict between the two calls, so they
+        # agree. DEC gets no stamp (task files churn too fast for one to
+        # mean anything) but does get this marker, which is why the marker
+        # is the general mechanism and the stamp is CON-only.
+        _lib.mark_in_flight(ident, agent, audit_round=_lib.next_audit_round(ident))
         return 0
 
     tid = ident if kind == "task" else None

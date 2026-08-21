@@ -15,7 +15,9 @@ subagent keeps working.
   one schema, one validator, no drift between what the hook accepts and what
   the checker agents are told to produce). The auditor still writes the older
   Markdown verdict shape (audit verdicts are out of scope for the JSON
-  migration; see the constitution's non-goals), so its check is unchanged.
+  migration; see the constitution's non-goals); on a read-only Codex host it
+  returns that verdict inline instead of writing it, the same
+  marker-and-persist handoff the checker branch already uses.
 
   checker-courier, the cross-vendor second-opinion role, uses the SAME stem
   plus its host lane suffix (…-codex.json from Claude; …-claude.json from
@@ -61,31 +63,16 @@ CODEX_VERDICT_MARKER = "AGENT_GUILD_VERDICT\n"
 CLAUDE_COURIER_MODEL = _lib.LANE_IDENTITY["claude"]["model"]
 
 
-def _has_diagnosis(verdict_text):
-    """True if a FAIL verdict carries actionable diagnosis, not just the
-    template's comment placeholder."""
-    idx = verdict_text.find("## Diagnosis")
-    if idx == -1:
-        return False
-    tail = verdict_text[idx + len("## Diagnosis"):]
-    tail = re.sub(r"<!--.*?-->", "", tail, flags=re.DOTALL)
-    return bool(tail.strip())
-
-
 def _verdict_ok(path, require_diagnosis_on_fail=True):
-    """(ok, reason). ok=True if the file holds a valid verdict (and a FAIL has
-    a diagnosis). ok=False with a reason the subagent can act on."""
+    """(ok, reason). The file-backed door onto _lib.audit_verdict_ok's shared
+    predicate: read the file, defer everything about what makes a verdict
+    valid to _lib, and keep only the missing-file case as this wrapper's own
+    concern (the inline path below has no file to be missing)."""
     if not os.path.exists(path):
         return False, f"no verdict at {os.path.relpath(path, _lib.project_dir())}"
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    fm = _lib.parse_frontmatter(text)
-    verdict = str(fm.get("verdict", "")).strip().upper()
-    if verdict not in ("PASS", "FAIL", "ERROR"):
-        return False, f"verdict field is '{verdict or 'missing'}', not PASS/FAIL/ERROR"
-    if verdict == "FAIL" and require_diagnosis_on_fail and not _has_diagnosis(text):
-        return False, "verdict is FAIL but has no actionable ## Diagnosis section"
-    return True, verdict
+    return _lib.audit_verdict_ok(text, require_diagnosis_on_fail)
 
 
 def _validate_verdict_json(path):
@@ -403,6 +390,54 @@ def _codex_inline_verdict_ok(message, task_id, agent):
     return True, None
 
 
+def _codex_inline_audit_verdict_ok(message, audit_id):
+    """Validate a read-only auditor's returned verdict before the parent
+    persists it.
+
+    Same handoff as the checker's above, adapted for the audit verdict's
+    Markdown-with-frontmatter shape—migrating that to JSON is out of scope
+    (see the module docstring). A Codex project agent is `sandbox_mode:
+    read-only` and cannot write the file the file-backed branch demands, so
+    without this the gate would instruct the agent to do the one thing its
+    sandbox forbids, the same failure #68 named for checkers and this branch
+    never got fixed for.
+    """
+    if not isinstance(message, str) or not message.startswith(
+        CODEX_VERDICT_MARKER
+    ):
+        return (
+            False,
+            "last message must be the AGENT_GUILD_VERDICT marker followed by "
+            "the complete verdict markdown",
+        )
+    # parse_frontmatter demands the document's very first line be `---`. The
+    # marker's own trailing newline already lands us there in the common
+    # case; lstrip("\n") only clears a stray blank line some models add for
+    # readability. A wholesale .strip() would also trim the verdict body's
+    # tail, which the diagnosis check below still needs intact.
+    text = message[len(CODEX_VERDICT_MARKER):].lstrip("\n")
+
+    ok, reason = _lib.audit_verdict_ok(text)
+    if not ok:
+        return False, reason
+
+    # Identity is checked here rather than left to the shape predicate: that
+    # predicate knows a valid verdict from an invalid one, not which audit
+    # this return belongs to. The file-backed path gets its identity from
+    # the filename it was written to; inline has no filename yet, so the
+    # frontmatter is the only cross-check before the parent persists to this
+    # audit's stem—and a verdict persisted against the wrong audit is worse
+    # than one rejected.
+    task_field = str(_lib.parse_frontmatter(text).get("task", "")).strip()
+    if task_field != audit_id:
+        return (
+            False,
+            f"frontmatter task is {task_field!r}, expected {audit_id!r}",
+        )
+
+    return True, None
+
+
 def _latest_audit_verdict(audit_id):
     """The verdict this return has to validate. Shares dispatch-guard's notion
     of "latest" deliberately: a round this gate accepts but the gate reads
@@ -493,13 +528,61 @@ def main(data):
         return 0
 
     if agent == "auditor":
-        vpath = _latest_audit_verdict(ident)
-        if vpath is None:
-            return _lib.block(
-                f"Auditor finished without writing a verdict for {ident}. Write "
-                f".agent-guild/state/verdicts/{ident}-r0.md (or the next round) with a "
-                "verdict of PASS or FAIL before finishing."
+        allowed = "/".join(_lib.AUDIT_VERDICT_VALUES)
+
+        if data.get("hook_host") == "codex":
+            # The file this branch used to demand never exists at return time
+            # on this host: the parent persists the inline verdict AFTER this
+            # gate runs, so anything sitting on disk right now belongs to a
+            # PREVIOUS round, never this one. That's also what makes every
+            # round trivial to check here—there's no "latest file" to read
+            # correctly or invert on, because there's never a file to read.
+            inline_ok, inline_reason = _codex_inline_audit_verdict_ok(
+                data.get("last_assistant_message"), ident
             )
+            if inline_ok:
+                _lib.clear_in_flight(ident, agent)
+                return 0
+            return _lib.block(
+                f"Auditor for {ident} isn't done: the returned verdict is "
+                f"unusable ({inline_reason}). This host runs you read-only, "
+                f"so return the verdict instead of writing it: the line "
+                f"{CODEX_VERDICT_MARKER.strip()} followed by the complete "
+                f"verdict markdown and nothing else. Its frontmatter carries "
+                f"`task: {ident}` and a `verdict:` of {allowed}. The parent "
+                "validates and persists it."
+            )
+
+        round_n = _lib.in_flight_audit_round(ident, agent)
+        if round_n is not None:
+            # The marker names the round dispatch-guard actually commissioned
+            # this auditor for. Reading "latest on disk" instead is exactly
+            # how a round-2 auditor that wrote nothing got waved through on a
+            # round 10 verdict left over from a previous run of this audit.
+            vpath = _lib.state_path("verdicts", f"{ident}-r{round_n}.md")
+            if not os.path.exists(vpath):
+                vpath = None
+            missing_msg = (
+                f"Auditor finished without writing a verdict for {ident}. "
+                f"Write .agent-guild/state/verdicts/{ident}-r{round_n}.md "
+                f"with a verdict of {allowed} before finishing."
+            )
+        else:
+            # No marker to pin the round: markerless dispatch, a hand-run
+            # auditor, or a marker that aged out. Without it the gate can't
+            # tell rounds apart, so fail open to the pre-#175 reading—latest
+            # file on disk—rather than invent a stricter rule the evidence
+            # can't support. Existing tests dispatch markerless on purpose;
+            # this fallback is what keeps them green.
+            vpath = _latest_audit_verdict(ident)
+            missing_msg = (
+                f"Auditor finished without writing a verdict for {ident}. "
+                f"Write .agent-guild/state/verdicts/{ident}-r0.md (or the "
+                f"next round) with a verdict of {allowed} before finishing."
+            )
+
+        if vpath is None:
+            return _lib.block(missing_msg)
         ok, reason = _verdict_ok(vpath)
         if not ok:
             return _lib.block(f"Auditor verdict for {ident} is not valid: {reason}.")

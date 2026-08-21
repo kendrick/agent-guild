@@ -1547,6 +1547,11 @@ check("...and every one of them is told what it's actually waiting on",
 # between it and a dispatch, and it isn't.
 check("...and none has its `owns` deferral presented as the move to make",
       "→ deferred (ready-set)" not in err_p1_first, err_p1_first)
+# ...but the reason still has to reach the reader. A task can be behind both
+# the audit and a real ready-set hold, and only one of them is the
+# orchestrator's to fix right now.
+check("...while ready-set's own reason still rides along with the audit's",
+      "ready-set also holds it:" in err_p1_first, err_p1_first)
 
 # The hold has to expire, or it isn't a hold—it's a gate with no escape. The
 # first cut of #192 put the give-out on the audit entity while the hold sat
@@ -1568,6 +1573,56 @@ check("an audit-blocked job eventually lets the turn end",
       0 in codes, f"codes={codes}")
 check("the task it was holding is named only once the hold has lifted",
       "T-001" in stalled_text(proj), f"text={stalled_text(proj)!r}")
+
+# The counter expiring must not take the MESSAGE with it. Round 1's fix
+# emptied one set that drove both, so from firing 4 the gate went back to
+# "assign it and dispatch its executor" under a header saying no worker
+# could be dispatched—#192 verbatim, three turns later. Every check here
+# reads STALLED.md or an exit code; this one reads the task line after the
+# hold has expired, which is the only place that defect is visible.
+proj = fresh_proj()
+seed_ready_set(proj)
+con_pass(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+for _ in range(3):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+_rc, _o, err_expired = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("an expired hold does not resume advertising a refused dispatch",
+      "dispatch its executor" not in err_expired
+      and "blocked on DEC-audit" in err_expired, err_expired)
+
+# Same seam with stop_hook_active false: the counter still advances but
+# nothing is ever parked, so the release fires on a report that never
+# happened and the gate would block forever while printing the bad advice.
+proj = fresh_proj()
+seed_ready_set(proj)
+con_pass(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+for _ in range(4):
+    run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+_rc, _o, err_unparked = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
+check("no STALLED.md means no release, however high the count climbs",
+      "dispatch its executor" not in err_unparked, err_unparked)
+
+# Dispatching the auditor after the audit parked must re-hold its tasks.
+# The expiry reads the previous firing's count, so without the fresh-marker
+# override the very firing where the orchestrator does the right thing is
+# the one its tasks are punished for.
+proj = fresh_proj()
+seed_ready_set(proj)
+con_pass(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+for _ in range(3):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+write_in_flight_marker(proj, "DEC-audit", "auditor")
+_rc, _o, err_live = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+with open(os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state"),
+          encoding="utf-8") as f:
+    live_count = json.load(f)["entries"]["T-001"]["count"]
+check("dispatching the auditor re-holds the tasks waiting behind it",
+      "blocked on DEC-audit" in err_live, err_live)
+check("...and costs them no strike for the turn it was dispatched on",
+      live_count == 1, f"count={live_count}")
 
 # A DEC FAIL sends the orchestrator back to Phase 0 to revise—the documented
 # path. audit_gate's stamp-mismatch text names the file and round but not the

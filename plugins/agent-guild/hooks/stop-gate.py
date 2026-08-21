@@ -788,7 +788,26 @@ def main(data):
     except (TypeError, ValueError, AttributeError):
         audit_parked = False
 
-    audit_held_ids = set() if audit_parked else {
+    # ...but only while nothing is running against the audit. A marker
+    # arriving resets the audit's own counter, and the expiry reads the
+    # PREVIOUS firing's count, so without this the one firing where the
+    # orchestrator finally dispatches the auditor is the firing its tasks
+    # get punished for it. A fresh marker is better information than a
+    # spent counter, here exactly as it is for a task.
+    if audit_parked and any(m.startswith(f"{audit_id}--") for m in fresh_markers):
+        audit_parked = False
+
+    # Two sets, because these are two different questions and conflating
+    # them put #192 straight back (round 2 of review, three turns later than
+    # the original). `audit_blocked_ids` is the FACT—dispatch-guard will
+    # refuse a worker on this task right now—and it decides what the message
+    # says. `audit_held_ids` is the PACING—how long the gate waits before
+    # giving up on the task—and it decides only whether the counter moves.
+    # The expiry belongs to the second alone. What is true about a task does
+    # not stop being true because its counter ran out, and a gate that
+    # resumed advertising a refused dispatch after three turns would be the
+    # very defect this branch exists to remove.
+    audit_blocked_ids = {
         tid
         for tid, status, _retries in combined
         if _audit_held(
@@ -799,6 +818,7 @@ def main(data):
             audit_id,
         )
     }
+    audit_held_ids = set() if audit_parked else audit_blocked_ids
 
     entities = [
         (
@@ -850,10 +870,12 @@ def main(data):
     audit_entity = None
     if audit_block:
         audit_markers = [m for m in fresh_markers if m.startswith(f"{audit_id}--")]
+        # No branch for a live auditor: this line reaches a reader only
+        # through STALLED.md, which needs the count at the limit, and a fresh
+        # marker both holds the count and moves the digest that resets it. A
+        # running audit can never be reported here.
         audit_state, _audit_ts = _marker_info(audit_id, fresh_markers, all_markers)
-        if audit_markers:
-            audit_line = f"- {audit_id} (an auditor is running against it)"
-        elif audit_state == "stale":
+        if audit_state == "stale":
             audit_line = (
                 f"- {audit_id} (an auditor's marker has aged out—confirm it is "
                 "gone before dispatching another)"
@@ -1038,7 +1060,7 @@ def main(data):
         tid, status, retries = t
         if tid in wave_ids:
             continue  # named in the wave header below, not here
-        if tid in audit_held_ids:
+        if tid in audit_blocked_ids:
             # The stale half of the marker state still has to reach the
             # reader. Suppressing the line entirely would drop the one fact
             # that decides what to do the moment the audit passes, and this

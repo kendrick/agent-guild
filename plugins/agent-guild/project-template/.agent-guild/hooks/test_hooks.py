@@ -685,6 +685,7 @@ check("all terminal → exit 0", rc == 0, f"rc={rc}")
 
 # livelock: 3 consecutive same-digest blocks under stop_hook_active
 proj = fresh_proj()
+audits_pass(proj)
 write_task(proj, "T-001", status="rework", retries=1)
 rc1, _, _ = run_hook("stop-gate.py", {"stop_hook_active": False}, proj)
 rc2, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
@@ -700,6 +701,7 @@ check("livelock strike 3 → STALLED.md written", stalled)
 # Counting that as a stall wrote a spurious STALLED.md during the #78 run and is
 # the same blindness behind #81.
 proj = fresh_proj()
+audits_pass(proj)
 write_task(proj, "T-001", status="checking", retries=0)
 verdicts_dir = os.path.join(proj, ".agent-guild", "state", "verdicts")
 os.makedirs(verdicts_dir, exist_ok=True)
@@ -748,6 +750,7 @@ STALE_ENV = {"AGENT_GUILD_INFLIGHT_STALE_S": "0"}
 # mid-flight—dispatching another would duplicate it, and declaring the loop
 # stuck would be just as wrong.
 proj = fresh_proj()
+audits_pass(proj)
 write_task(proj, "T-001", status="assigned", retries=0)
 write_in_flight_marker(proj, "T-001", "worker-standard")
 state_file = os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")
@@ -768,6 +771,7 @@ check("still blocks the turn each time (mid-flight isn't done)",
 # AGENT_GUILD_INFLIGHT_STALE_S=0 test seam) is worth nothing—a dead agent
 # must not permanently suppress the backstop.
 proj = fresh_proj()
+audits_pass(proj)
 write_task(proj, "T-001", status="assigned", retries=0)
 write_in_flight_marker(proj, "T-001", "worker-standard")
 run_hook("stop-gate.py", {"stop_hook_active": False}, proj, extra_env=STALE_ENV)
@@ -783,6 +787,7 @@ check("stale marker (TTL=0) → the backstop still fires after three strikes",
 # `assigned` and `checking`.
 for status, verb in (("assigned", "executor"), ("checking", "checker")):
     proj_w = fresh_proj()
+    audits_pass(proj_w)
     write_task(proj_w, "T-001", status=status, retries=0)
     rc, out, err = run_hook("stop-gate.py", {}, proj_w)
     check(f"{status}, no marker → names 'dispatch the {verb}'",
@@ -796,13 +801,20 @@ for status, verb in (("assigned", "executor"), ("checking", "checker")):
           rc == 2 and "mid-flight" in err and "do not dispatch another" in err,
           err)
 
+    # A marker aging out is evidence of neither death nor life, so the
+    # message no longer claims the agent is gone (that wording is what
+    # once sent a re-dispatch onto a live worker's `owns` paths)—it now
+    # asks for confirmation before re-dispatching.
     proj_w = fresh_proj()
+    audits_pass(proj_w)
     write_task(proj_w, "T-001", status=status, retries=0)
     write_in_flight_marker(proj_w, "T-001", "worker-standard")
     rc, out, err = run_hook("stop-gate.py", {}, proj_w, extra_env=STALE_ENV)
-    check(f"{status}, stale marker → 'never returned; investigate, then re-dispatch'",
-          rc == 2 and "never returned" in err
-          and "investigate, then re-dispatch" in err,
+    check(f"{status}, stale marker → doesn't claim the agent is gone, asks "
+          "for confirmation before re-dispatching",
+          rc == 2
+          and "says nothing about whether that agent is alive" in err
+          and "Confirm it is actually gone before re-dispatching" in err,
           err)
 
 # An absent marker at `checking` is ambiguous in a way `assigned` is not:
@@ -849,6 +861,7 @@ check("checking, only a LANE verdict → still 'dispatch the checker'",
 # expectation (a same-digest repeat used to always cost a full strike).
 print("stop-gate.py: at-most-once per real block (#111)")
 proj = fresh_proj()
+audits_pass(proj)
 write_task(proj, "T-001", status="rework", retries=1)
 state_file = os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state")
 tx_path = os.path.join(proj, ".agent-guild", "state", "log", "tx-dup.jsonl")
@@ -923,6 +936,7 @@ print("stop-gate.py: ready-set wave presentation (#125)")
 
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="pending", deps="[]", owns="[file-a.py]")
 write_task(proj, "T-002", status="pending", deps="[]", owns="[file-b.py]")
 rc, out, err = run_hook("stop-gate.py", {}, proj)
@@ -991,6 +1005,7 @@ check("attention: abandoned-dep task is marked as needing judgment, "
 print("stop-gate.py: closed-descendant invalidation attention (D1, #135)")
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="rework", deps="[]", owns="[a.py]", retries=1)
 write_task(proj, "T-002", status="complete", deps="[T-001]", owns="[b.py]")
 rc, out, err = run_hook("stop-gate.py", {}, proj)
@@ -1064,6 +1079,7 @@ check("reopened descendant (assigned): gets the ordinary mid-flight/dispatch "
 # module docstring), so this always falls through to _next_move.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="rework", deps="[]", owns="[file-a.py]",
            retries=1, max_retries=2)
 rc, out, err = run_hook("stop-gate.py", {}, proj)
@@ -1078,6 +1094,7 @@ check("rework task keeps its full retry-ladder instruction",
 # case for a repo that hasn't picked up #125's payload yet)—the gate must
 # still block and still name the next move per task.
 proj = fresh_proj()
+audits_pass(proj)
 write_task(proj, "T-003", status="pending", deps="[]", owns="[file-c.py]")
 write_task(proj, "T-004", status="pending", deps="[]", owns="[file-d.py]")
 rc, out, err = run_hook("stop-gate.py", {}, proj)
@@ -1092,6 +1109,7 @@ check("degrade (missing script): per-task advice for both tasks",
 # requires)—still not a weaker block, just a plainer message.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-005", status="pending")
 rc, out, err = run_hook("stop-gate.py", {}, proj)
 check("degrade (script errors): still blocks", rc == 2, f"rc={rc}")
@@ -1101,6 +1119,7 @@ check("degrade (script errors): falls back to per-task advice, no wave header",
 
 # degrade path 3: ready-set.py hangs past the gate's own short timeout.
 proj = fresh_proj()
+audits_pass(proj)
 write_fake_ready_set(proj, sleep_seconds=2)
 write_task(proj, "T-006", status="pending", deps="[]", owns="[file-f.py]")
 rc, out, err = run_hook(
@@ -1201,6 +1220,7 @@ check("the mid-flight task's own counter is still held at 1",
 # umbrella would just trade one spurious STALLED.md for another.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="assigned", deps="[]", owns="[a.py]", retries=0)
 write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]", retries=0)
 write_in_flight_marker(proj, "T-001", "worker-standard")
@@ -1214,6 +1234,7 @@ check("a task deferred behind a running dep writes no STALLED.md",
 # waiting on it does not. Same fixture, TTL zeroed.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="assigned", deps="[]", owns="[a.py]", retries=0)
 write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]", retries=0)
 write_in_flight_marker(proj, "T-001", "worker-standard")
@@ -1258,6 +1279,7 @@ check("an all-deferred wedge (dep cycle) voids the hold and stalls loudly",
 # deferral-held, so a legitimately waiting task can reach STALLED.md. A
 # degrade that suppressed the backstop instead would rebuild #163's own hole.
 proj = fresh_proj()
+audits_pass(proj)
 write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
 write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]")
 for _ in range(2):
@@ -1372,6 +1394,7 @@ check("a flickering ready-set.py can't pin the counter at 1 forever",
 # while that courier was demonstrably still running.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="complete", deps="[]", owns="[a.py]")
 write_task(proj, "T-002", status="pending", deps="[]", owns="[a.py]")
 write_verdict_json(proj, "T-001-sonnet-r0.json", task_id="T-001")
@@ -1402,6 +1425,7 @@ check("a dep cycle still surfaces once the unrelated task beside it parks",
 # back for exactly the two kinds that hold.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 with open(ready_set_path if False else os.path.join(
         proj, ".agent-guild", "scripts", "ready-set.py"), encoding="utf-8") as f:
     old_ready_set = f.read()
@@ -1418,6 +1442,189 @@ for _ in range(2):
 rc_skew, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 check("a pre-#163 ready-set.py (no `kind`) still holds a waiting task",
       rc_skew == 2 and not stalled_text(proj), f"rc={rc_skew}")
+
+# ----------------- stop-gate: the audit gates dispatch-guard enforces (#192)
+# The gate used to compute a next move without ever asking whether the move
+# was legal. ready-set puts a dep-free pending task in the wave; dispatch-guard
+# refuses every worker until CON-audit and DEC-audit have both passed. So for
+# the whole of Phase 0 and Phase 1 the orchestrator was handed an instruction
+# the next gate denied, every turn, with no way to satisfy either—and three
+# turns later the livelock guard named tasks that were waiting exactly as they
+# should have been. Observed twice: kendrick/dotfiles#22 and this repo's own
+# #183 run, where it fired three times across eleven CON rounds.
+print("stop-gate.py: audit gates (#192)")
+
+# Criterion 1 and 2: with tasks present and no CON-audit PASS, nothing is
+# advertised as dispatchable and the message names what is actually being
+# waited on. Both headings are asserted absent—`_wave_block` picks between
+# them by wave size, so pinning only one would let the other regress.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+write_task(proj, "T-002", status="pending", deps="[]", owns="[b.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("no CON-audit PASS → the turn is still held open", rc == 2, f"rc={rc}")
+check("no CON-audit PASS → no task is offered under a ready-to-dispatch heading",
+      "Ready to dispatch now" not in err and "READY WAVE" not in err, err)
+check("no CON-audit PASS → the gate names the audit being waited on",
+      "AUDIT GATE (CON-audit)" in err, err)
+check("no CON-audit PASS → each blocked task says so on its own line",
+      "T-001" in err and "T-002" in err and err.count("blocked on CON-audit") == 2,
+      err)
+
+# Criterion 3: the counters hold, so repeated blocked turns can't write a
+# STALLED.md naming a task. Three strikes is the limit, so this is the exact
+# fixture that produced the spurious report on both runs.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc3, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+audit_stall = stalled_text(proj)
+with open(os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state"),
+          encoding="utf-8") as f:
+    audit_state = json.load(f)["entries"]
+# .get throughout: a regression that drops an entity should read as one
+# failed check, not a KeyError that aborts the run and takes every check
+# below it with it.
+check("audit-blocked task → its stall counter holds across three strikes",
+      audit_state.get("T-001", {}).get("count") == 1, f"entries={audit_state}")
+check("audit-blocked task → STALLED.md never names it",
+      "T-001" not in audit_stall, f"text={audit_stall!r}")
+
+# ...but the backstop still has to fire on SOMETHING, or this is just a hold
+# with no give-out—the shape #163 was filed about. The shut audit carries the
+# count its held tasks no longer can, so three neglected turns name the audit.
+check("audit-blocked task → STALLED.md names the audit instead",
+      "CON-audit" in audit_stall, f"text={audit_stall!r}")
+check("the audit's own stall counter is what advanced",
+      audit_state.get("CON-audit", {}).get("count", 0) >= 3,
+      f"entries={audit_state}")
+check("STALLED.md sends the reader to the right cause",
+      "never dispatched" in audit_stall, f"text={audit_stall!r}")
+
+# A dispatched auditor holds the audit entity the same way a worker's marker
+# holds its task's. An audit round runs 17 to 25 minutes on this repo, so
+# without this the backstop would fire on an audit that is running normally.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+write_in_flight_marker(proj, "CON-audit", "auditor")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_live, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("an auditor in flight → no STALLED.md for the audit it's running",
+      rc_live == 2 and not stalled_text(proj), f"rc={rc_live}")
+
+# Criterion 4: DEC-audit gets the same treatment, and the condition has to be
+# the LATEST round rather than any round—dispatch-guard reads it that way
+# (#110), and a gate that disagreed would put the two back out of step.
+proj = fresh_proj()
+seed_ready_set(proj)
+con_pass(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("CON passes but DEC hasn't → the gate names DEC-audit, not CON-audit",
+      "AUDIT GATE (DEC-audit)" in err and "AUDIT GATE (CON-audit)" not in err, err)
+check("CON passes but DEC hasn't → still nothing offered as dispatchable",
+      "Ready to dispatch now" not in err and "READY WAVE" not in err, err)
+
+write_verdict(proj, "DEC-audit-r0.md", "PASS")
+write_verdict(proj, "DEC-audit-r1.md", "FAIL")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("a newer DEC FAIL re-closes the gate an older PASS opened",
+      "AUDIT GATE (DEC-audit)" in err and "r1" in err, err)
+
+# #110's content stamp binds a PASS to the bytes it judged, and the stop gate
+# has to honor that too: a constitution edited after its PASS is unaudited
+# text, and dispatch-guard already refuses workers against it.
+proj = fresh_proj()
+seed_ready_set(proj)
+audits_pass(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("(setup) both audits passed → the wave comes back",
+      "Ready to dispatch now" in err, err)
+write_constitution(proj, "# Constitution\n\n- C-1: an edited clause.\n")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("constitution edited after its PASS → the wave is withdrawn again",
+      "AUDIT GATE (CON-audit)" in err and "Ready to dispatch now" not in err, err)
+
+# Criterion 2's other half: an audit wait must be legible as a DIFFERENT thing
+# from a dependency wait. Both appear in one message here, and the deferred
+# task keeps ready-set's own reason rather than being swept into the audit line.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+write_task(proj, "T-002", status="pending", deps="[T-001]", owns="[b.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("an audit wait and a dep wait read differently in the same message",
+      "T-001" in err and "blocked on CON-audit" in err
+      and "unmet deps: T-001 (pending)" in err, err)
+check("the dep-deferred task is not relabeled as audit-blocked",
+      err.count("blocked on CON-audit") == 1, err)
+
+# The hold PAUSES a clock rather than resetting it, which is the property
+# _task_digest documents. Two audit-blocked firings then a passing audit must
+# leave the task on schedule, not back at the start with a fresh three turns.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="rework", deps="[]", owns="[a.py]", retries=1)
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+audits_pass(proj)
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_resume, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("a held counter resumes when the audit passes rather than restarting",
+      rc_resume == 0 and "T-001" in stalled_text(proj), f"rc={rc_resume}")
+
+# The degrade path is where #192 would most quietly come back: with no
+# ready-set.py there are no buckets to read, so the status fallback is the
+# only thing standing between a pending task and the old behavior.
+proj = fresh_proj()
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+for _ in range(2):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_deg, _, err_deg = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("ready-set degraded and audits shut → the task is still not stalled",
+      "T-001" not in stalled_text(proj), f"text={stalled_text(proj)!r}")
+check("ready-set degraded and audits shut → the task is told what it waits on",
+      "blocked on CON-audit" in err_deg, err_deg)
+
+# The boundary. dispatch-guard's checker path returns before either audit
+# gate, so a checker dispatch is legal with both audits shut and this gate
+# must go on advising it. Getting this wrong would stall every check in a job
+# whose constitution was later revised.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="needs-check", deps="[]", owns="[a.py]",
+           artifacts="[out.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("a needs-check task is still told to dispatch its checker, audits or no",
+      "dispatch its checker" in err and "blocked on CON-audit" not in err, err)
+
+# A fresh marker outranks the audit hold: something is genuinely running, which
+# is better information than "the gate is shut", and the line has to say so.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="checking", deps="[]", owns="[a.py]")
+write_in_flight_marker(proj, "T-001", "checker-deterministic")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("a mid-flight task keeps its mid-flight line while an audit is shut",
+      "mid-flight" in err and "do not dispatch another" in err, err)
+
+# A stale marker under a shut audit is the one state where a dead worker hides
+# longest, since dispatch-guard would refuse the re-dispatch anyway. Holding
+# the counter is right; dropping the fact from the message is not.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="assigned", deps="[]", owns="[a.py]")
+write_in_flight_marker(proj, "T-001", "worker-standard")
+rc, out, err = run_hook("stop-gate.py", {}, proj, extra_env=STALE_ENV)
+check("an audit-blocked task still reports a marker that has aged out",
+      "blocked on CON-audit" in err and "has since aged out" in err, err)
 
 # ------------------------------------------------------------ dispatch-guard
 print("dispatch-guard.py")

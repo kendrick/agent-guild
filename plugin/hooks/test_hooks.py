@@ -605,6 +605,56 @@ try:
     os.environ["CLAUDE_PROJECT_DIR"] = empty_proj
     check("no in-flight/ directory at all → in_flight() returns []",
           lib_mod.in_flight() == [])
+
+    # #192: measured legitimate dispatches ran 84 and 107 minutes, so the old
+    # one-hour default aged out healthy agents' own markers mid-flight. Pinned
+    # against the 107m ceiling itself, not the current 10800s value—a future
+    # bump for a longer measured run should pass this unchanged, so it can't
+    # be "simplified" into a bare equality that breaks on the next raise.
+    check("IN_FLIGHT_TTL_S_DEFAULT clears the longest dispatch measured so "
+          "far (107m, #192)",
+          lib_mod.IN_FLIGHT_TTL_S_DEFAULT > 107 * 60,
+          f"got={lib_mod.IN_FLIGHT_TTL_S_DEFAULT!r}")
+
+    # Back on proj_lib for the ttl-overruns.log checks below—the empty_proj
+    # detour above left CLAUDE_PROJECT_DIR pointed elsewhere.
+    os.environ["CLAUDE_PROJECT_DIR"] = proj_lib
+    overrun_log = os.path.join(
+        proj_lib, ".agent-guild", "state", "log", "ttl-overruns.log")
+
+    # A return inside the TTL is the ordinary case and must stay silent: if
+    # every return wrote a line, the log would stop being evidence of
+    # anything (#192).
+    lib_mod.mark_in_flight("T-903", "worker-standard")
+    lib_mod.clear_in_flight("T-903", "worker-standard")
+    check("a normal, in-TTL return writes no ttl-overruns.log",
+          not os.path.exists(overrun_log),
+          f"exists={os.path.exists(overrun_log)}")
+
+    # An aged marker is exactly the condition #192 fixed the TTL to avoid—so
+    # clearing one is the case that must leave evidence behind. Backdated
+    # dispatched_at rather than the env seam, since the env seam is already
+    # covered above and this exercises the on-disk timestamp math directly.
+    in_flight_dir = os.path.join(
+        proj_lib, ".agent-guild", "state", "log", "in-flight")
+    old_ts = datetime.fromtimestamp(
+        datetime.now(timezone.utc).timestamp() - 4 * 3600,
+        tz=timezone.utc,
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    marker_path = os.path.join(in_flight_dir, "T-904--worker-craft.json")
+    with open(marker_path, "w") as f:
+        json.dump({"dispatched_at": old_ts}, f)
+    lib_mod.clear_in_flight("T-904", "worker-craft")
+    log_text = open(overrun_log).read() if os.path.exists(overrun_log) else ""
+    check("a marker aged past the effective TTL logs ident+agent on return",
+          "T-904--worker-craft" in log_text, f"log={log_text!r}")
+    # The whole log attempt is wrapped in try/except Exception: pass per
+    # #192's own contract—an I/O hiccup on the log must never leave a stale
+    # marker behind, since that's the exact livelock false-positive #111
+    # exists to prevent.
+    check("logging the overrun never blocks the marker's own removal",
+          not os.path.exists(marker_path),
+          f"still exists={os.path.exists(marker_path)}")
 finally:
     if _prev_project_dir is None:
         os.environ.pop("CLAUDE_PROJECT_DIR", None)

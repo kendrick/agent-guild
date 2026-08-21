@@ -425,12 +425,12 @@ def _unidentifiable(reason):
     several tasks under the same agent type at once—that glob would delete a LIVE
     sibling's marker along with the dead one, telling the stop gate a genuinely
     running subagent had finished and pushing it toward a spurious STALLED.md on
-    healthy work. A leaked marker is bounded by AGENT_GUILD_INFLIGHT_STALE_S (an
-    hour), and with #163 making the stall counter per-task, one leak now only
-    costs that one task's backstop for the TTL rather than every task's—losing an
-    hour beats killing a sibling's marker. (The third caller, "has no task file",
-    does know its ident and clears its own marker before calling in here—see
-    above.)
+    healthy work. A leaked marker is bounded by AGENT_GUILD_INFLIGHT_STALE_S
+    (three hours), and with #163 making the stall counter per-task, one leak now
+    only costs that one task's backstop for the TTL rather than every task's—
+    losing three hours beats killing a sibling's marker. (The third caller, "has
+    no task file", does know its ident and clears its own marker before calling
+    in here—see above.)
 
     The `_lib.block(...)` returns elsewhere in this file leave their markers in
     place on purpose too, same as always: the subagent hasn't finished, so nothing

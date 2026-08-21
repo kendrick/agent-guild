@@ -230,7 +230,14 @@ def lane_exhausted(lane):
         return False
 
 
-IN_FLIGHT_TTL_S_DEFAULT = 3600.0
+# Measured legitimate dispatches on real runs ran as long as 84 and 107
+# minutes (#192)—one hour was shorter than routine opus work, so it aged out
+# healthy agents' own markers and the stop gate reported them dead. Three
+# hours is ~1.7x the longest observed. If state/log/ttl-overruns.log ever
+# gains a line, that's an agent returning after its marker had already aged
+# out under this default—exactly the condition it's meant to avoid—and is
+# the signal to raise it further.
+IN_FLIGHT_TTL_S_DEFAULT = 10800.0
 
 
 def _in_flight_dir():
@@ -263,12 +270,54 @@ def mark_in_flight(ident, agent):
         pass
 
 
+def _effective_ttl(ttl=None):
+    """Resolve the TTL to apply: the caller's override, else
+    AGENT_GUILD_INFLIGHT_STALE_S, else IN_FLIGHT_TTL_S_DEFAULT. Shared by
+    in_flight and clear_in_flight so the env-seam fallback lives in exactly
+    one place—two copies of this is how they drift."""
+    if ttl is not None:
+        return ttl
+    try:
+        return float(os.environ.get(
+            "AGENT_GUILD_INFLIGHT_STALE_S", str(IN_FLIGHT_TTL_S_DEFAULT)))
+    except ValueError:
+        return IN_FLIGHT_TTL_S_DEFAULT
+
+
 def clear_in_flight(ident, agent):
     """Remove the marker mark_in_flight wrote for (ident, agent). Called
     from subagent-return.py once a subagent's return is fully resolved. A
     missing file is not an error: the marker can legitimately already be
     gone (aged out under the TTL, or never written because the dispatch
     predates this feature)."""
+    # A marker that ages out and then clears normally leaves no trace, so
+    # this log is the only evidence that would tell us the TTL is still too
+    # short (#192). Best-effort and silent on any failure, like
+    # mark_in_flight: a broken log must never block a legal return.
+    try:
+        path = os.path.join(_in_flight_dir(), f"{ident}--{agent}.json")
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+        dispatched_at = datetime.strptime(
+            record["dispatched_at"], "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        age_s = (now - dispatched_at).total_seconds()
+        ttl_s = _effective_ttl()
+        if age_s > ttl_s:
+            log_dir = state_path("log")
+            os.makedirs(log_dir, exist_ok=True)
+            ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            age_m = int(age_s // 60)
+            ttl_m = int(ttl_s // 60)
+            with open(os.path.join(log_dir, "ttl-overruns.log"),
+                      "a", encoding="utf-8") as f:
+                f.write(
+                    f"{ts} {ident}--{agent} returned after {age_m}m; "
+                    f"marker TTL is {ttl_m}m\n"
+                )
+    except Exception:
+        pass
     try:
         path = os.path.join(_in_flight_dir(), f"{ident}--{agent}.json")
         os.remove(path)
@@ -283,21 +332,16 @@ def in_flight(ttl=None):
     filename minus `.json`) whose dispatch is still FRESH: within `ttl`
     seconds of now. `ttl=None` (the default) reads
     AGENT_GUILD_INFLIGHT_STALE_S if set, else IN_FLIGHT_TTL_S_DEFAULT
-    (3600s)—the env var is the test seam, letting a test zero out every
-    marker's freshness instantly instead of waiting out a real hour to prove
-    a dead agent's marker ages out.
+    (10800s)—the env var is the test seam, letting a test zero out every
+    marker's freshness instantly instead of waiting out the real default to
+    prove a dead agent's marker ages out.
 
     Staleness matters on purpose: nothing here suppresses stall detection
     permanently. A marker that can't be read or parsed is treated as absent
     rather than crashing the gate: a wedged marker file must never be able to
     jam the very livelock backstop it exists to unblock.
     """
-    if ttl is None:
-        try:
-            ttl = float(os.environ.get(
-                "AGENT_GUILD_INFLIGHT_STALE_S", str(IN_FLIGHT_TTL_S_DEFAULT)))
-        except ValueError:
-            ttl = IN_FLIGHT_TTL_S_DEFAULT
+    ttl = _effective_ttl(ttl)
     d = _in_flight_dir()
     try:
         names = os.listdir(d)

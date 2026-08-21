@@ -14,7 +14,19 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-21: A Hold Expires On The Entity That Carries It
+
+**Source:** #192, branch `fix-192-stop-gate-audit-gates`, adversarial review round 1
+
+**Context:** the entry below decided that a shut audit becomes its own counted entity so the audit hold still has a give-out. It does not. The counter went on the audit; the hold sat on the tasks; naming the audit in `STALLED.md` released nothing. Eight firings, every one rc=2, with `PAUSED` the only way out—a gate with no escape, which is the thing the audit entity was added to prevent. The same bug disarmed the wedge valve for the whole audit window, since an audit-held task is never deferral-held and so never leaves the valve's `active` set, which hid a dep cycle sitting beside one.
+
+**Decision:** an entity's hold expires on that entity's own report. `audit_parked` reads the audit's count from the previous firing, the same way already-parked entities are excluded from the valve, and empties `audit_held_ids` once it trips. The audit gets its three turns and its line, then the tasks behind it resume counting and park on their own schedule. A stuck job takes six turns to surface fully instead of three, which is the price of the tasks not being named while the audit is still the honest answer.
+
+**The generalizable half:** when you add a hold, the thing that ends it has to be reachable from the entity being held. Putting the counter on a neighbor reads as a backstop and behaves as a deadlock, and no test caught it—407 green checks and four suites, and it took someone firing the gate eight times by hand.
+
 ## 2026-08-21: A Shut Audit Gate Is A Counted Entity, Not Just A Hold
+
+**Superseded in part** by the entry above: the entity is right, but it does not by itself give the hold an escape.
 
 **Source:** #192, branch `fix-192-stop-gate-audit-gates`
 

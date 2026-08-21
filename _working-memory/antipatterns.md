@@ -14,6 +14,16 @@
 <!-- The last line is the agent-targeted lever. Be specific. "Don't suggest    -->
 <!-- moving X to Y" beats "don't suggest big refactors."                       -->
 
+## 2026-08-21: Don't repair a check by adding an assertion that passes
+
+**Tried:** closing audit findings on #183 by adding assertions to the probe harness. Four repairs went in after CON-audit r6; two of them ran clean and changed nothing.
+
+**What broke:** an assertion is only worth its line if it separates a conforming implementation from a violating one, and neither of those did. The Codex idempotent re-run called the record-covering helper on a record its own install had written four lines earlier at the current version, so a stamp frozen on first install was invisible to it. Worse, an assertion for the string `partially initialized` built its fixture by deleting a payload file — but `_missing_pieces` reads only the five `state/` subdirectories and the guidance import line, never payload, so the string was unreachable. That one was red against a correct implementation *and* red against the variant it was written to catch, and it made C-5 unsatisfiable: the only implementation that could have turned it green breaks five `test_hooks.py` cases.
+
+**Why we backed out:** both got caught because the auditor's charter is to run each repair in both directions rather than to read it. A repair verified only by "the suite is still green" is verified against the wrong question, since a suite stays green when a new assertion is vacuous.
+
+**Don't suggest:** adding a probe arm, test case, or clause assertion without naming the variant it goes red against and the reference it stays green against. Both directions or it isn't a check. And don't build a fixture for a string without reading the function that emits it — grep the emitter for its actual preconditions first, because an unreachable assertion looks identical to a strict one until something correct fails it.
+
 ## 2026-08-20: Don't read a directory's existence as consent
 
 **Tried:** #98's jurisdiction guard as shipped in 0.7.0: every gate returned 0 unless `isdir(.agent-guild)` held, on the theory that the directory means init ran.

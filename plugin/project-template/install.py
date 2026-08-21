@@ -6,6 +6,7 @@ packages. Plugin init skills call it without `--project-skills`; the direct
 Codex IDE bootstrap adds that flag to install repo-local `.agents/skills`.
 All writes stay inside the explicitly supplied project root.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -33,6 +34,9 @@ SOURCE_CODEX_SECTION = os.path.join(
 )
 SOURCE_SKILLS = os.path.join(PACKAGE_ROOT, "skills")
 CODEX_HOOK_SIGNATURE = "codex-hook-adapter.py"
+PROVENANCE_NAME = "provenance.json"
+CLAUDE_MANIFEST = os.path.join(PACKAGE_ROOT, ".claude-plugin", "plugin.json")
+CODEX_MANIFEST = os.path.join(PACKAGE_ROOT, ".codex-plugin", "plugin.json")
 
 CLAUDE_SECTION = (
     f"{CLAUDE_SECTION_START}\n"
@@ -193,36 +197,116 @@ def _codex_section(project_skills):
 
 
 def _preflight_payload(project_root, payload_files):
-    # #183: this used to raise on the first conflict, so any project that
-    # had already run init once could never receive a later release's
-    # net-new payload files. Return the conflicts instead and let the
-    # caller decide what to do with them. The `_require_beneath`
-    # symlink-redirect guard still has to run over every file, so the loop
-    # itself doesn't change.
-    conflicts = []
+    # The `_require_beneath` symlink-redirect guard has to run over every
+    # payload path before any write happens anywhere in install() — this is
+    # the pass that proves it, ahead of the agents/skills/hooks/state guards
+    # below it. #183's own conflict handling now lives in `_sync_payload`,
+    # which needs the provenance record loaded first to tell an edit from a
+    # stale-but-clean file, so this pass no longer decides what a conflict is.
     target_root = os.path.join(project_root, ".agent-guild")
     _require_beneath(project_root, target_root)
     for relative in payload_files:
-        source = os.path.join(SOURCE_PAYLOAD, relative)
         target = os.path.join(target_root, relative)
         _require_beneath(target_root, target)
-        if os.path.exists(target) and not _same_file(source, target):
-            conflicts.append(os.path.join(".agent-guild", relative))
-    return conflicts
 
 
-def _copy_missing(source_root, target_root, relative_files):
-    copied = unchanged = 0
+def _sha256_file(path):
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        hasher.update(f.read())
+    return hasher.hexdigest()
+
+
+def _package_version(host):
+    """The version field of THIS package's own manifest, read at run time.
+
+    A copy of the package carries its own manifest beside project-template/,
+    so a copy whose manifest reads a version nothing else does reports that
+    version — the only way to tell a real lookup from a compiled-in string.
+    """
+    manifest_path = CLAUDE_MANIFEST if host == "claude" else CODEX_MANIFEST
+    manifest = _json_object(_read(manifest_path), manifest_path)
+    version = manifest.get("version")
+    if not isinstance(version, str):
+        raise InstallError(f"{manifest_path} has no string version")
+    return version
+
+
+def _load_provenance(path):
+    """The prior run's `files` map, or {} for a pre-provenance project.
+
+    A project with no record adopts what matches current source instead of
+    trusting nothing; `_sync_payload` reads {} the same way whether the
+    record is genuinely absent or this is a brand-new project with no
+    payload on disk yet either.
+    """
+    if not os.path.exists(path):
+        return {}
+    record = _json_object(_read(path), path)
+    files = record.get("files")
+    if not isinstance(files, dict):
+        raise InstallError(f"{path} must contain an object at files")
+    return files
+
+
+def _sync_payload(source_root, target_root, relative_files, recorded_files):
+    """Bring each payload file to current source, governed by its record.
+
+    Per file, per #183's ruling:
+      - missing on disk: copy from source and record its hash (net-new file,
+        or a file this project never had).
+      - on disk, with a recorded hash that matches the bytes on disk: clean
+        against its record, so upgrade to current source regardless of
+        whether the stamp trails the plugin's — the record decides, not the
+        stamp — and restamp its hash.
+      - on disk, with a recorded hash that differs from the bytes on disk:
+        a real local edit. Preserve the bytes, carry the recorded hash
+        forward untouched, and report the path.
+      - on disk, with no recorded hash (pre-provenance project): adopt it at
+        its on-disk hash when the bytes already match source; otherwise
+        preserve it and record no entry at all, so a later run can tell
+        "shipped this way" from "reviewed and kept anyway".
+    Returns (new_files, updated, unchanged, preserved, conflicts): new_files
+    is the files map for the record this run writes, and conflicts is the
+    sorted list of payload paths (".agent-guild/..." style) this run refused
+    to overwrite.
+    """
+    new_files = {}
+    updated = unchanged = preserved = 0
+    conflicts = []
     for relative in relative_files:
         source = os.path.join(source_root, relative)
         target = os.path.join(target_root, relative)
-        if os.path.exists(target):
-            unchanged += 1
+        _require_beneath(target_root, target)
+        key = os.path.join(".agent-guild", relative).replace(os.sep, "/")
+        if not os.path.exists(target):
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.copy2(source, target)
+            new_files[key] = _sha256_file(target)
+            updated += 1
             continue
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        shutil.copy2(source, target)
-        copied += 1
-    return copied, unchanged
+        recorded_hash = recorded_files.get(key)
+        if recorded_hash is None:
+            if _same_file(source, target):
+                new_files[key] = _sha256_file(target)
+                unchanged += 1
+            else:
+                preserved += 1
+                conflicts.append(key)
+            continue
+        if _sha256_file(target) == recorded_hash:
+            if _same_file(source, target):
+                new_files[key] = recorded_hash
+                unchanged += 1
+            else:
+                shutil.copy2(source, target)
+                new_files[key] = _sha256_file(target)
+                updated += 1
+        else:
+            new_files[key] = recorded_hash
+            preserved += 1
+            conflicts.append(key)
+    return new_files, updated, unchanged, preserved, conflicts
 
 
 def _copy_owned(source_root, target_root, relative_files):
@@ -380,6 +464,12 @@ def install(host, project_root, project_skills=False):
                     f"packaged Codex hooks are empty: {SOURCE_CODEX_HOOKS}"
                 )
 
+    # #183: read at run time, not compiled in, so a copy of the package
+    # whose manifest carries a version nothing else does stamps that
+    # version. Read up front so a missing/malformed manifest fails before
+    # any write, matching every other packaged-input validation here.
+    current_version = _package_version(host)
+
     guidance_name = "CLAUDE.md" if host == "claude" else "AGENTS.md"
     guidance_path = os.path.join(project_root, guidance_name)
     gitignore_path = os.path.join(project_root, ".gitignore")
@@ -451,8 +541,14 @@ def install(host, project_root, project_skills=False):
                 )
             )
 
-    payload_conflicts = _preflight_payload(project_root, payload_files)
+    _preflight_payload(project_root, payload_files)
     target_payload = os.path.join(project_root, ".agent-guild")
+    prov_path = os.path.join(target_payload, PROVENANCE_NAME)
+    # {} reads the same whether this is a brand-new project (nothing on disk
+    # yet, so every file takes `_sync_payload`'s "missing" branch) or a
+    # pre-provenance one (payload already on disk, so it adopts what
+    # matches and preserves-and-reports the rest).
+    recorded_files = _load_provenance(prov_path)
 
     target_agents = os.path.join(project_root, ".codex", "agents")
     if host == "codex":
@@ -483,15 +579,13 @@ def install(host, project_root, project_skills=False):
             os.path.join(state_root, name, ".gitkeep"),
         )
 
-    payload_copied, payload_unchanged = _copy_missing(
-        SOURCE_PAYLOAD, target_payload, payload_files
-    )
-    # A conflicting file already exists on disk, so `_copy_missing` counts it
-    # as unchanged along with every file that's genuinely untouched. Split it
-    # back out here so "unchanged" keeps meaning "matches source" rather than
-    # "matches source, or differs and we left it alone anyway."
-    payload_preserved = len(payload_conflicts)
-    payload_unchanged -= payload_preserved
+    (
+        new_payload_files,
+        payload_copied,
+        payload_unchanged,
+        payload_preserved,
+        payload_conflicts,
+    ) = _sync_payload(SOURCE_PAYLOAD, target_payload, payload_files, recorded_files)
     agents_updated = agents_unchanged = 0
     if host == "codex":
         agents_updated, agents_unchanged = _copy_owned(
@@ -512,6 +606,19 @@ def install(host, project_root, project_skills=False):
         keep = os.path.join(state_root, name, ".gitkeep")
         if not os.path.exists(keep):
             _atomic_write(keep, "")
+
+    # Every install writes the record, on both hosts, so the next run always
+    # has a stamp and a per-file hash to check against rather than falling
+    # back to adoption forever.
+    _atomic_write(
+        prov_path,
+        json.dumps(
+            {"version": current_version, "files": new_payload_files},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
 
     guidance_changed = updated_guidance != existing_guidance
     if guidance_changed:

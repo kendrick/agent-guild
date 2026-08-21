@@ -1250,8 +1250,12 @@ check("a stale-marker dep stalls; the task deferred behind it doesn't",
 # is retry-ladder step 4—escalate, re-decompose, or surface it—and it can
 # only ever resolve through the orchestrator. Holding it would leave a job
 # whose last open task is budget-deferred blocked forever with no backstop.
+# Audits pass here because a spent budget means two dispatches already
+# happened, which dispatch-guard would have refused otherwise—and because
+# with an audit shut the audit entity is the backstop instead (#192).
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]",
            retries=2, max_retries=2)
 for _ in range(2):
@@ -1338,8 +1342,12 @@ check("the parked task stops being advertised as a next move",
 # undeclared task against EVERY id in --running. Holding that kind would let
 # one live subagent freeze every other pending task's counter, which is
 # #163's own bug relocated from the marker hold to the deferral hold.
+# The live worker marker below is only reachable with both audits passed, so
+# the fixture says so. While one is shut every worker-dispatch deferral holds
+# instead, which is #192's case and is covered in its own section.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="assigned", deps="[]", owns="[]")
 for tid in ("T-002", "T-003"):
     write_task(proj, tid, status="pending", deps="[]", owns="[]")
@@ -1356,9 +1364,11 @@ check("the live sibling is still held by its own marker, not stalled",
 # `owns-malformed` is the same shape as `owns-undeclared` (#162) and needs
 # the same answer: a typo in an `owns` entry is fixed by editing the task
 # file, and nobody edits a task the gate keeps reporting as legitimately
-# waiting on something else.
+# waiting on something else. Audits pass for the same reason as above: a live
+# worker marker implies dispatch-guard already let one through.
 proj = fresh_proj()
 seed_ready_set(proj)
+audits_pass(proj)
 write_task(proj, "T-001", status="assigned", deps="[]", owns="[b.py]")
 for tid in ("T-002", "T-003"):
     write_task(proj, tid, status="pending", deps="[]", owns="[./a.py]")
@@ -1503,6 +1513,29 @@ check("the audit's own stall counter is what advanced",
       f"entries={audit_state}")
 check("STALLED.md sends the reader to the right cause",
       "never dispatched" in audit_stall, f"text={audit_stall!r}")
+
+# The shape a real Phase 1 actually has, and the one that got away when this
+# fix only looked at the `wave` bucket. `owns: []` is what templates/task.md
+# ships, and ready-set can seat only one undeclared task per wave, so every
+# sibling after the first is deferred as `owns-undeclared`. Four
+# template-default tasks then produced a STALLED.md naming three of them—#192
+# again, one bucket over. This is the #183 run's own state: CON passed and
+# stamped, DEC auditor in flight, four tasks declaring no `owns`.
+proj = fresh_proj()
+seed_ready_set(proj)
+con_pass(proj)
+for n in ("T-001", "T-002", "T-003", "T-004"):
+    write_task(proj, n, status="pending", deps="[]", owns="[]")
+write_in_flight_marker(proj, "DEC-audit", "auditor")
+for _ in range(3):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+rc_p1, _, err_p1 = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("four template-default tasks behind a live DEC audit → no task is stalled",
+      not stalled_text(proj), f"text={stalled_text(proj)!r}")
+check("...and every one of them is told what it's actually waiting on",
+      err_p1.count("blocked on DEC-audit") == 4, err_p1)
+check("...and none is told to declare `owns` to get itself dispatched",
+      "declare it on both" not in err_p1, err_p1)
 
 # A dispatched auditor holds the audit entity the same way a worker's marker
 # holds its task's. An audit round runs 17 to 25 minutes on this repo, so

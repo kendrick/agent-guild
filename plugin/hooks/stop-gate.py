@@ -256,22 +256,40 @@ def _audit_held(tid, status, dispositions, marker_fresh, audit_blocked):
     A fresh marker already holds this task's counter and carries better
     information (something is actually running), so it wins.
 
-    Bucket first, status second. ready-set's own verdict is authoritative
-    where it has one: `wave` is exactly the set it would have the
-    orchestrator dispatch a worker on right now, which is the set #192
-    observed being advertised and refused. `deferred` and `attention` tasks
-    are held or counted on their own terms and must not be swept in here—the
-    wedge valve depends on a dep cycle's members staying deferral-held and
-    nothing else, so audit-holding them would disarm the only backstop that
-    surfaces a cycle before dispatch time. The status fallback covers the
-    degrade case only, where ready-set produced no buckets at all and a
-    pending task would otherwise sail straight back into #192.
+    `wave` is the set ready-set would have the orchestrator dispatch right
+    now, which is the set #192 watched being advertised and refused. But most
+    of a real Phase 1 is NOT in the wave: `owns: []` is what templates/task.md
+    ships, and ready-set can only put one undeclared task in a wave at a time,
+    so every sibling after the first is deferred as `owns-undeclared`. Scoping
+    this to the wave alone left four template-default tasks producing a
+    STALLED.md naming three of them—the original bug, one bucket over. Every
+    deferral except `deps` is therefore held too, because each of those
+    reasons is about how a worker dispatch may be GROUPED or afforded, and
+    grouping is moot when no worker can dispatch at all.
+
+    `deps` stays out. A dep cycle is not something a passing audit fixes, and
+    the wedge valve is the only thing that surfaces one before dispatch time,
+    which for a cycle never arrives. Holding `deps` here would disarm it. It
+    costs nothing in the ordinary case: a dep-deferred task is already
+    deferral-held, and only the valve's own wedge state tells them apart.
+
+    `attention` stays out too—a dispute or an invalidation needs a ruling,
+    not a dispatch, so the audit isn't what blocks it. So does a fresh
+    marker, which carries better news than the gate being shut: something is
+    genuinely running. The status fallback covers the degrade case, where
+    ready-set produced no buckets at all and a pending task would otherwise
+    sail straight back into #192.
     """
     if not audit_blocked or marker_fresh:
         return False
     disposition = dispositions.get(tid)
     if disposition:
-        return disposition[0] == "wave"
+        if disposition[0] == "wave":
+            return True
+        return (
+            disposition[0] == "deferred"
+            and _deferred_kind(tid, dispositions) != "deps"
+        )
     return status in WORKER_DISPATCH_STATUSES
 
 
@@ -580,23 +598,31 @@ def _deferral_held(tid, dispositions):
     `owns-malformed`—same shape as `owns-undeclared` (#162). A typo in an
     `owns` entry is fixed by editing the task file, which nobody will do
     while the gate reports the task as legitimately waiting."""
+    return _deferred_kind(tid, dispositions) in DEFERRAL_HOLD_KINDS
+
+
+def _deferred_kind(tid, dispositions):
+    """The `kind` on this task's `deferred` entry, or None if ready-set put it
+    anywhere else. Both holds read the bucket through here so they can't come
+    to different conclusions about the same entry.
+
+    Version skew: a project's copied-in ready-set.py from before #163 emits
+    `deferred` with no `kind` at all, and reading that as "no kind" stalls
+    tasks that are legitimately waiting. Its reason strings are stable and
+    documented, so map back the two that matter. `kind` is authoritative
+    wherever it exists; this is a fallback for an old script, not a second
+    source of truth."""
     d = dispositions.get(tid)
     if not d or d[0] != "deferred":
-        return False
+        return None
     kind = d[2]
     if kind is None:
-        # Version skew: a project's copied-in ready-set.py from before #163
-        # emits `deferred` with no `kind` at all, and reading that as "not a
-        # hold" stalls tasks that are legitimately waiting. Its reason
-        # strings are stable and documented, so map back the two that hold.
-        # `kind` is authoritative wherever it exists; this is a fallback for
-        # an old script, not a second source of truth.
         reason = d[1] or ""
         kind = next(
             (k for prefix, k in _KIND_BY_REASON_PREFIX if reason.startswith(prefix)),
             None,
         )
-    return kind in DEFERRAL_HOLD_KINDS
+    return kind
 
 
 def _closed_task_status_retries(tid):

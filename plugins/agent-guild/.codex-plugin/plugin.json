@@ -1,7 +1,7 @@
 {
   "name": "agent-guild",
   "description": "Runs Codex as an org chart: an orchestrator plans and rules, worker subagents build, and independent checker agents verify the work.",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "author": {
     "name": "Kendrick Arnett"
   },

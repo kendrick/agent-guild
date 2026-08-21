@@ -1,0 +1,21 @@
+---
+task: T-002
+checker: checker-judgment
+vendor: anthropic
+model: claude-opus-5[1m]
+verdict: PASS
+checked_at: 2026-08-21T08:30:51Z
+duration_ms: None
+cost_usd: None
+---
+
+<!-- GENERATED FILE—do not hand-edit. Rendered by render-verdict.py
+from the verdict JSON, the record of record. Edit the JSON and
+re-render instead. -->
+
+## Per-clause results
+
+| clause | severity | description | evidence |
+| ------ | -------- | ------------ | -------- |
+| C-9 | info | All three paths have a case in scripts/test_build_plugin.py, each asserting on installed bytes and on the provenance record's contents, and each would go red against the pre-job installer. | scripts/test_build_plugin.py:1783-1859 (upgrade), :1861-1938 (refusal), :1940-2089 (mixed). Pre-job behavior re-derived from HEAD, not from the worker's account: `git show HEAD:scripts/plugin-src/install-project.py \| grep -i provenance` exits 1 with no matches, and `git show HEAD:plugin/project-template/install.py \| grep -c provenance` prints 0, so a pre-job install writes no .agent-guild/provenance.json at all. HEAD's _copy_missing reads `if os.path.exists(target): unchanged += 1; continue`, so nothing is ever upgraded in place; HEAD's _preflight_payload flags `os.path.exists(target) and not _same_file(source, target)`, keyed to current source, so it names a stale-but-unedited file alongside a real edit. Upgrade case: asserts `upgraded_bytes == current_source_bytes` and `upgraded_hash == hashlib.sha256(current_source_bytes).hexdigest()` and `upgraded_hash != hashlib.sha256(stale_bytes).hexdigest()` (:1830-1839) — under HEAD the record read at :1826 raises FileNotFoundError into the `except (OSError, ValueError, KeyError, json.JSONDecodeError)` at :1848 and sets condition False, and the byte assertion is independently false since _copy_missing skips the existing file. Refusal case: asserts `kept_bytes == edited_bytes` and `kept_hash == refusal_original_hash and kept_hash != hashlib.sha256(edited_bytes).hexdigest()` (:1917-1925) — the carried-forward-not-refreshed property is a record-contents assertion, red under HEAD (no record) and red against a regression that refreshed a preserved file's hash from disk. Mixed case: asserts `mixed_stale_after == mixed_stale_source_bytes`, `mixed_files.get(mixed_stale_key) == sha256(source)`, `mixed_edited_after == mixed_edited_bytes`, `mixed_files.get(mixed_edited_key) == mixed_edited_original_hash`, `mixed_missing_landed`, `mixed_missing_after == mixed_missing_source_bytes`, `mixed_named_paths == [mixed_edited_key]`, `mixed_after_record.get('version') == running_version` (:2049-2062) — red under HEAD on three independent counts: no record to read at :2016, the stale file never upgraded, and the preserved list naming both the stale and the edited path. No case rests on summary text alone; the warning-line checks in the refusal and mixed cases sit alongside byte and record assertions rather than standing in for them. The cases exercise the freshly built package installer at claude_out/project-template/install.py (:989-991), not a stub, and none is vacuous: an unrecognized record key or a skipped upgrade would flip each conjunction to False. |
+| C-8 | info | The full command from the clause's check runs clean against the tree as T-002 leaves it: both suites pass and build-plugin.py --check reports no drift. | Ran `rm -rf plugins/agent-guild/hooks/__pycache__ plugin/hooks/__pycache__ .agent-guild/hooks/__pycache__ && python3 .agent-guild/hooks/test_hooks.py && python3 scripts/test_build_plugin.py && python3 scripts/build-plugin.py --check`. Output tail: test_hooks.py `371 passed, 0 failed`; test_build_plugin.py `53 passed, 0 failed` (up from the 50 that predated T-002, the three added cases printing `ok` under the headings `regression: a file clean against its record but stale against source upgrades in place (C-2)`, `regression: an edited payload file is refused and its recorded hash is carried forward untouched (C-3)`, and `regression: a mixed run upgrades the stale file, refuses only the edited one, and lands the missing file (C-3)`); build-plugin.py --check `✔ Validation passed` then `OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds; the Claude plugin passes strict validation`; `EXIT=0`. |

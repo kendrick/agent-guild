@@ -1,0 +1,24 @@
+{
+  "task_id": "T-004",
+  "checker": "checker-deterministic",
+  "vendor": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-5",
+      "severity": "info",
+      "description": "The session nudge correctly implements the version-gap notice: probe c5 confirms all seven arms pass, including stale project notice, up-to-date silence, manifest reading, version reading at runtime, repo-local hook exiting cleanly, double-registration precedence, and jurisdiction enforcement.",
+      "evidence": "probe-183.py c5 output: probe c5: ok"
+    },
+    {
+      "clause_id": "C-8",
+      "severity": "info",
+      "description": "All test suites and build checks pass: test_hooks.py (371 passed), test_build_plugin.py (50 passed), and build-plugin.py --check validation succeeded.",
+      "evidence": "Test output: 371 passed, 0 failed in test_hooks.py; 50 passed, 0 failed in test_build_plugin.py; build-plugin.py --check: OK"
+    }
+  ],
+  "timestamp": "2026-08-21T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

@@ -5,6 +5,7 @@ Run: python3 scripts/test_build_plugin.py
 """
 import contextlib
 import filecmp
+import hashlib
 import importlib.util
 import io
 import json
@@ -1768,6 +1769,323 @@ with tempfile.TemporaryDirectory(prefix="build-plugin-test-") as tmp:
             f"rc={marketplace_check_rc} "
             f"stderr={stderr.getvalue()!r}"
         ),
+    )
+
+    # #183 C-2: a payload file whose on-disk bytes still match the hash the
+    # record stamped for it is "clean" even when the record's stamp trails
+    # the plugin's — the record decides, not the version. Simulate a project
+    # last touched on an earlier release: rewrite the file to bytes an older
+    # build shipped, then hand-edit the record to say exactly those bytes
+    # are what shipped. A pre-#183 installer never wrote a record at all,
+    # and its `_copy_missing` never overwrote a file that already existed
+    # on disk, so it left the stale bytes in place forever; this asserts on
+    # the installed bytes and the record's own hash entry, not on a log line.
+    print("regression: a file clean against its record but stale against source upgrades in place (C-2)")
+    try:
+        upgrade_project = os.path.join(tmp, "upgrade-project")
+        os.makedirs(upgrade_project)
+        upgrade_first_install = subprocess.run(
+            [sys.executable, claude_installer, "claude", upgrade_project],
+            capture_output=True,
+            text=True,
+            env=install_env,
+        )
+        upgrade_relative = os.path.join("scripts", "ready-set.py")
+        upgrade_key = ".agent-guild/" + upgrade_relative.replace(os.sep, "/")
+        upgrade_path = os.path.join(
+            upgrade_project, ".agent-guild", upgrade_relative
+        )
+        with open(upgrade_path, "rb") as f:
+            current_source_bytes = f.read()
+        stale_bytes = (
+            b"# shipped by an earlier release; untouched by the user\n"
+        )
+        with open(upgrade_path, "wb") as f:
+            f.write(stale_bytes)
+        upgrade_prov_path = os.path.join(
+            upgrade_project, ".agent-guild", "provenance.json"
+        )
+        with open(upgrade_prov_path, encoding="utf-8") as f:
+            upgrade_record = json.load(f)
+        upgrade_record["files"][upgrade_key] = hashlib.sha256(
+            stale_bytes
+        ).hexdigest()
+        with open(upgrade_prov_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(upgrade_record, indent=2, sort_keys=True) + "\n")
+
+        upgrade_reinstall = subprocess.run(
+            [sys.executable, claude_installer, "claude", upgrade_project],
+            capture_output=True,
+            text=True,
+            env=install_env,
+        )
+        with open(upgrade_path, "rb") as f:
+            upgraded_bytes = f.read()
+        with open(upgrade_prov_path, encoding="utf-8") as f:
+            upgraded_record = json.load(f)
+        upgraded_hash = upgraded_record.get("files", {}).get(upgrade_key)
+        condition = (
+            upgrade_first_install.returncode == 0
+            and upgrade_reinstall.returncode == 0
+            and upgraded_bytes == current_source_bytes
+            and upgraded_hash
+            == hashlib.sha256(current_source_bytes).hexdigest()
+            and upgraded_hash != hashlib.sha256(stale_bytes).hexdigest()
+        )
+        detail = (
+            f"first_rc={upgrade_first_install.returncode} "
+            f"reinstall_rc={upgrade_reinstall.returncode} "
+            f"upgraded_matches_source={upgraded_bytes == current_source_bytes} "
+            f"upgraded_hash={upgraded_hash!r} "
+            f"stdout={upgrade_reinstall.stdout!r}"
+        )
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        condition = False
+        detail = repr(error)
+    check(
+        "re-init brings a file clean against its record but stale against "
+        "source to current bytes and restamps its recorded hash",
+        condition,
+        detail,
+    )
+
+    # #183 C-3: a file whose on-disk bytes differ from its RECORDED hash is a
+    # real local edit, not staleness, and the record's job is to remember
+    # what shipped rather than what a run just saw. A pre-#183 installer
+    # also left an edited file untouched (its `_copy_missing` never
+    # overwrites an existing file), so that half would pass unchanged even
+    # reverted; what a reverted tree cannot produce is a record at all, so
+    # reading its hash entry and finding it still equal to the pre-edit
+    # hash — never refreshed to the edited bytes — is the property this
+    # pins, on the record's own contents rather than a log line.
+    print("regression: an edited payload file is refused and its recorded hash is carried forward untouched (C-3)")
+    try:
+        refusal_project = os.path.join(tmp, "refusal-project")
+        os.makedirs(refusal_project)
+        refusal_first_install = subprocess.run(
+            [sys.executable, claude_installer, "claude", refusal_project],
+            capture_output=True,
+            text=True,
+            env=install_env,
+        )
+        refusal_relative = os.path.join("scripts", "task-status.py")
+        refusal_key = ".agent-guild/" + refusal_relative.replace(os.sep, "/")
+        refusal_path = os.path.join(
+            refusal_project, ".agent-guild", refusal_relative
+        )
+        with open(refusal_path, "rb") as f:
+            refusal_original_bytes = f.read()
+        refusal_original_hash = hashlib.sha256(
+            refusal_original_bytes
+        ).hexdigest()
+        edited_bytes = (
+            b"# a real local edit the installer must never overwrite\n"
+        )
+        with open(refusal_path, "wb") as f:
+            f.write(edited_bytes)
+
+        refusal_reinstall = subprocess.run(
+            [sys.executable, claude_installer, "claude", refusal_project],
+            capture_output=True,
+            text=True,
+            env=install_env,
+        )
+        with open(refusal_path, "rb") as f:
+            kept_bytes = f.read()
+        refusal_prov_path = os.path.join(
+            refusal_project, ".agent-guild", "provenance.json"
+        )
+        with open(refusal_prov_path, encoding="utf-8") as f:
+            refusal_record = json.load(f)
+        kept_hash = refusal_record.get("files", {}).get(refusal_key)
+        refusal_warning_lines = [
+            line
+            for line in refusal_reinstall.stdout.splitlines()
+            if line.startswith("WARNING: local Agent Guild payload differs")
+        ]
+        condition = (
+            refusal_first_install.returncode == 0
+            and refusal_reinstall.returncode == 0
+            and kept_bytes == edited_bytes
+            and len(refusal_warning_lines) == 1
+            and refusal_key in refusal_warning_lines[0]
+            and kept_hash == refusal_original_hash
+            and kept_hash != hashlib.sha256(edited_bytes).hexdigest()
+        )
+        detail = (
+            f"first_rc={refusal_first_install.returncode} "
+            f"reinstall_rc={refusal_reinstall.returncode} "
+            f"kept_matches_edit={kept_bytes == edited_bytes} "
+            f"warning_lines={refusal_warning_lines!r} "
+            f"kept_hash={kept_hash!r} original_hash={refusal_original_hash!r}"
+        )
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        condition = False
+        detail = repr(error)
+    check(
+        "re-init refuses an edited payload file, names only it, and carries "
+        "its recorded hash forward without refreshing it from disk",
+        condition,
+        detail,
+    )
+
+    # #183 C-3: one invocation mixing all three payload states — a file
+    # clean against its record but stale against source, a file genuinely
+    # edited, and a file missing outright. A pre-#183 installer left the
+    # stale file untouched (never upgraded it) and named BOTH the stale and
+    # the edited file in its warning, since it could only compare on-disk
+    # bytes to source and had no record to tell "unmodified but old" from
+    # "edited" — so this fails on both the stale file's bytes and the
+    # warning's naming when reverted, not merely on the record being absent.
+    print("regression: a mixed run upgrades the stale file, refuses only the edited one, and lands the missing file (C-3)")
+    try:
+        mixed_project = os.path.join(tmp, "mixed-project")
+        os.makedirs(mixed_project)
+        mixed_first_install = subprocess.run(
+            [sys.executable, claude_installer, "claude", mixed_project],
+            capture_output=True,
+            text=True,
+            env=install_env,
+        )
+        mixed_stale_relative = os.path.join("scripts", "check-provenance.py")
+        mixed_edited_relative = os.path.join("scripts", "render-verdict.py")
+        mixed_missing_relative = os.path.join("scripts", "compose-brief.py")
+        mixed_stale_key = (
+            ".agent-guild/" + mixed_stale_relative.replace(os.sep, "/")
+        )
+        mixed_edited_key = (
+            ".agent-guild/" + mixed_edited_relative.replace(os.sep, "/")
+        )
+        mixed_missing_key = (
+            ".agent-guild/" + mixed_missing_relative.replace(os.sep, "/")
+        )
+        mixed_stale_path = os.path.join(
+            mixed_project, ".agent-guild", mixed_stale_relative
+        )
+        mixed_edited_path = os.path.join(
+            mixed_project, ".agent-guild", mixed_edited_relative
+        )
+        mixed_missing_path = os.path.join(
+            mixed_project, ".agent-guild", mixed_missing_relative
+        )
+
+        with open(mixed_stale_path, "rb") as f:
+            mixed_stale_source_bytes = f.read()
+        with open(mixed_edited_path, "rb") as f:
+            mixed_edited_original_bytes = f.read()
+        mixed_edited_original_hash = hashlib.sha256(
+            mixed_edited_original_bytes
+        ).hexdigest()
+
+        mixed_stale_bytes = (
+            b"# shipped by an earlier release; untouched by the user\n"
+        )
+        with open(mixed_stale_path, "wb") as f:
+            f.write(mixed_stale_bytes)
+        mixed_edited_bytes = (
+            b"# a real local edit the installer must never overwrite\n"
+        )
+        with open(mixed_edited_path, "wb") as f:
+            f.write(mixed_edited_bytes)
+        os.remove(mixed_missing_path)
+
+        mixed_prov_path = os.path.join(
+            mixed_project, ".agent-guild", "provenance.json"
+        )
+        with open(mixed_prov_path, encoding="utf-8") as f:
+            mixed_record = json.load(f)
+        mixed_record["files"][mixed_stale_key] = hashlib.sha256(
+            mixed_stale_bytes
+        ).hexdigest()
+        with open(mixed_prov_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(mixed_record, indent=2, sort_keys=True) + "\n")
+
+        mixed_reinstall = subprocess.run(
+            [sys.executable, claude_installer, "claude", mixed_project],
+            capture_output=True,
+            text=True,
+            env=install_env,
+        )
+
+        with open(mixed_stale_path, "rb") as f:
+            mixed_stale_after = f.read()
+        with open(mixed_edited_path, "rb") as f:
+            mixed_edited_after = f.read()
+        mixed_missing_landed = os.path.isfile(mixed_missing_path)
+        mixed_missing_after = b""
+        if mixed_missing_landed:
+            with open(mixed_missing_path, "rb") as f:
+                mixed_missing_after = f.read()
+        with open(mixed_prov_path, encoding="utf-8") as f:
+            mixed_after_record = json.load(f)
+        mixed_files = mixed_after_record.get("files", {})
+        mixed_warning_lines = [
+            line
+            for line in mixed_reinstall.stdout.splitlines()
+            if line.startswith("WARNING: local Agent Guild payload differs")
+        ]
+        mixed_named_paths = (
+            mixed_warning_lines[0]
+            .split("preserved without writes: ", 1)[1]
+            .split(", ")
+            if mixed_warning_lines
+            else []
+        )
+        with open(
+            os.path.join(
+                claude_out,
+                "project-template",
+                ".agent-guild",
+                mixed_missing_relative,
+            ),
+            "rb",
+        ) as f:
+            mixed_missing_source_bytes = f.read()
+        with open(
+            os.path.join(claude_out, ".claude-plugin", "plugin.json"),
+            encoding="utf-8",
+        ) as f:
+            running_version = json.load(f)["version"]
+
+        condition = (
+            mixed_first_install.returncode == 0
+            and mixed_reinstall.returncode == 0
+            and mixed_stale_after == mixed_stale_source_bytes
+            and mixed_files.get(mixed_stale_key)
+            == hashlib.sha256(mixed_stale_source_bytes).hexdigest()
+            and mixed_edited_after == mixed_edited_bytes
+            and mixed_files.get(mixed_edited_key) == mixed_edited_original_hash
+            and mixed_missing_landed
+            and mixed_missing_after == mixed_missing_source_bytes
+            and len(mixed_warning_lines) == 1
+            and mixed_named_paths == [mixed_edited_key]
+            and mixed_after_record.get("version") == running_version
+        )
+        detail = (
+            f"first_rc={mixed_first_install.returncode} "
+            f"reinstall_rc={mixed_reinstall.returncode} "
+            f"stale_upgraded={mixed_stale_after == mixed_stale_source_bytes} "
+            f"edited_kept={mixed_edited_after == mixed_edited_bytes} "
+            f"missing_landed={mixed_missing_landed} "
+            f"named_paths={mixed_named_paths!r} "
+            f"version={mixed_after_record.get('version')!r} "
+            f"stdout={mixed_reinstall.stdout!r}"
+        )
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        IndexError,
+        json.JSONDecodeError,
+    ) as error:
+        condition = False
+        detail = repr(error)
+    check(
+        "a mixed run upgrades the stale file, refuses and names only the "
+        "edited file, lands the missing file, and still advances the "
+        "record's version",
+        condition,
+        detail,
     )
 
 print(f"\n{passed} passed, {failed} failed")

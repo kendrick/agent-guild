@@ -14,6 +14,28 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-21: Payload Provenance Keys On The Recorded Hash, Not The Stamp
+
+**Source:** #183, built through the guild (11 CON rounds, 3 DEC rounds, 4 tasks)
+
+**Context:** the plugin auto-updates at host level and `.agent-guild/` did not, so every project stayed pinned to whatever version last ran init. #211's narrow cut stopped a drifted file withholding the release, but nothing could still tell "you edited this" from "the guild moved," because the installer kept no record of what it shipped.
+
+**Decision:** install writes `.agent-guild/provenance.json` on both hosts — tracked, beside the marker, committed with the payload it describes. Its contract is in [[dataContracts]]. Three rulings settled at intake and binding on every clause: the record is tracked rather than gitignored or under `state/`; the nudge prompts, naming both versions and the host's own init command, and never writes; a pre-provenance kit adopts what matches current source and preserves what differs, recording no entry for the latter, so no edit is ever silently overwritten.
+
+The load-bearing detail is that the per-file decision reads the **record**, never the stamp: a file clean against its recorded hash is brought to current source whether the recorded version trails the plugin's or equals it, because the record is what says the bytes are the guild's rather than the user's. A run that preserves a file still advances the stamp — holding it back on any conflict pins the project forever and leaves the nudge firing with nothing that clears it. A preserved file's recorded hash is carried forward untouched, never refreshed from disk, or the refusal dies at the next release.
+
+**Alternatives considered:** trusting a pre-provenance kit wholesale (rejected — it reads a real edit as shipped bytes and overwrites it on the next upgrade); removing the nudge's double-registration early return so every applicable message prints (rejected as out of scope — it is a better behavior and a redesign of the nudge's message policy that the spec never asked for; see [[antipatterns]] on assertions that do not separate for how the ambiguity surfaced).
+
+## 2026-08-21: A Job's Weight Turns On Whether The Harness Can See The Property
+
+**Source:** #183's CON-audit r4, corrected by the user; recorded in that constitution's weight line
+
+**Context:** the job derived as **standard** on a reading of the spec's acceptance criteria: `test_hooks.py`, `test_build_plugin.py` and `build-plugin.py --check` all exist, so verification looked like invoking an instrument rather than building one. Four audit rounds later the auditor showed the derivation contradicted the constitution's own preamble, which had already noticed that none of those suites asserts anything about provenance.
+
+**Decision:** weight was corrected to **deep**, and the rule generalizes: "does a harness exist" is the wrong question, "does a harness exist that can see this property" is the right one. What verification actually cost here was a ~600-line probe harness across three install shapes and four nudge deployments, plus a reference implementation each audit round rebuilt and mutated.
+
+The correction paid for itself immediately. Deep carries no clause ceiling, and the ninth clause — C-9, which owns regression coverage — could not have existed under standard's ceiling of 8 without an overrun line, yet it exists because a script cannot verify a test suite carries real cases (#141).
+
 ## 2026-08-20: Jurisdiction Is The Tracked Marker, Not The Directory
 
 **Source:** #98 and #212, shipped as PRs #210 (v0.7.0) and #213 (v0.7.1, closes #212)

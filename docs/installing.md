@@ -115,7 +115,7 @@ This is Claude's repo-local route. Do not also enable the Claude plugin in that 
 
 ## What Init Owns
 
-Every route installs the same `.agent-guild/` project payload and runtime state directories. Every hook gate looks for `.agent-guild/CLAUDE.md` before running, so that file, not the `.agent-guild/` directory, is what makes a project initialized. The file is tracked, so removing the payload removes the Guild from the project. The installer is idempotent and preserves existing files it does not own. It fails before writing when it finds malformed ownership markers or a managed path redirected outside the project. A payload file that has drifted from the shipped source is preserved instead—the installer warns and keeps going, landing whatever payload files are still missing.
+Every route installs the same `.agent-guild/` project payload and runtime state directories. Every hook gate looks for `.agent-guild/CLAUDE.md` before running, so that file, not the `.agent-guild/` directory, is what makes a project initialized. The file is tracked, so removing the payload removes the Guild from the project. The installer is idempotent and preserves existing files it does not own. It fails before writing when it finds malformed ownership markers or a managed path redirected outside the project. A payload file whose bytes no longer match what the installer recorded shipping is preserved instead—the installer names it in a warning and keeps going, landing whatever payload files are still missing.
 
 Host-specific ownership stays narrow:
 
@@ -132,9 +132,25 @@ Re-running init upgrades some of what it installed and preserves the rest, and t
 | Class | What a re-run does |
 | --- | --- |
 | Agents, skills, and the Codex project hooks | init overwrites each file whose shipped bytes differ (`_copy_owned`) |
-| The payload: `.agent-guild/CLAUDE.md`, `scripts/`, `templates/`, `schemas/` | init lands each missing file and preserves each differing one, naming it in a warning (`_copy_missing`) |
+| The payload: `.agent-guild/CLAUDE.md`, `scripts/`, `templates/`, `schemas/` | init lands each missing file, upgrades each file still matching its recorded hash, and preserves each file that differs, naming it in a warning (`_sync_payload`) |
 
-The Codex project hooks land only on the repo-local `--project-skills` route, and they sit inside `.agent-guild/` like the payload does. Even so, `install()` splits them out of the payload before the drift check runs, so they upgrade on every re-init. A drifted payload file never upgrades in place, because the installer keeps no record of what it shipped and cannot tell a local edit from a version gap. That record is #183.
+The Codex project hooks land only on the repo-local `--project-skills` route, and they sit inside `.agent-guild/` like the payload does. Even so, `install()` splits them out of the payload before the drift check runs, so they upgrade on every re-init. A payload file already on disk upgrades only when its bytes still match the hash the installer recorded for it.
+
+### The Provenance Record
+
+Init writes `.agent-guild/provenance.json` on every run, beside the `.agent-guild/CLAUDE.md` marker. The record holds the plugin version that wrote the payload and a sha256 for each payload file, taken from the bytes the Guild shipped. Init gitignores `.agent-guild/state/` and nothing else, so the record commits with the payload it describes and every clone of the project carries it.
+
+That record is how a re-run tells your edit from a version gap, one file at a time. When a file's bytes still match its recorded hash, nobody has touched it since init put it there, so this run brings it to current source and restamps the hash. The recorded version never enters that decision: a clean file upgrades whether its stamp trails the plugin's or matches it.
+
+When the bytes differ from the recorded hash, somebody edited that file. Init keeps your bytes, names the path in a `local Agent Guild payload differs` warning, and carries the old hash forward untouched, so the next release refuses the same edit again instead of reading a version bump as consent. The refusal does not pin the project: the record still advances to the running plugin's version. To take the shipped copy back, delete the file and re-run init.
+
+The run's `OK:` summary accounts for the whole payload in three terms. `updated` counts the files whose bytes changed, `preserved` counts the ones named in the warning, and `unchanged` carries the rest. Re-running init on a project nobody has edited reports zero preserved.
+
+### Adopting A Pre-Provenance Project
+
+A project installed before the record existed has payload on disk and no `provenance.json`. The first re-run adopts that payload instead of trusting it wholesale. Init records every file whose bytes match current source, at that hash and under the running plugin's version. It preserves every file that differs, names it in the warning, and leaves it out of the record entirely—all of them, not the first.
+
+Leaving those files unrecorded is deliberate, and you will meet the warning again. A file with no entry gets the same treatment on every later re-run: preserved and reported, never overwritten, because nothing on disk separates an old release's bytes from an edit somebody made and meant. Restore the shipped bytes, or delete the file and re-run init, and the next run records the file and stops warning about it.
 
 ## Verify A Fresh Project
 
@@ -144,6 +160,7 @@ Run these shared checks from the initialized project:
 test -f .agent-guild/CLAUDE.md && echo "contract present"
 test -d .agent-guild/state/tasks && echo "state dirs present"
 git check-ignore -q .agent-guild/state && echo "state dir gitignored"
+git check-ignore -q .agent-guild/provenance.json; test $? -eq 1 && echo "provenance record tracked"
 ```
 
 Then check the selected route:

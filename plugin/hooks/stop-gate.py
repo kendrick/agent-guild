@@ -47,6 +47,20 @@ and calling that task stuck would be just as wrong. A marker that outlives
 its TTL is worth nothing: staleness is what lets the backstop resume on a
 dead agent without anyone clearing state by hand.
 
+This gate also reads the two audit gates dispatch-guard enforces against
+workers, because for a long time it didn't and the two contradicted each
+other all through Phase 0 and Phase 1 (#192). ready-set computes a perfectly
+correct wave from the task files; dispatch-guard then denies every member of
+it because no CON-audit or DEC-audit round has passed. The orchestrator was
+told to do the one thing it was forbidden to do, every turn, and three turns
+later the livelock guard named tasks that were waiting exactly as they
+should have been. So while either gate is shut the wave is emptied, each
+task it would have named is told what it's actually waiting on, and its
+counter holds. The shut audit becomes an entity itself and carries the
+count, which is what keeps the backstop armed: three turns with no auditor
+running and no change in audit state writes STALLED.md naming the audit, not
+the tasks behind it.
+
 Waves also fire this gate twice for ONE real blocked turn when both the
 plugin's hooks.json and a copy-in settings.json are registered (#41): same
 task state, same verdict set, same markers, because nothing has actually
@@ -149,6 +163,11 @@ STALL_LIMIT = 3
 # outside it today; see _deferral_held for why each would wedge the backstop.
 DEFERRAL_HOLD_KINDS = frozenset({"deps", "owns"})
 
+# The statuses whose next move is a worker dispatch, and therefore the ones
+# dispatch-guard's audit gates refuse (#192). Used only when ready-set
+# produced no buckets to read; see _audit_held.
+WORKER_DISPATCH_STATUSES = frozenset({"pending", "assigned", "rework"})
+
 # Reason-string prefixes for those same two kinds, used only when a task's
 # `deferred` entry carries no `kind` at all (see _deferral_held).
 _KIND_BY_REASON_PREFIX = (
@@ -187,14 +206,107 @@ def _has_any_task_file():
     return any(_TASK_FILE_RE.match(n) for n in names)
 
 
+def _blocking_audit():
+    """(audit_id, reason) for the first of the worker path's audit gates
+    standing shut, or None when both are open.
+
+    The same two calls in the same order dispatch-guard's worker path makes
+    (CON bound to the constitution's bytes, DEC unbound), because the whole
+    point is that this gate and that one answer the same question the same
+    way. #192 is what happens when they don't: during Phase 0 and Phase 1
+    this gate proposed a ready wave every turn and dispatch-guard denied
+    every member of it, so the orchestrator was told to do the one thing it
+    was forbidden to do, with no way to satisfy either gate. Reading the
+    state directly rather than shelling out to dispatch-guard is deliberate—
+    one condition duplicated is a better trade than a hook subprocess inside
+    a 30-second Stop budget.
+
+    Degrades to None on any exception, the same direction _compute_wave
+    degrades: audit_gate opens the latest verdict file, which a concurrent
+    write can delete between the listdir and the open. Failing toward "no
+    audit block" means a rare race costs a spurious ready-wave line for one
+    firing and leaves the backstop armed. Failing the other way would hold
+    every counter on a transient error, which is the silently-disabled
+    backstop #163 was filed about.
+    """
+    try:
+        for audit_id, artifact in (
+            ("CON-audit", _lib.state_path("constitution.md")),
+            ("DEC-audit", None),
+        ):
+            ok, reason = _lib.audit_gate(audit_id, artifact_path=artifact)
+            if not ok:
+                return audit_id, reason
+    except Exception:
+        return None
+    return None
+
+
+def _audit_held(tid, status, dispositions, marker_fresh, audit_blocked):
+    """True if the only thing standing between this task and a dispatch is an
+    audit gate the orchestrator hasn't opened yet.
+
+    Scoped to the tasks whose next move is a WORKER dispatch, because those
+    are the only dispatches dispatch-guard's audit gates refuse: its checker,
+    auditor, courier, and audition paths all return before either
+    audit_gate call (dispatch-guard.py, "the auditor and checker paths
+    returned above"). So a `needs-check` task still gets told to dispatch its
+    checker with both audits shut, and that advice is correct.
+
+    A fresh marker already holds this task's counter and carries better
+    information (something is actually running), so it wins.
+
+    `wave` is the set ready-set would have the orchestrator dispatch right
+    now, which is the set #192 watched being advertised and refused. But most
+    of a real Phase 1 is NOT in the wave: `owns: []` is what templates/task.md
+    ships, and ready-set can only put one undeclared task in a wave at a time,
+    so every sibling after the first is deferred as `owns-undeclared`. Scoping
+    this to the wave alone left four template-default tasks producing a
+    STALLED.md naming three of them—the original bug, one bucket over. Every
+    deferral except `deps` is therefore held too, because each of those
+    reasons is about how a worker dispatch may be GROUPED or afforded, and
+    grouping is moot when no worker can dispatch at all.
+
+    `deps` stays out. A dep cycle is not something a passing audit fixes, and
+    the wedge valve is the only thing that surfaces one before dispatch time,
+    which for a cycle never arrives. Holding `deps` here would disarm it. It
+    costs nothing in the ordinary case: a dep-deferred task is already
+    deferral-held, and only the valve's own wedge state tells them apart.
+
+    `attention` stays out too—a dispute or an invalidation needs a ruling,
+    not a dispatch, so the audit isn't what blocks it. So does a fresh
+    marker, which carries better news than the gate being shut: something is
+    genuinely running. The status fallback covers the degrade case, where
+    ready-set produced no buckets at all and a pending task would otherwise
+    sail straight back into #192.
+    """
+    if not audit_blocked or marker_fresh:
+        return False
+    disposition = dispositions.get(tid)
+    if disposition:
+        if disposition[0] == "wave":
+            return True
+        return (
+            disposition[0] == "deferred"
+            and _deferred_kind(tid, dispositions) != "deps"
+        )
+    return status in WORKER_DISPATCH_STATUSES
+
+
 def _next_move(tid, status, retries, marker_state=None, marker_ts=None):
     # #111: `assigned` and `checking` are exactly the two statuses a task
     # sits at WHILE something is dispatched against it, so they're the two
     # statuses where "nothing has changed" is ambiguous between "nobody has
     # dispatched anything yet" and "a worker/checker is still running." The
     # in-flight marker (see _lib.mark_in_flight/in_flight) disambiguates:
-    # fresh means don't dispatch again, absent means dispatch, stale means
-    # whatever ran never came back.
+    # fresh means don't dispatch again, absent means dispatch, and stale
+    # means only that the marker aged out—which is evidence of neither death
+    # nor life (#192). This gate used to read stale as death and say so; an
+    # 84-minute worker outlived the then-one-hour TTL, got reported as never
+    # having returned, and the re-dispatch that advice recommended put a
+    # second worker on the first one's `owns` paths while it was still
+    # writing. `owns` guards wave peers against each other and has no
+    # defense against the orchestrator dispatching one task twice.
     if status in ("assigned", "checking"):
         role = "executor" if status == "assigned" else "checker"
         if marker_state == "fresh":
@@ -204,8 +316,10 @@ def _next_move(tid, status, retries, marker_state=None, marker_ts=None):
             )
         if marker_state == "stale":
             return (
-                f"  {tid} [{status}] → its {role} never returned; investigate, "
-                "then re-dispatch."
+                f"  {tid} [{status}] → its {role}'s marker has aged out, which "
+                "says nothing about whether that agent is alive. Confirm it is "
+                "actually gone before re-dispatching—a second one would race "
+                "the first on the same paths."
             )
         # An absent marker does NOT mean "nobody has run yet"—subagent-return
         # clears the marker on the way out, so a checker that has already
@@ -484,23 +598,31 @@ def _deferral_held(tid, dispositions):
     `owns-malformed`—same shape as `owns-undeclared` (#162). A typo in an
     `owns` entry is fixed by editing the task file, which nobody will do
     while the gate reports the task as legitimately waiting."""
+    return _deferred_kind(tid, dispositions) in DEFERRAL_HOLD_KINDS
+
+
+def _deferred_kind(tid, dispositions):
+    """The `kind` on this task's `deferred` entry, or None if ready-set put it
+    anywhere else. Both holds read the bucket through here so they can't come
+    to different conclusions about the same entry.
+
+    Version skew: a project's copied-in ready-set.py from before #163 emits
+    `deferred` with no `kind` at all, and reading that as "no kind" stalls
+    tasks that are legitimately waiting. Its reason strings are stable and
+    documented, so map back the two that matter. `kind` is authoritative
+    wherever it exists; this is a fallback for an old script, not a second
+    source of truth."""
     d = dispositions.get(tid)
     if not d or d[0] != "deferred":
-        return False
+        return None
     kind = d[2]
     if kind is None:
-        # Version skew: a project's copied-in ready-set.py from before #163
-        # emits `deferred` with no `kind` at all, and reading that as "not a
-        # hold" stalls tasks that are legitimately waiting. Its reason
-        # strings are stable and documented, so map back the two that hold.
-        # `kind` is authoritative wherever it exists; this is a fallback for
-        # an old script, not a second source of truth.
         reason = d[1] or ""
         kind = next(
             (k for prefix, k in _KIND_BY_REASON_PREFIX if reason.startswith(prefix)),
             None,
         )
-    return kind in DEFERRAL_HOLD_KINDS
+    return kind
 
 
 def _closed_task_status_retries(tid):
@@ -574,6 +696,10 @@ def main(data):
     # lapses) changes that task's digest exactly like a status or retry
     # change would (#111)—and, since #163, changes only that task's.
     fresh_markers = _lib.in_flight()
+    # Hoisted above the counter block too (#192): the audit entity's own line
+    # has to tell an auditor that was never dispatched from one whose marker
+    # aged out, and only the untimed set can see the second.
+    all_markers = _lib.in_flight(ttl=float("inf"))
     # Hoisted above the counter block (#163): ready-set's buckets now pace
     # the backstop as well as phrase the message, so the deferral hold needs
     # them before any counter moves. Computed once and reused by the
@@ -581,6 +707,11 @@ def main(data):
     # it twice a firing would double the cost for nothing.
     ready_result = _compute_wave(fresh_markers)
     dispositions = _dispositions(ready_result)
+    # Read once per firing and reused by both the counter block and the
+    # presentation below. Two reads could disagree with each other inside one
+    # message, which is the exact failure mode #192 is about.
+    audit_block = _blocking_audit()
+    audit_id = audit_block[0] if audit_block else None
 
     # D1: an `attention` entry can name a task open_tasks() will never
     # return—a `complete` (or `abandoned`) descendant that finished its own
@@ -640,11 +771,61 @@ def main(data):
     # schedule as a neglected open task, which is the intended answer to
     # "must not livelock": three unread firings and it reaches STALLED.md
     # exactly like anything else does.
+    # The audit hold expires when the audit itself has been reported. Every
+    # hold in this file has to give out somewhere, and the first cut of #192
+    # put the give-out on the wrong entity: naming the audit in STALLED.md
+    # released nothing, because the hold was on the tasks. The gate then
+    # blocked every turn forever with no escape but PAUSED, and the wedge
+    # valve stayed disarmed the whole time, since an audit-held task is never
+    # deferral-held and never leaves `active`. Read from the PREVIOUS
+    # firing's count, the same way already-parked entities are excluded from
+    # the valve below: the audit gets its three turns and its report, then
+    # the tasks behind it resume counting and park on their own schedule.
+    try:
+        audit_parked = audit_id is not None and int(
+            prev_entries.get(audit_id, {}).get("count", 0)
+        ) >= STALL_LIMIT
+    except (TypeError, ValueError, AttributeError):
+        audit_parked = False
+
+    # ...but only while nothing is running against the audit. A marker
+    # arriving resets the audit's own counter, and the expiry reads the
+    # PREVIOUS firing's count, so without this the one firing where the
+    # orchestrator finally dispatches the auditor is the firing its tasks
+    # get punished for it. A fresh marker is better information than a
+    # spent counter, here exactly as it is for a task.
+    if audit_parked and any(m.startswith(f"{audit_id}--") for m in fresh_markers):
+        audit_parked = False
+
+    # Two sets, because these are two different questions and conflating
+    # them put #192 straight back (round 2 of review, three turns later than
+    # the original). `audit_blocked_ids` is the FACT—dispatch-guard will
+    # refuse a worker on this task right now—and it decides what the message
+    # says. `audit_held_ids` is the PACING—how long the gate waits before
+    # giving up on the task—and it decides only whether the counter moves.
+    # The expiry belongs to the second alone. What is true about a task does
+    # not stop being true because its counter ran out, and a gate that
+    # resumed advertising a refused dispatch after three turns would be the
+    # very defect this branch exists to remove.
+    audit_blocked_ids = {
+        tid
+        for tid, status, _retries in combined
+        if _audit_held(
+            tid,
+            status,
+            dispositions,
+            any(m.startswith(f"{tid}--") for m in fresh_markers),
+            audit_id,
+        )
+    }
+    audit_held_ids = set() if audit_parked else audit_blocked_ids
+
     entities = [
         (
             tid,
             _task_digest(tid, status, retries, verdicts, fresh_markers),
-            any(m.startswith(f"{tid}--") for m in fresh_markers),
+            any(m.startswith(f"{tid}--") for m in fresh_markers)
+            or tid in audit_held_ids,
             _deferral_held(tid, dispositions),
             (
                 f"- {tid} [{status}] retries={retries}"
@@ -655,6 +836,65 @@ def main(data):
         )
         for tid, status, retries in combined
     ]
+
+    # The shut audit is an entity in its own right, and it has to be: every
+    # other hold in this file gives out somewhere—a marker ages out, the
+    # deferral hold has the wedge valve below—because a counter that only
+    # ever holds is a backstop that never fires. Audit-holding tasks without
+    # counting the audit would leave exactly that: a job blocked every turn
+    # with every counter pinned and nothing ever reaching STALLED.md.
+    #
+    # So the audit carries the neglect its held tasks no longer can. Three
+    # blocked turns where no auditor is running and the audit state hasn't
+    # moved means the orchestrator was handed "dispatch the auditor" three
+    # times and didn't, which is stuck by any reading. STALLED.md then names
+    # the AUDIT rather than any task—#192's complaint was precisely that it
+    # named tasks that were waiting correctly, and sent the reader hunting
+    # for a checker or a dispute that didn't exist.
+    #
+    # The digest carries the constitution's own bytes alongside the reason
+    # string, because the reason alone cannot see a revision in progress.
+    # audit_gate's stamp-mismatch text names the file and the round but not
+    # the content, so a DEC FAIL sending the orchestrator back to Phase 0—the
+    # documented path—reads as three unchanged turns while it is actively
+    # rewriting the document, and earns a STALLED.md for doing exactly what
+    # it was told. Every edit now moves the digest, which is the same
+    # "something moved" every other entity gets.
+    #
+    # The line reports what the marker actually supports. `audit_markers` is
+    # the FRESH set, so an auditor whose marker aged out would otherwise read
+    # as one that was never dispatched—the same false claim of death #192
+    # took out of the stale-marker message, and a worse one to act on: a
+    # second auditor would land on the first's apparatus directory and
+    # content stamp.
+    audit_entity = None
+    if audit_block:
+        audit_markers = [m for m in fresh_markers if m.startswith(f"{audit_id}--")]
+        # No branch for a live auditor: this line reaches a reader only
+        # through STALLED.md, which needs the count at the limit, and a fresh
+        # marker both holds the count and moves the digest that resets it. A
+        # running audit can never be reported here.
+        audit_state, _audit_ts = _marker_info(audit_id, fresh_markers, all_markers)
+        if audit_state == "stale":
+            audit_line = (
+                f"- {audit_id} (an auditor's marker has aged out—confirm it is "
+                "gone before dispatching another)"
+            )
+        else:
+            audit_line = f"- {audit_id} (owed; no auditor dispatched against it)"
+        audit_entity = (
+            audit_id,
+            json.dumps([
+                audit_id,
+                audit_block[1],
+                audit_markers,
+                _lib.file_sha256(_lib.state_path("constitution.md")),
+            ]),
+            bool(audit_markers),
+            False,
+            audit_line,
+        )
+        entities.append(audit_entity)
 
     def _prev_count(key):
         try:
@@ -683,7 +923,23 @@ def main(data):
     # can still be running against a task already moved to `complete`, and
     # open_tasks() cannot see it. Both shapes came from review, with
     # reproductions.
-    active = [e for e in entities if _prev_count(e[0]) < STALL_LIMIT]
+    # The audit entity is excluded alongside the parked ones, and for the
+    # same reason: the valve asks whether everything still able to trip is
+    # waiting on something that can never arrive, and the audit is never
+    # deferral-held, so leaving it in would answer "no" every firing.
+    #
+    # That exclusion alone does NOT keep the valve armed while an audit is
+    # shut, and this comment used to claim it did. An audit-held task isn't
+    # deferral-held either, so a cycle sitting beside one stays invisible
+    # until the audit is reported and the hold lifts (see audit_parked
+    # above)—then the cycle surfaces on its own three turns. A cycle with
+    # nothing else beside it is unaffected and still surfaces immediately.
+    # What the exclusion buys is that the audit can never be the entity
+    # keeping the valve shut.
+    active = [
+        e for e in entities
+        if _prev_count(e[0]) < STALL_LIMIT and e is not audit_entity
+    ]
     wedged = (
         not fresh_markers
         and bool(active)
@@ -747,8 +1003,9 @@ def main(data):
             "or something is still working on it. The gate goes on blocking "
             "for those and has stopped holding the turn open for these. "
             "Investigate by hand: a checker owing a verdict, a dispute "
-            "needing a ruling, or a task that should be marked abandoned. "
-            "Delete this file once resolved.",
+            "needing a ruling, a task that should be marked abandoned, or an "
+            "audit that was named above and never dispatched. Delete this "
+            "file once resolved.",
         ]
         try:
             with open(_lib.state_path("STALLED.md"), "w", encoding="utf-8") as f:
@@ -766,8 +1023,6 @@ def main(data):
         closed_attention = [a for a in closed_attention if a["id"] not in parked]
         if not tasks and not closed_attention:
             return 0
-
-    all_markers = _lib.in_flight(ttl=float("inf"))
 
     # Presentation, from the same ready_result the counter block above
     # already paced itself with (#125, #163): it never changes which tasks
@@ -788,8 +1043,12 @@ def main(data):
     # Parked entities are dropped from the wave too. They're already named in
     # STALLED.md as needing a human, so re-advertising them as ready to
     # dispatch would put the gate's two messages at odds about the same task.
+    # A shut audit empties the wave outright. Every member of it would be
+    # denied by dispatch-guard, and advertising a dispatch the next gate
+    # refuses is the whole of #192—the orchestrator followed that advice for
+    # an entire DEC-audit on the run that filed it.
     wave = [w for w in (ready_result["wave"] if ready_result else [])
-            if w["id"] not in parked]
+            if w["id"] not in parked and not audit_block]
     deferred = ready_result["deferred"] if ready_result else []
     attention = ready_result["attention"] if ready_result else []
     wave_ids = {w["id"] for w in wave}
@@ -801,6 +1060,35 @@ def main(data):
         tid, status, retries = t
         if tid in wave_ids:
             continue  # named in the wave header below, not here
+        if tid in audit_blocked_ids:
+            # The stale half of the marker state still has to reach the
+            # reader. Suppressing the line entirely would drop the one fact
+            # that decides what to do the moment the audit passes, and this
+            # is the state where a dead worker hides longest.
+            marker_state, _ts = _marker_info(tid, fresh_markers, all_markers)
+            stale_note = (
+                " An earlier dispatch's marker has since aged out; confirm "
+                "that agent is gone before re-dispatching once the audit "
+                "passes." if marker_state == "stale" else ""
+            )
+            # ready-set's reason rides along rather than being replaced by
+            # the audit's. A task can be behind BOTH, and a spent retry
+            # budget or a malformed `owns` is fixed by the orchestrator right
+            # now—work worth doing while the auditor runs, and work the audit
+            # passing will not do for it. Naming only the audit would tell it
+            # one obstacle when there are two, which is the same half-truth
+            # #192 is about.
+            also = (
+                f" ready-set also holds it: {deferred_reasons[tid]}."
+                if tid in deferred_reasons else ""
+            )
+            stale_note += also
+            task_lines.append(
+                f"  {tid} [{status}] → blocked on {audit_id}, not on anything "
+                "you can dispatch: dispatch-guard refuses every worker until "
+                f"it passes (see the {audit_id} line above).{stale_note}"
+            )
+            continue
         if tid in deferred_reasons:
             task_lines.append(
                 f"  {tid} [{status}] → deferred (ready-set): "
@@ -829,10 +1117,27 @@ def main(data):
             f"  {tid} [{status}] → needs your judgment, not a dispatch "
             f"(ready-set): {a['reason']}."
         )
+    # audit_gate's own refusal text, verbatim, so this gate and dispatch-guard
+    # say the same words about the same state—and because that text already
+    # names the move (dispatch the auditor, with the Audit-ID to use).
+    # "No WORKER" is the whole claim, and it has to stay that narrow: a
+    # checker dispatch is legal with both audits shut (dispatch-guard's
+    # checker path returns before either gate), so a `needs-check` task
+    # below is correctly told to dispatch its checker. Saying no task below
+    # is ready would contradict the line under it—#192's own defect, pointed
+    # the other way.
+    audit_lines = (
+        f"AUDIT GATE ({audit_id}): {audit_block[1]}\n"
+        "No worker can be dispatched until it passes. Checkers, couriers, and "
+        "the auditor itself are unaffected; any task named below as blocked "
+        "on it is waiting on this and not on anything you can dispatch."
+    ) if audit_block else None
     wave_block = _wave_block(wave)
-    body_sections = ([wave_block] if wave_block else []) + [
-        "\n".join(task_lines)
-    ]
+    body_sections = (
+        ([audit_lines] if audit_lines else [])
+        + ([wave_block] if wave_block else [])
+        + ["\n".join(task_lines)]
+    )
     body = "\n".join(body_sections)
     if closed_attention:
         header = (

@@ -1,0 +1,48 @@
+{
+  "task_id": "T-003",
+  "checker": "checker-judgment",
+  "vendor": "anthropic",
+  "model": "claude-opus-5[1m]",
+  "verdict": "pass",
+  "findings": [
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "C-7 requirement 1 (the record is committed with the payload) is stated at docs/installing.md:141 and true of the shipped installer: a fresh install writes provenance.json, gitignores only .agent-guild/state/, and the record is not matched by any ignore rule.",
+      "evidence": "docs/installing.md:141 \"Init writes `.agent-guild/provenance.json` on every run, beside the `.agent-guild/CLAUDE.md` marker. ... Init gitignores `.agent-guild/state/` and nothing else, so the record commits with the payload it describes\". Re-derived by running plugin/project-template/install.py claude into a fresh git repo under mktemp -d: `cat .gitignore` -> \".agent-guild/state/\" (that line only); `git check-ignore .agent-guild/provenance.json` -> exit=1; `git check-ignore .agent-guild/state` -> exit=0. The doc's own Verify block (docs/installing.md:159-164) run verbatim in that project printed all four lines including \"provenance record tracked\". Record shape: keys ['files','version'], version 0.7.1 (== plugin/.claude-plugin/plugin.json), 38 entries == the walked payload set exactly, zero state/ entries, no self-entry, zero hash mismatches."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "C-7 requirement 2 (re-running init upgrades files clean against their recorded hashes) is stated at docs/installing.md:143 and 135, including the claim that the stamp does not gate the decision, which the shipped installer confirms.",
+      "evidence": "docs/installing.md:143 \"When a file's bytes still match its recorded hash, nobody has touched it since init put it there, so this run brings it to current source and restamps the hash. The recorded version never enters that decision: a clean file upgrades whether its stamp trails the plugin's or matches it.\" Re-derived: installed clean, overwrote .agent-guild/CLAUDE.md with \"OLD RELEASE BYTES\", set that file's recorded hash to the new bytes and set the record version EQUAL to the running 0.7.1, re-ran init -> \"payload=1 updated/37 unchanged/0 preserved\"; upgraded to source bytes: True; restamped: True. Matches scripts/plugin-src/install-project.py:297-304, where the branch is keyed on `_sha256_file(target) == recorded_hash` with no version read anywhere in _sync_payload. Idempotent re-run on an untouched project reported \"payload=0 updated/38 unchanged/0 preserved\", confirming docs/installing.md:147 \"Re-running init on a project nobody has edited reports zero preserved.\" All three runs sum to 38 == the whole payload, confirming the summary's three terms account for it."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "C-7 requirement 3 (files differing from their recorded hashes are preserved and named) is stated at docs/installing.md:145 and 118; every sub-claim in that sentence — the warning text, the hash carried forward, the version still advancing, and the delete-and-re-run remedy — holds against the shipped installer.",
+      "evidence": "docs/installing.md:145 \"Init keeps your bytes, names the path in a `local Agent Guild payload differs` warning, and carries the old hash forward untouched, so the next release refuses the same edit again... The refusal does not pin the project: the record still advances to the running plugin's version. To take the shipped copy back, delete the file and re-run init.\" Re-derived: stamped a project at 0.6.0, appended \"MY LOCAL EDIT\" to .agent-guild/CLAUDE.md, re-ran -> \"WARNING: local Agent Guild payload differs; preserved without writes: .agent-guild/CLAUDE.md\" / \"payload=0 updated/37 unchanged/1 preserved\"; edit survived: True; recorded hash == on-disk hash: False (old hash kept); version after preserve: 0.7.1. A second re-run reproduced the same warning, so the refusal survives the bump. `rm .agent-guild/CLAUDE.md` + re-run -> \"payload=1 updated/...\" and diff against the packaged copy reported identical. The quoted warning string matches install-project.py:646 byte for byte as a substring."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "C-7 requirement 4 (how a pre-provenance project is adopted) is stated in its own heading at docs/installing.md:149-153, and the hard part — every differing file, not the first, and no entry at all for them — is true of the shipped installer on both the first and later re-runs.",
+      "evidence": "docs/installing.md:151-153 \"Init records every file whose bytes match current source, at that hash and under the running plugin's version. It preserves every file that differs, names it in the warning, and leaves it out of the record entirely—all of them, not the first. ... Restore the shipped bytes, or delete the file and re-run init, and the next run records the file and stops warning about it.\" Re-derived: deleted provenance.json, diverged TWO files (.agent-guild/CLAUDE.md and .agent-guild/scripts/ready-set.py), re-ran -> warning named both; \"payload=0 updated/36 unchanged/2 preserved\"; version 0.7.1; both absent from the record; 36 of 38 entries, zero recorded-at-on-disk-hash mismatches. A second re-run named both again (never overwritten). Restoring the shipped bytes of CLAUDE.md and re-running dropped it from the warning and added it to the record (\"CLAUDE.md now recorded: True\")."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "info",
+      "description": "The load-bearing sentence C-1, the constitution's preamble, and probe-183.py all cite this document for is present at docs/installing.md:137 and true of the shipped installer, and the #214 re-init table above it (lines 132-137) tells the truth about which files upgrade.",
+      "evidence": "docs/installing.md:137 \"The Codex project hooks land only on the repo-local `--project-skills` route, and they sit inside `.agent-guild/` like the payload does. Even so, `install()` splits them out of the payload before the drift check runs, so they upgrade on every re-init. A payload file already on disk upgrades only when its bytes still match the hash the installer recorded for it.\" Matches install-project.py:432-444, where the `hooks/` prefix is stripped from payload_files inside install() before _preflight_payload/_sync_payload, and :599-603, where those files go through _copy_owned. Re-derived with the built Codex package: bare `codex` install left no .agent-guild/hooks/ directory at all; `codex --project-skills` landed 9 hook files inside .agent-guild/hooks/ with ZERO hook entries in the record (38 payload entries, same as Claude). Editing BOTH a hook and a payload file then re-running produced \"hooks=1 updated/8 unchanged\" (the hook edit was overwritten, grep count 0) alongside \"WARNING: local Agent Guild payload differs ... .agent-guild/CLAUDE.md\" and \"payload=0 updated/37 unchanged/1 preserved\" (the payload edit survived, grep count 1) — precisely the asymmetry the sentence claims. Table row 2's payload enumeration (CLAUDE.md, scripts/, templates/, schemas/) matches `ls plugin/project-template/.agent-guild/` exactly, and the Codex-only `hooks/` is assigned to row 1. The clause's failing example (\"the #214 table still saying payload files are never overwritten\") does not apply: row 2 now reads \"upgrades each file still matching its recorded hash\", and no \"#183\"-as-open-gap language survives anywhere in the file (grep for 183/TODO/\"not yet\" returned nothing)."
+    },
+    {
+      "clause_id": "C-7",
+      "severity": "minor",
+      "description": "docs/installing.md:141 says the record holds \"a sha256 for each payload file\", which is a file short of exact in the pre-provenance case the document itself describes ten lines later, where a differing file gets no entry at all.",
+      "evidence": "docs/installing.md:141 \"The record holds the plugin version that wrote the payload and a sha256 for each payload file, taken from the bytes the Guild shipped.\" Measured against the adoption run above, the record carried 36 entries for a 38-file payload. The exception is stated plainly at docs/installing.md:151 (\"leaves it out of the record entirely\") and at :153, so a reader who continues is not left wrong, and C-7 asks the document to state how adoption works rather than to make :141 exhaustive. Naming it because the general-then-exception order means a reader who stops at the first paragraph carries a slightly stronger claim than the installer makes."
+    }
+  ],
+  "timestamp": "2026-08-21T00:00:00Z",
+  "duration_ms": null,
+  "cost_usd": null
+}

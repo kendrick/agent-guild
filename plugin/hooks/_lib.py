@@ -304,7 +304,13 @@ def clear_in_flight(ident, agent):
         now = datetime.now(timezone.utc)
         age_s = (now - dispatched_at).total_seconds()
         ttl_s = _effective_ttl()
-        if age_s > ttl_s:
+        # A TTL of zero or less is an override ("treat every marker as
+        # stale now"), not a budget, so nothing can overrun it—logging
+        # here would just be "returned after 0m; TTL is 0m" on repeat.
+        # That's also the test suite's stale seam (AGENT_GUILD_INFLIGHT_
+        # STALE_S=0 in nine places), so skipping it keeps the log a
+        # measurement instead of noise.
+        if ttl_s > 0 and age_s > ttl_s:
             log_dir = state_path("log")
             os.makedirs(log_dir, exist_ok=True)
             ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")

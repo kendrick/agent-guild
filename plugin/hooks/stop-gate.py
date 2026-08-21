@@ -696,6 +696,10 @@ def main(data):
     # lapses) changes that task's digest exactly like a status or retry
     # change would (#111)—and, since #163, changes only that task's.
     fresh_markers = _lib.in_flight()
+    # Hoisted above the counter block too (#192): the audit entity's own line
+    # has to tell an auditor that was never dispatched from one whose marker
+    # aged out, and only the untimed set can see the second.
+    all_markers = _lib.in_flight(ttl=float("inf"))
     # Hoisted above the counter block (#163): ready-set's buckets now pace
     # the backstop as well as phrase the message, so the deferral hold needs
     # them before any counter moves. Computed once and reused by the
@@ -767,7 +771,24 @@ def main(data):
     # schedule as a neglected open task, which is the intended answer to
     # "must not livelock": three unread firings and it reaches STALLED.md
     # exactly like anything else does.
-    audit_held_ids = {
+    # The audit hold expires when the audit itself has been reported. Every
+    # hold in this file has to give out somewhere, and the first cut of #192
+    # put the give-out on the wrong entity: naming the audit in STALLED.md
+    # released nothing, because the hold was on the tasks. The gate then
+    # blocked every turn forever with no escape but PAUSED, and the wedge
+    # valve stayed disarmed the whole time, since an audit-held task is never
+    # deferral-held and never leaves `active`. Read from the PREVIOUS
+    # firing's count, the same way already-parked entities are excluded from
+    # the valve below: the audit gets its three turns and its report, then
+    # the tasks behind it resume counting and park on their own schedule.
+    try:
+        audit_parked = audit_id is not None and int(
+            prev_entries.get(audit_id, {}).get("count", 0)
+        ) >= STALL_LIMIT
+    except (TypeError, ValueError, AttributeError):
+        audit_parked = False
+
+    audit_held_ids = set() if audit_parked else {
         tid
         for tid, status, _retries in combined
         if _audit_held(
@@ -811,19 +832,45 @@ def main(data):
     # named tasks that were waiting correctly, and sent the reader hunting
     # for a checker or a dispute that didn't exist.
     #
-    # audit_gate's reason string is the digest because it already encodes
-    # every axis that could move: which audit, its latest round, that
-    # round's verdict, and whether the constitution still matches the stamp.
-    # A new round landing changes it; nothing else needs to.
+    # The digest carries the constitution's own bytes alongside the reason
+    # string, because the reason alone cannot see a revision in progress.
+    # audit_gate's stamp-mismatch text names the file and the round but not
+    # the content, so a DEC FAIL sending the orchestrator back to Phase 0—the
+    # documented path—reads as three unchanged turns while it is actively
+    # rewriting the document, and earns a STALLED.md for doing exactly what
+    # it was told. Every edit now moves the digest, which is the same
+    # "something moved" every other entity gets.
+    #
+    # The line reports what the marker actually supports. `audit_markers` is
+    # the FRESH set, so an auditor whose marker aged out would otherwise read
+    # as one that was never dispatched—the same false claim of death #192
+    # took out of the stale-marker message, and a worse one to act on: a
+    # second auditor would land on the first's apparatus directory and
+    # content stamp.
     audit_entity = None
     if audit_block:
         audit_markers = [m for m in fresh_markers if m.startswith(f"{audit_id}--")]
+        audit_state, _audit_ts = _marker_info(audit_id, fresh_markers, all_markers)
+        if audit_markers:
+            audit_line = f"- {audit_id} (an auditor is running against it)"
+        elif audit_state == "stale":
+            audit_line = (
+                f"- {audit_id} (an auditor's marker has aged out—confirm it is "
+                "gone before dispatching another)"
+            )
+        else:
+            audit_line = f"- {audit_id} (owed; no auditor dispatched against it)"
         audit_entity = (
             audit_id,
-            json.dumps([audit_id, audit_block[1], audit_markers]),
+            json.dumps([
+                audit_id,
+                audit_block[1],
+                audit_markers,
+                _lib.file_sha256(_lib.state_path("constitution.md")),
+            ]),
             bool(audit_markers),
             False,
-            f"- {audit_id} (owed; no auditor dispatched against it)",
+            audit_line,
         )
         entities.append(audit_entity)
 
@@ -857,11 +904,16 @@ def main(data):
     # The audit entity is excluded alongside the parked ones, and for the
     # same reason: the valve asks whether everything still able to trip is
     # waiting on something that can never arrive, and the audit is never
-    # deferral-held, so leaving it in would answer "no" every firing and
-    # disarm the valve for all of Phase 0 and Phase 1. A dep cycle is not
-    # something a passing audit fixes—check-job-spec's R7 catches one, but
-    # only at dispatch time, and dispatch time never arrives when nothing
-    # can dispatch. So the cycle still has to surface here, audit or no.
+    # deferral-held, so leaving it in would answer "no" every firing.
+    #
+    # That exclusion alone does NOT keep the valve armed while an audit is
+    # shut, and this comment used to claim it did. An audit-held task isn't
+    # deferral-held either, so a cycle sitting beside one stays invisible
+    # until the audit is reported and the hold lifts (see audit_parked
+    # above)—then the cycle surfaces on its own three turns. A cycle with
+    # nothing else beside it is unaffected and still surfaces immediately.
+    # What the exclusion buys is that the audit can never be the entity
+    # keeping the valve shut.
     active = [
         e for e in entities
         if _prev_count(e[0]) < STALL_LIMIT and e is not audit_entity
@@ -950,8 +1002,6 @@ def main(data):
         if not tasks and not closed_attention:
             return 0
 
-    all_markers = _lib.in_flight(ttl=float("inf"))
-
     # Presentation, from the same ready_result the counter block above
     # already paced itself with (#125, #163): it never changes which tasks
     # are open—only which of them get folded
@@ -999,6 +1049,18 @@ def main(data):
                 "that agent is gone before re-dispatching once the audit "
                 "passes." if marker_state == "stale" else ""
             )
+            # ready-set's reason rides along rather than being replaced by
+            # the audit's. A task can be behind BOTH, and a spent retry
+            # budget or a malformed `owns` is fixed by the orchestrator right
+            # now—work worth doing while the auditor runs, and work the audit
+            # passing will not do for it. Naming only the audit would tell it
+            # one obstacle when there are two, which is the same half-truth
+            # #192 is about.
+            also = (
+                f" ready-set also holds it: {deferred_reasons[tid]}."
+                if tid in deferred_reasons else ""
+            )
+            stale_note += also
             task_lines.append(
                 f"  {tid} [{status}] → blocked on {audit_id}, not on anything "
                 "you can dispatch: dispatch-guard refuses every worker until "
@@ -1036,10 +1098,17 @@ def main(data):
     # audit_gate's own refusal text, verbatim, so this gate and dispatch-guard
     # say the same words about the same state—and because that text already
     # names the move (dispatch the auditor, with the Audit-ID to use).
+    # "No WORKER" is the whole claim, and it has to stay that narrow: a
+    # checker dispatch is legal with both audits shut (dispatch-guard's
+    # checker path returns before either gate), so a `needs-check` task
+    # below is correctly told to dispatch its checker. Saying no task below
+    # is ready would contradict the line under it—#192's own defect, pointed
+    # the other way.
     audit_lines = (
         f"AUDIT GATE ({audit_id}): {audit_block[1]}\n"
-        "No worker can be dispatched until it passes, so no task below is "
-        "ready to dispatch however ready it otherwise looks."
+        "No worker can be dispatched until it passes. Checkers, couriers, and "
+        "the auditor itself are unaffected; any task named below as blocked "
+        "on it is waiting on this and not on anything you can dispatch."
     ) if audit_block else None
     wave_block = _wave_block(wave)
     body_sections = (

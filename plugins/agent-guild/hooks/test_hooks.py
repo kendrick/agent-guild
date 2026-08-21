@@ -1511,8 +1511,12 @@ check("audit-blocked task → STALLED.md names the audit instead",
 check("the audit's own stall counter is what advanced",
       audit_state.get("CON-audit", {}).get("count", 0) >= 3,
       f"entries={audit_state}")
+# Match the entity line, not the boilerplate. The same commit added "or an
+# audit that was named above and never dispatched" to STALLED.md's standing
+# causes list, so asserting on that phrase alone matches ANY STALLED.md and
+# pins nothing.
 check("STALLED.md sends the reader to the right cause",
-      "never dispatched" in audit_stall, f"text={audit_stall!r}")
+      "- CON-audit (owed" in audit_stall, f"text={audit_stall!r}")
 
 # The shape a real Phase 1 actually has, and the one that got away when this
 # fix only looked at the `wave` bucket. `owns: []` is what templates/task.md
@@ -1527,15 +1531,58 @@ con_pass(proj)
 for n in ("T-001", "T-002", "T-003", "T-004"):
     write_task(proj, n, status="pending", deps="[]", owns="[]")
 write_in_flight_marker(proj, "DEC-audit", "auditor")
-for _ in range(3):
+_rc, _out, err_p1_first = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+for _ in range(2):
     run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 rc_p1, _, err_p1 = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 check("four template-default tasks behind a live DEC audit → no task is stalled",
       not stalled_text(proj), f"text={stalled_text(proj)!r}")
 check("...and every one of them is told what it's actually waiting on",
       err_p1.count("blocked on DEC-audit") == 4, err_p1)
-check("...and none is told to declare `owns` to get itself dispatched",
-      "declare it on both" not in err_p1, err_p1)
+# Read the FIRST firing, not the last. With the feature removed these tasks
+# stall and get dropped from the message entirely by firing 4, so their
+# deferred lines vanish for the wrong reason and the assertion passes anyway.
+# ready-set's reason still rides along as a note, but it must never be the
+# task's headline move: "declare `owns` on both" reads as the thing standing
+# between it and a dispatch, and it isn't.
+check("...and none has its `owns` deferral presented as the move to make",
+      "→ deferred (ready-set)" not in err_p1_first, err_p1_first)
+
+# The hold has to expire, or it isn't a hold—it's a gate with no escape. The
+# first cut of #192 put the give-out on the audit entity while the hold sat
+# on the tasks, so naming the audit in STALLED.md released nothing and the
+# turn could never end: eight firings, all rc=2, PAUSED the only way out.
+# The audit gets its three turns and its report; then the tasks resume.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+for _ in range(3):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+audit_first = stalled_text(proj)
+codes = [run_hook("stop-gate.py", {"stop_hook_active": True}, proj)[0]
+         for _ in range(5)]
+check("the audit is reported first, while its tasks are still held",
+      "CON-audit" in audit_first and "T-001" not in audit_first,
+      f"text={audit_first!r}")
+check("an audit-blocked job eventually lets the turn end",
+      0 in codes, f"codes={codes}")
+check("the task it was holding is named only once the hold has lifted",
+      "T-001" in stalled_text(proj), f"text={stalled_text(proj)!r}")
+
+# A DEC FAIL sends the orchestrator back to Phase 0 to revise—the documented
+# path. audit_gate's stamp-mismatch text names the file and round but not the
+# content, so without the constitution's own bytes in the digest three turns
+# of real rewriting read as three turns of nothing.
+proj = fresh_proj()
+seed_ready_set(proj)
+con_pass(proj)
+write_verdict(proj, "DEC-audit-r0.md", "FAIL")
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+for i in range(3):
+    write_constitution(proj, f"# Constitution\n\n- C-1: revision {i}.\n")
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+check("revising the constitution counts as progress on the audit",
+      "CON-audit" not in stalled_text(proj), f"text={stalled_text(proj)!r}")
 
 # A dispatched auditor holds the audit entity the same way a worker's marker
 # holds its task's. An audit round runs 17 to 25 minutes on this repo, so
@@ -1607,11 +1654,15 @@ write_task(proj, "T-001", status="rework", deps="[]", owns="[a.py]", retries=1)
 for _ in range(2):
     run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
 audits_pass(proj)
-for _ in range(2):
-    run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
-rc_resume, _, _ = run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+run_hook("stop-gate.py", {"stop_hook_active": True}, proj)
+with open(os.path.join(proj, ".agent-guild", "state", "log", "stop-gate.state"),
+          encoding="utf-8") as f:
+    resumed = json.load(f)["entries"]["T-001"]["count"]
+# The count is what distinguishes the three possible behaviors; the eventual
+# STALLED.md does not. Held-then-resumed reaches 2 on this firing, a restart
+# would read 1, and no hold at all would already have parked the task.
 check("a held counter resumes when the audit passes rather than restarting",
-      rc_resume == 0 and "T-001" in stalled_text(proj), f"rc={rc_resume}")
+      resumed == 2, f"count={resumed}")
 
 # The degrade path is where #192 would most quietly come back: with no
 # ready-set.py there are no buckets to read, so the status fallback is the
@@ -1658,6 +1709,32 @@ write_in_flight_marker(proj, "T-001", "worker-standard")
 rc, out, err = run_hook("stop-gate.py", {}, proj, extra_env=STALE_ENV)
 check("an audit-blocked task still reports a marker that has aged out",
       "blocked on CON-audit" in err and "has since aged out" in err, err)
+
+# An auditor's own marker aging out must not read as one that was never
+# dispatched. That is the claim of death #192 took out of the task message,
+# and it is worse here: a second auditor lands on the first's apparatus
+# directory and content stamp.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="pending", deps="[]", owns="[a.py]")
+write_in_flight_marker(proj, "CON-audit", "auditor")
+for _ in range(3):
+    run_hook("stop-gate.py", {"stop_hook_active": True}, proj, extra_env=STALE_ENV)
+aged = stalled_text(proj)
+check("an auditor's aged-out marker isn't reported as never dispatched",
+      "no auditor dispatched" not in aged and "marker has aged out" in aged,
+      f"text={aged!r}")
+
+# A checker dispatch is legal with both audits shut, so the header must not
+# claim nothing below is dispatchable. That is #192's defect inverted: the
+# gate contradicting the advice printed underneath it.
+proj = fresh_proj()
+seed_ready_set(proj)
+write_task(proj, "T-001", status="needs-check", deps="[]", owns="[a.py]",
+           artifacts="[out.py]")
+rc, out, err = run_hook("stop-gate.py", {}, proj)
+check("the audit header doesn't contradict the checker advice below it",
+      "dispatch its checker" in err and "no task below is ready" not in err, err)
 
 # ------------------------------------------------------------ dispatch-guard
 print("dispatch-guard.py")

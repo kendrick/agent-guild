@@ -14,6 +14,32 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-21: A Shut Audit Gate Is A Counted Entity, Not Just A Hold
+
+**Source:** #192, branch `fix-192-stop-gate-audit-gates`
+
+**Context:** two gates read the same job and gave opposite answers. `ready-set.py` computes a correct wave from the task files, so `stop-gate.py` announced "Ready to dispatch now: T-001"; `dispatch-guard` refuses every worker until the latest CON-audit and DEC-audit rounds have passed, so it denied that exact dispatch. Through all of Phase 0 and Phase 1 the orchestrator got an instruction the next gate refused, every turn, with no way to satisfy either. Three turns of that wrote a `STALLED.md` that named tasks waiting exactly as they should have been, and pointed the reader at a checker or a dispute that didn't exist. It fired three times on the #183 run alone, and a false stall is worse than none, because it teaches you to delete the file without reading it.
+
+**Decision:** the stop gate now makes the same two `_lib.audit_gate` calls, in the same order, that dispatch-guard's worker path makes. While either gate is shut, the ready wave is emptied, an `AUDIT GATE (<id>)` header carries the refusal text verbatim, each would-be wave member is told which audit blocks it, and those tasks hold their stall counters.
+
+That last part needed somewhere for the neglect to go. Every other hold here gives out somewhere—a marker ages out, the deferral hold has the wedge valve—because a hold with no escape is a backstop that never fires, which is the hole #163 was filed about. So the shut audit becomes an entity in its own right: held while an auditor is actually running, counting up when one isn't, and named in `STALLED.md` itself after three turns with no auditor running and no change in audit state. `STALLED.md` can now name an audit rather than a task.
+
+**Why the audit is excluded from the wedge valve.** That valve exists so a dependency cycle surfaces even though `check-job-spec.py`'s R7 only catches one at dispatch time, and dispatch time never arrives for a cycle. The audit is never deferral-held, so including it would answer the valve's question "no" on every firing and disarm it for all of Phase 0 and Phase 1.
+
+**Alternatives considered:** holding the audit-blocked tasks and counting nothing (rejected—that is a hold with no escape, which is #163's hole rebuilt one layer up).
+
+## 2026-08-21: An In-Flight Marker Gets Three Hours, And Logs When That Is Still Short
+
+**Source:** #192, branch `fix-192-stop-gate-audit-gates`
+
+**Context:** `IN_FLIGHT_TTL_S_DEFAULT` was one hour, which is shorter than routine opus work in this system. The two runs behind #192 had a worker go 84 minutes and a DEC auditor 107, so a healthy agent outlived its own marker and the stop gate read the absence as death. Following that advice put a second worker on the first one's `owns` paths while it was still writing. Nothing was clobbered, but only because the second worker found the work already done and made no edits.
+
+**Decision:** the default is 10800s. `_effective_ttl()` now resolves the env seam for both `in_flight` and `clear_in_flight`, since two copies of that fallback is how they drift. Three hours is about 1.7x the longest dispatch anyone has measured here, which makes it a better-evidenced guess than the last one rather than a number anybody can prove. So `clear_in_flight` appends to `state/log/ttl-overruns.log` whenever an agent returns after its marker had already aged out. That log stays empty until the default is wrong again, and a line in it is the case for raising the number.
+
+The stop gate's stale-marker message goes with it. It claimed an agent "never returned" and named re-dispatch as the move, which is a distinction no marker can make, and that advice is what put a second worker on live `owns` paths. It now says the marker aged out and asks for confirmation first.
+
+**Alternatives considered:** a bigger round number and no log (rejected—the evidence for the next bump has to come from somewhere, and the alternative was waiting for someone to hit the same double-dispatch and reason back to the TTL from there).
+
 ## 2026-08-21: Payload Provenance Keys On The Recorded Hash, Not The Stamp
 
 **Source:** #183, built through the guild (11 CON rounds, 3 DEC rounds, 4 tasks)

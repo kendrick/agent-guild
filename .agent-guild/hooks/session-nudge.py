@@ -30,6 +30,14 @@ dedupe machinery is needed. A project-rooted instance (copied straight into
 .agent-guild/hooks/) never runs this check at all—it has no way to tell a
 copy-in it's part of from a copy-in left behind by mistake, and doesn't need
 to, since the plugin-rooted instance already covers the pairing.
+
+A stale payload is the third thing worth a nudge for (#183): re-running init
+upgrades a project's files, but nothing tells the user a new release exists
+until they think to run it. This file's own copy carries the answer already,
+because it ships inside the same package that stamped the project's
+.agent-guild/provenance.json—so comparing that package's manifest version
+against the record's `version` at run time is enough, with no compiled-in
+constant to go stale between releases.
 """
 import json
 import os
@@ -71,6 +79,75 @@ CODEX_DOUBLE_REGISTRATION_WARNING = (
     "project. Review the exact active definitions in `/hooks`; do not trust "
     "or remove unrelated project hooks."
 )
+
+
+def _own_manifest_version():
+    """The version of the package THIS FILE ships inside, read from its
+    manifest at run time—never compiled in, so a copy of the package whose
+    manifest carries a version nothing else does reports that version (a
+    probe fixture proves exactly this by editing a copy's manifest and
+    running that copy). Both shipped packages put their manifest one
+    directory up from hooks/: .claude-plugin/plugin.json for the Claude
+    package, .codex-plugin/plugin.json for the Codex one. Neither sits beside
+    the repo-local copy at <project>/.agent-guild/hooks/session-nudge.py,
+    which ships inside no package—this returns None there, and the caller
+    must make no version claim rather than guess one.
+    """
+    package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for manifest_rel in (
+        os.path.join(".claude-plugin", "plugin.json"),
+        os.path.join(".codex-plugin", "plugin.json"),
+    ):
+        try:
+            with open(
+                os.path.join(package_root, manifest_rel), encoding="utf-8"
+            ) as f:
+                version = json.load(f).get("version")
+        except (OSError, ValueError):
+            continue
+        if isinstance(version, str) and version:
+            return version
+    return None
+
+
+def _stamped_version(root):
+    """The version stamped in this project's .agent-guild/provenance.json, or
+    None when there is nothing to read—a pre-provenance kit, a corrupt
+    record, or one missing the key. Silence on missing evidence, the same
+    posture the marker gate below takes."""
+    try:
+        with open(
+            os.path.join(root, ".agent-guild", "provenance.json"), encoding="utf-8"
+        ) as f:
+            version = json.load(f).get("version")
+    except (OSError, ValueError):
+        return None
+    return version if isinstance(version, str) and version else None
+
+
+def _version_gap_notice(root, host, data):
+    """The version-gap notice line, or None when there's nothing to say:
+    this deployment has no manifest to read a running version from (the
+    repo-local copy), the project has no stamp to compare it to, or the two
+    already agree. Never raises—the repo-local copy has no manifest by
+    design, and _lib.run() turns an uncaught exception into exit 2, which on
+    a Codex host blocks the session start rather than merely staying quiet.
+    """
+    running = _own_manifest_version()
+    if running is None:
+        return None
+    stamped = _stamped_version(root)
+    if stamped is None or stamped == running:
+        return None
+    if host == "claude":
+        init_invocation = "/agent-guild:init"
+    else:
+        prefix = data.get("agent_guild_skill_prefix", "")
+        init_invocation = f"${prefix}init"
+    return (
+        f"agent-guild: this project is stamped at version {stamped}, but the "
+        f"running plugin is {running}—run {init_invocation} now to upgrade?"
+    )
 
 
 def _running_from_plugin_root(here, root):
@@ -141,6 +218,18 @@ def main(data):
     host = data.get("hook_host", "claude")
     if host not in {"claude", "codex"}:
         raise ValueError(f"unsupported hook host: {host!r}")
+
+    # Computed once, up front, because the version-gap notice has to print
+    # before EITHER early return below can fire (#183/C-5)—including the
+    # double-registration one, which itself fires above the marker gate (see
+    # its own comment) and so can't simply be reordered after a marker check.
+    # No marker: the project has shown no intent to use the guild—or it once
+    # did and a `git rm` took the marker back out—so the notice stays quiet
+    # right alongside every other nudge (see the module docstring's asymmetry
+    # note and #212).
+    marked = _lib.guild_initialized()
+    notice = _version_gap_notice(root, host, data) if marked else None
+
     if _running_from_plugin_root(os.path.abspath(__file__), root):
         settings_path = (
             os.path.join(root, ".claude", "settings.json")
@@ -148,6 +237,8 @@ def main(data):
             else os.path.join(root, ".codex", "hooks.json")
         )
         if _copy_in_gate_registered(settings_path, host):
+            if notice:
+                print(notice)
             print(
                 DOUBLE_REGISTRATION_WARNING
                 if host == "claude"
@@ -155,11 +246,11 @@ def main(data):
             )
             return 0
 
-    # No marker: the project has shown no intent to use the guild—or it once
-    # did and a `git rm` took the marker back out—so say nothing either way
-    # (see the module docstring's asymmetry note and #212).
-    if not _lib.guild_initialized():
+    if not marked:
         return 0
+
+    if notice:
+        print(notice)
 
     missing = _missing_pieces(root, host)
     if not missing:

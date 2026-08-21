@@ -244,7 +244,7 @@ def _in_flight_dir():
     return state_path("log", "in-flight")
 
 
-def mark_in_flight(ident, agent):
+def mark_in_flight(ident, agent, audit_round=None):
     """Record that `agent` was just legally dispatched for `ident` (a
     Task-ID, Audit-ID, or Audition-ID)—called from dispatch-guard.py at
     every allowed dispatch. stop-gate.py reads these to tell a genuinely
@@ -253,6 +253,11 @@ def mark_in_flight(ident, agent):
     checker is mid-flight, which is exactly what used to make a long-running
     dispatch look identical to a livelock. Waves made that the common case
     instead of a rare one.
+
+    audit_round, when given, is the round this auditor dispatch was
+    commissioned for (see next_audit_round). The return gate reads it back
+    (in_flight_audit_round) to tell a verdict this auditor actually filed
+    from a previous round's file still sitting on disk (#175).
 
     Best-effort, same posture as dispatch-guard's own _log(): a write
     failure here must never turn a legal dispatch into a block. Losing a
@@ -264,8 +269,11 @@ def mark_in_flight(ident, agent):
         os.makedirs(d, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         path = os.path.join(d, f"{ident}--{agent}.json")
+        payload = {"dispatched_at": ts}
+        if audit_round is not None:
+            payload["audit_round"] = audit_round
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"dispatched_at": ts}, f)
+            json.dump(payload, f)
     except Exception:
         pass
 
@@ -331,6 +339,24 @@ def clear_in_flight(ident, agent):
         pass
     except Exception:
         pass
+
+
+def in_flight_audit_round(ident, agent):
+    """The audit_round mark_in_flight recorded for (ident, agent), or None on
+    any absence, unreadable file, malformed JSON, missing key, or
+    non-integer value.
+
+    No freshness check, deliberately: this marker is this dispatch's own
+    record of what it commissioned, not a liveness signal, so the TTL that
+    governs stall detection (in_flight) has no bearing on whether the round
+    it recorded is still the right one to check a return against."""
+    try:
+        path = os.path.join(_in_flight_dir(), f"{ident}--{agent}.json")
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+        return int(record["audit_round"])
+    except Exception:
+        return None
 
 
 def in_flight(ttl=None):
@@ -746,6 +772,48 @@ def next_audit_round(audit_id):
     return 0 if n is None else n + 1
 
 
+AUDIT_VERDICT_VALUES = ("PASS", "FAIL", "ERROR")
+
+
+def audit_verdict_value(text):
+    """The verdict field, normalized. "" when absent or unreadable."""
+    return str(parse_frontmatter(text).get("verdict", "")).strip().upper()
+
+
+def has_audit_diagnosis(text):
+    """True if a FAIL verdict carries actionable diagnosis, not just the
+    template's comment placeholder."""
+    idx = text.find("## Diagnosis")
+    if idx == -1:
+        return False
+    tail = text[idx + len("## Diagnosis"):]
+    tail = re.sub(r"<!--.*?-->", "", tail, flags=re.DOTALL)
+    return bool(tail.strip())
+
+
+def audit_verdict_ok(text, require_diagnosis_on_fail=True):
+    """(ok, reason_or_verdict). ok=True with the normalized verdict; ok=False
+    with a reason the subagent can act on.
+
+    Audit verdicts are markdown frontmatter, not the checker JSON
+    verdict.schema.json covers—that migration was scoped to checkers only,
+    and the auditor's shape stays as-is. This is the one place that shape is
+    stated: subagent-return's file-backed path, its inline path (a read-only
+    Codex auditor can't write its own verdict file, #175), and audit_gate
+    all read it, so none of the three can drift from what counts as a valid
+    audit verdict.
+    """
+    verdict = audit_verdict_value(text)
+    if verdict not in AUDIT_VERDICT_VALUES:
+        return False, (
+            f"verdict field is '{verdict or 'missing'}', not "
+            f"{'/'.join(AUDIT_VERDICT_VALUES)}"
+        )
+    if verdict == "FAIL" and require_diagnosis_on_fail and not has_audit_diagnosis(text):
+        return False, "verdict is FAIL but has no actionable ## Diagnosis section"
+    return True, verdict
+
+
 # One message table for both gates, so the two audits can't drift into
 # different vocabularies for the same refusal.
 _AUDIT_GATE_MSG = {
@@ -798,8 +866,8 @@ def audit_gate(audit_id, artifact_path=None):
         return False, msgs["missing"]
 
     with open(vpath, encoding="utf-8") as f:
-        fm = parse_frontmatter(f.read())
-    verdict = str(fm.get("verdict", "")).strip().upper() or "unreadable"
+        text = f.read()
+    verdict = audit_verdict_value(text) or "unreadable"
     if verdict != "PASS":
         return False, msgs["not_pass"].format(n=n, verdict=verdict)
 

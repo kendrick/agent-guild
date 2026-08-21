@@ -119,6 +119,8 @@ The loop:
 
 On a Codex host, checkers run read-only and cannot write that JSON. They return it instead, as the line `AGENT_GUILD_VERDICT` followed by the object, and you write it to the stem in step 3. What you're carrying there is a transcription, not a judgment: `subagent-return` has already validated the object against the schema and confirmed it names this task and this checker, so persist it byte for byte. Editing a verdict you didn't produce would make you the author of a check you also commissioned, collapsing the separation the org chart exists to keep. If it looks wrong, rule on it as a dispute after it lands.
 
+The auditor is read-only there too. Its verdict is Markdown rather than JSON, and it comes back the same way: the line `AGENT_GUILD_VERDICT` followed by the complete document. You write it to `.agent-guild/state/verdicts/<Audit-ID>-r<N>.md`, round 0 when the audit has never filed one and one past the highest otherwise. The same transcription rule applies. `subagent-return` has already checked the verdict's shape and confirmed its frontmatter names this audit, so persist it byte for byte.
+
 ### The second opinion, when you want one
 
 `checker-courier` relays a judgment check to the other host's vendor CLI and files whatever comes back. It is available, not automatic. Dispatch it when a particular judgment call is worth a read from outside the family: a domain you don't know well, or a checker you have reason to doubt. Nothing fires it for you and no gate asks where it went.

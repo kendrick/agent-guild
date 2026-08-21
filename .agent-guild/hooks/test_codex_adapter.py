@@ -1082,6 +1082,97 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertIn("AGENT_GUILD_VERDICT", blocked.stderr)
         self.assertNotIn("Write a conforming verdict per", blocked.stderr)
 
+    def test_read_only_auditor_returns_its_verdict_inline(self):
+        # Issue #175: the auditor's turn at #68's handoff. A Codex auditor is
+        # sandbox read-only too, so it can't write the Markdown verdict the
+        # file-backed branch demands—it returns the verdict instead, and the
+        # parent persists it. Unlike the checker test above, this one also has
+        # to prove the real adapter gets the auditor branch REACHED at all:
+        # test_hooks.py injects hook_host into the payload directly, so it
+        # never exercises _mapped_input stamping hook_host: "codex" or
+        # resolving the Audit-ID from the PARENT transcript (~codex-hook-
+        # adapter.py:229, `_mapped_input`)—the two things that route a real
+        # Codex SubagentStop into the branch under test at all.
+        parent = codex_transcript(self.project, "Audit-ID: CON-audit")
+        # A distinct shape and a foreign id, so a resolution that quietly fell
+        # back to the child instead of the parent would surface as this
+        # test failing on the wrong ident rather than passing by accident.
+        child = codex_transcript(
+            self.project, "Task-ID: T-999", shape="event_msg"
+        )
+
+        def payload(message):
+            return codex_input(
+                "SubagentStop",
+                self.project,
+                transcript_path=parent,
+                agent_transcript_path=child,
+                agent_id="019fb613-auditor",
+                agent_type="auditor",
+                stop_hook_active=False,
+                last_assistant_message=message,
+            )
+
+        def verdict(task="CON-audit", verdict="PASS"):
+            return "AGENT_GUILD_VERDICT\n" + "\n".join([
+                "---",
+                f"task: {task}",
+                "checker: auditor",
+                "vendor: anthropic",
+                "model: claude-opus-5",
+                f"verdict: {verdict}",
+                "checked_at: 2026-08-21T00:00:00Z",
+                "duration_ms: None",
+                "cost_usd: None",
+                "---",
+                "",
+                "## Per-clause results",
+                "",
+                "| clause | severity | description | evidence |",
+                "| ------ | -------- | ------------ | -------- |",
+                "| C-1 | info | sound and discriminates | venue /tmp/x |",
+            ])
+
+        allowed = self.run_adapter("subagent-return", payload(verdict()))
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+        # The gate validates but never writes. Persisting is the parent's
+        # job, the same split the checker and courier lanes already use.
+        con_audit_r0 = os.path.join(
+            self.project,
+            ".agent-guild",
+            "state",
+            "verdicts",
+            "CON-audit-r0.md",
+        )
+        self.assertFalse(os.path.exists(con_audit_r0))
+
+        # THE REGRESSION this task guards: seed a verdict a PREVIOUS round
+        # actually wrote, then have the auditor return with no marker at all.
+        # Before #175's fix, the non-Codex branch's disk-fallback
+        # (`_latest_audit_verdict`) found this file and reported PASS for a
+        # verdict the auditor never returned this round; on a truly empty
+        # round 0 it instead blocked by ordering a read-only agent to write
+        # the very file its sandbox forbids. The codex branch must ignore
+        # what's on disk entirely and judge only the inline return.
+        os.makedirs(os.path.dirname(con_audit_r0), exist_ok=True)
+        with open(con_audit_r0, "w", encoding="utf-8") as stream:
+            stream.write(verdict()[len("AGENT_GUILD_VERDICT\n"):])
+
+        blocked = self.run_adapter("subagent-return", payload("Done."))
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertIn("AGENT_GUILD_VERDICT", blocked.stderr)
+        self.assertNotIn("Write .agent-guild/state/verdicts", blocked.stderr)
+
+        # A verdict naming the wrong audit is worse than one refused: there is
+        # no filename to check it against here, only the frontmatter itself.
+        mismatched = self.run_adapter(
+            "subagent-return", payload(verdict(task="DEC-audit"))
+        )
+        self.assertEqual(mismatched.returncode, 2, mismatched.stderr)
+        self.assertIn("DEC-audit", mismatched.stderr)
+        self.assertIn("CON-audit", mismatched.stderr)
+
     def test_read_only_codex_courier_returns_a_validated_claude_outcome(self):
         seed_verdict_toolchain(self.project)
         write_task(

@@ -14,6 +14,16 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-08-21: A Read-Only Auditor Returns Its Verdict; The Marker Says Which Round
+
+**Source:** #175, branch `fix-175-codex-auditor-inline-verdict`, commits `1d249dc` / `e41c342` / `ebb71d7`
+
+**Context:** `subagent-return`'s checker branch has taken an inline verdict from a read-only Codex agent since #68. The auditor branch never did. On that host it blocked at round 0 by demanding the one write the sandbox forbids, and from round 1 on it failed the other way: it validated the previous round's file and returned 0 for a verdict this auditor never wrote. #110 raised the cost, since `dispatch-guard` holds every worker until the latest CON-audit round passes—an audit that can't round-trip is a job that can't dispatch anyone.
+
+**Decision:** the auditor branch splits by host. On Codex it judges only the inline return and never reads the verdicts directory, because the parent persists after the gate runs and anything already on disk belongs to an earlier round by construction. On Claude the file still decides, but which round counts comes from the in-flight marker, which `dispatch-guard` now stamps with `next_audit_round` when it commissions the auditor. The audit verdict's shape moved to `_lib.audit_verdict_ok`, so the file-backed path, the inline path, and `audit_gate` stop deriving it three separate ways—one had already drifted, telling auditors "PASS or FAIL" while the validator took ERROR.
+
+**Alternatives considered:** pinning the round to the `CON-audit-r<N>.md.sha256` sidecar, rejected because DEC-audit deliberately carries no stamp and so the sidecar can't be the general mechanism. Making the marker mandatory, rejected because a missing marker leaves the rounds genuinely indistinguishable; falling back to latest-on-disk keeps the pre-#175 reading rather than refusing every markerless return to buy nothing. Migrating audit verdicts to JSON stays out of scope, as #29 scoped that to checkers.
+
 ## 2026-08-21: A Hold Expires On The Entity That Carries It
 
 **Source:** #192, branch `fix-192-stop-gate-audit-gates`, adversarial review round 1

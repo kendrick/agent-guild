@@ -281,17 +281,25 @@ def _fresh_ts():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def write_in_flight_marker(proj, tid, agent, dispatched_at=None):
+def write_in_flight_marker(proj, tid, agent, dispatched_at=None, audit_round=None):
     """A stand-in for what dispatch-guard.py's mark_in_flight() writes, so
     stop-gate/subagent-return fixtures can set up a marker directly without
     routing through a full dispatch. Fresh by default (dispatched "now");
     callers driving staleness use the AGENT_GUILD_INFLIGHT_STALE_S env seam
     instead of backdating the timestamp, since a TTL of 0 makes ANY
-    dispatched_at instantly stale."""
+    dispatched_at instantly stale.
+
+    audit_round, when given, mirrors what _lib.mark_in_flight now merges into
+    an auditor's marker (#175)—the round dispatch-guard commissioned that
+    auditor for, which the return gate reads back to refuse a verdict left
+    over from a previous round."""
     d = os.path.join(proj, ".agent-guild", "state", "log", "in-flight")
     os.makedirs(d, exist_ok=True)
+    payload = {"dispatched_at": dispatched_at or _fresh_ts()}
+    if audit_round is not None:
+        payload["audit_round"] = audit_round
     with open(os.path.join(d, f"{tid}--{agent}.json"), "w") as f:
-        json.dump({"dispatched_at": dispatched_at or _fresh_ts()}, f)
+        json.dump(payload, f)
 
 
 def transcript(proj, text, role="user", content_list=False):
@@ -3023,6 +3031,191 @@ tx = transcript(proj_dec_return, "Audit-ID: DEC-audit")
 rc, out, err = run_hook("subagent-return.py",
                         {"agent_type": "auditor", "transcript_path": tx}, proj_dec_return)
 check("auditor returns valid DEC verdict → exit 0", rc == 0, f"rc={rc} err={err}")
+
+# --------------------------- subagent-return: read-only Codex auditor (#175)
+# A read-only Codex auditor can't write its own verdict file, so its branch
+# splits by host: `hook_host: "codex"` is what codex-hook-adapter.py stamps on
+# every gate payload on that host, so injecting the field directly here is a
+# faithful stand-in for it—the adapter's own end-to-end coverage lives in
+# test_codex_adapter.py, not here. Claude-host cases below cover the other
+# half: the round dispatch-guard's marker commissioned now has to match the
+# verdict file the auditor actually wrote.
+print("subagent-return.py: read-only Codex auditor inline verdict (#175)")
+
+
+def audit_md(verdict="PASS", task="CON-audit", diagnosis=False):
+    """An auditor's verdict document: frontmatter plus body, the shape
+    _lib.audit_verdict_ok reads and _codex_inline_audit_verdict_ok validates
+    inline. Mirrors write_verdict's body, with the `checker: auditor` field a
+    real audit verdict carries (see
+    .agent-guild/state/archive/2026-08-19-issue-193/verdicts/CON-audit-r5.md)."""
+    body = (
+        "---\n"
+        f"task: {task}\n"
+        "checker: auditor\n"
+        "vendor: anthropic\n"
+        "model: claude-opus-5\n"
+        f"verdict: {verdict}\n"
+        "---\n\n## Per-clause results\n\n"
+    )
+    if diagnosis:
+        body += "## Diagnosis\n\n- C-1: a real diagnosis line.\n"
+    else:
+        body += "## Diagnosis\n\n<!-- placeholder only -->\n"
+    return body
+
+
+# 1. Valid PASS behind the marker → exit 0, and the gate must never write the
+# file itself: on this host the parent persists the inline verdict AFTER this
+# gate runs, so a write here would mean two writers racing the same stem.
+proj_cx1 = fresh_proj()
+tx = transcript(proj_cx1, "Audit-ID: CON-audit")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "auditor", "transcript_path": tx, "hook_host": "codex",
+     "last_assistant_message": "AGENT_GUILD_VERDICT\n" + audit_md("PASS", task="CON-audit")},
+    proj_cx1,
+)
+check("codex auditor, valid inline PASS → exit 0", rc == 0, f"rc={rc} err={err}")
+vdir = os.path.join(proj_cx1, ".agent-guild", "state", "verdicts")
+written = [n for n in os.listdir(vdir) if n.startswith("CON-audit-r")]
+check("codex auditor return never writes a verdict file itself",
+      written == [], written)
+
+# 2. FAIL with a real Diagnosis → exit 0; FAIL with only the template's
+# placeholder comment → exit 2, naming Diagnosis.
+proj_cx2 = fresh_proj()
+tx = transcript(proj_cx2, "Audit-ID: CON-audit")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "auditor", "transcript_path": tx, "hook_host": "codex",
+     "last_assistant_message": "AGENT_GUILD_VERDICT\n" + audit_md("FAIL", task="CON-audit", diagnosis=True)},
+    proj_cx2,
+)
+check("codex auditor, FAIL with an actionable Diagnosis → exit 0", rc == 0, f"rc={rc} err={err}")
+
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "auditor", "transcript_path": tx, "hook_host": "codex",
+     "last_assistant_message": "AGENT_GUILD_VERDICT\n" + audit_md("FAIL", task="CON-audit", diagnosis=False)},
+    proj_cx2,
+)
+check("codex auditor, FAIL with only the placeholder Diagnosis → exit 2, names Diagnosis",
+      rc == 2 and "Diagnosis" in err, f"rc={rc} err={err}")
+
+# 3. An off-enum verdict → exit 2, and the message renders from
+# _lib.AUDIT_VERDICT_VALUES rather than a hand-typed list.
+proj_cx3 = fresh_proj()
+tx = transcript(proj_cx3, "Audit-ID: CON-audit")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "auditor", "transcript_path": tx, "hook_host": "codex",
+     "last_assistant_message": "AGENT_GUILD_VERDICT\n" + audit_md("MAYBE", task="CON-audit")},
+    proj_cx3,
+)
+check("codex auditor, verdict: MAYBE → exit 2, names the allowed set",
+      rc == 2 and "PASS/FAIL/ERROR" in err, f"rc={rc} err={err}")
+
+# 4. Frontmatter names a different audit than the one this auditor was
+# dispatched for → exit 2, naming the mismatch.
+proj_cx4 = fresh_proj()
+tx = transcript(proj_cx4, "Audit-ID: CON-audit")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "auditor", "transcript_path": tx, "hook_host": "codex",
+     "last_assistant_message": "AGENT_GUILD_VERDICT\n" + audit_md("PASS", task="DEC-audit")},
+    proj_cx4,
+)
+check("codex auditor, frontmatter names the wrong audit → exit 2, names both",
+      rc == 2 and "DEC-audit" in err and "CON-audit" in err, f"rc={rc} err={err}")
+
+# 5. THE REGRESSION (#175): a valid CON-audit-r0.md already sits on disk from
+# a previous round, and this auditor returns with no marker at all. Before the
+# fix, this exact shape returned 0 and laundered the previous round's verdict
+# as if this auditor had filed it. The message must demand the inline marker
+# and must NEVER instruct a write—this host is read-only, so a write
+# instruction is a deadlock, not a fix.
+proj_cx5 = fresh_proj()
+with open(os.path.join(proj_cx5, ".agent-guild", "state", "verdicts", "CON-audit-r0.md"),
+          "w", encoding="utf-8") as f:
+    f.write(audit_md("PASS", task="CON-audit"))
+tx = transcript(proj_cx5, "Audit-ID: CON-audit")
+rc, out, err = run_hook(
+    "subagent-return.py",
+    {"agent_type": "auditor", "transcript_path": tx, "hook_host": "codex",
+     "last_assistant_message": "Done."},
+    proj_cx5,
+)
+check("THE REGRESSION: valid r0 on disk, no inline marker in the return → exit 2",
+      rc == 2, f"rc={rc} err={err}")
+check("... stderr demands the inline AGENT_GUILD_VERDICT marker",
+      "AGENT_GUILD_VERDICT" in err, err)
+check("... stderr never instructs a write on this read-only host",
+      "Write .agent-guild/state/verdicts" not in err, err)
+
+# --- Claude host: unchanged file-backed path, now round-pinned by the marker
+# dispatch-guard commissioned (#175).
+print("subagent-return.py: auditor return pinned to the commissioned round (#175)")
+
+# 6. The marker says this auditor was commissioned for r1; only r0 sits on
+# disk. Reading "latest on disk" here is exactly how a round-2 auditor that
+# wrote nothing got waved through on a stale round-10 verdict.
+proj_c6 = fresh_proj()
+write_constitution(proj_c6)
+write_verdict(proj_c6, "CON-audit-r0.md", "PASS")
+write_in_flight_marker(proj_c6, "CON-audit", "auditor", audit_round=1)
+marker_path_c6 = os.path.join(proj_c6, ".agent-guild", "state", "log",
+                              "in-flight", "CON-audit--auditor.json")
+tx = transcript(proj_c6, "Audit-ID: CON-audit")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_c6)
+check("marker commissions r1, only r0 exists → exit 2 naming r1",
+      rc == 2 and "r1" in err, f"rc={rc} err={err}")
+
+write_verdict(proj_c6, "CON-audit-r1.md", "PASS")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_c6)
+check("r1 written for the commissioned round → exit 0", rc == 0, f"rc={rc} err={err}")
+check("... clears the in-flight marker",
+      not os.path.exists(marker_path_c6), marker_path_c6)
+
+# 7. Upgrade safety: a marker written before #175 carries no audit_round key.
+# That has to fall back to the old latest-round-on-disk reading, not refuse
+# every auditor return until every marker in flight is the new shape.
+proj_c7 = fresh_proj()
+write_constitution(proj_c7)
+write_verdict(proj_c7, "CON-audit-r0.md", "PASS")
+write_in_flight_marker(proj_c7, "CON-audit", "auditor")  # pre-#175 shape
+tx = transcript(proj_c7, "Audit-ID: CON-audit")
+rc, out, err = run_hook("subagent-return.py",
+                        {"agent_type": "auditor", "transcript_path": tx}, proj_c7)
+check("marker with no audit_round → falls back to latest-round-on-disk → exit 0",
+      rc == 0, f"rc={rc} err={err}")
+
+# 8. dispatch-guard.py records the round it commissioned. Fresh project → r0;
+# with CON-audit-r0.md already on disk, the next dispatch commissions r1.
+print("dispatch-guard.py: auditor dispatch records the commissioned round (#175)")
+proj_c8 = fresh_proj()
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: CON-audit"}}, proj_c8)
+check("auditor dispatch on a fresh project → exit 0", rc == 0, f"rc={rc} err={err}")
+marker_path_c8 = os.path.join(proj_c8, ".agent-guild", "state", "log",
+                              "in-flight", "CON-audit--auditor.json")
+with open(marker_path_c8, encoding="utf-8") as f:
+    marker = json.load(f)
+check("first dispatch's marker records audit_round: 0",
+      marker.get("audit_round") == 0, marker)
+
+write_verdict(proj_c8, "CON-audit-r0.md", "PASS")
+rc, out, err = run_hook("dispatch-guard.py",
+                        {"tool_input": {"subagent_type": "auditor",
+                                        "prompt": "Audit-ID: CON-audit"}}, proj_c8)
+check("second dispatch after r0 exists → exit 0", rc == 0, f"rc={rc} err={err}")
+with open(marker_path_c8, encoding="utf-8") as f:
+    marker = json.load(f)
+check("second dispatch's marker records audit_round: 1",
+      marker.get("audit_round") == 1, marker)
 
 # --------------------------------- subagent-return: in-flight markers (#111)
 print("subagent-return.py: in-flight markers (#111)")

@@ -14,6 +14,16 @@ Each entry follows this shape:
 **Alternatives considered:** What was rejected, and why.
 ```
 
+## 2026-09-10: R15 Refuses Markdown Decoration, Because A Backticked Entry Never Meets Its Bare Twin
+
+**Source:** #232, found downstream in kendrick/skills#97
+
+**Context:** R15 refuses every `owns:` spelling that could match nothing, and the #162 entry below lists them: `./`, `..`, absolute, `//`, backslash, globs, `~`/`$`, invisible characters. Markdown decoration was not among them. `templates/task.md` documents the field in prose that backticks every path shape it names, and `owns: []` is a YAML flow sequence where a backtick is an ordinary plain-scalar character, so a decorated entry is what a careful author writes. R15 passed it. R13 then compared `` `src/a.py` `` against `src/a.py`, found two different strings, and let two owners of one file ride one wave with no dep edge between them. That is the silent "no overlap" #162 exists to refuse, reached through the predicate written to stop it.
+
+**Decision:** add both decorations to R15's list, an entry containing a backtick and one containing `](`. The test is `](` rather than a bracket, because `app/[slug]/page.tsx` is a real path shape the glob check already goes out of its way to admit. Refuse rather than strip, on the line the #162 entry already drew between normalizing and rejecting: the trailing slash is the one difference `paths_overlap` normalizes, because both spellings still name the same node and the strings alone can say so. A decorated entry fails that test, so it is refused upstream like the rest. Stripping would also hand `paths_overlap` a string the author never typed, then quote it back in an error they cannot find in their own file.
+
+**Alternatives considered:** stripping the decoration before comparison (rejected, above); widening the check to arbitrary punctuation (rejected—brackets are ordinary filename characters, and `**src/a.py**` is already caught, though only because `*` trips the glob check, so the one decoration that fails does so by accident).
+
 ## 2026-08-21: A Read-Only Auditor Returns Its Verdict; The Marker Says Which Round
 
 **Source:** #175, branch `fix-175-codex-auditor-inline-verdict`, commits `1d249dc` / `e41c342` / `ebb71d7`

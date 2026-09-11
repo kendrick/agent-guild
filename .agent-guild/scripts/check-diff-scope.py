@@ -174,7 +174,8 @@ def owns_entry_problem(entry, repo_root=None):
     same wave (#162). Every check here catches a spelling that would
     produce one: `./src/a.py` never matches `src/a.py`, a glob never
     matches the files it was meant to stand for, an invisible character
-    makes a path that matches nothing at all.
+    makes a path that matches nothing at all, a backticked path never
+    matches the bare twin a peer task wrote (#232).
 
     Existence is never required—a task's whole job is often to create the
     file it owns. The repo_root checks fire only when the path DOES exist
@@ -192,6 +193,19 @@ def owns_entry_problem(entry, repo_root=None):
         # Survives .strip(), reads as an ordinary path, matches nothing.
         # Usually arrived by paste rather than by typing.
         return f"invisible character U+{ord(invisible):04X}"
+    # A task template's own prose backticks every path shape it names, and
+    # a markdown table backticks every cell, so a decorated entry is what
+    # a careful author writes. It reads as an ordinary path and is worse
+    # than one owning nothing: it differs from the bare spelling a peer
+    # task wrote, so R13 answers "no overlap" and both ride one wave over
+    # one file (#232). Refused rather than stripped, because the reason
+    # has to quote text the author can find in their own file.
+    if "`" in entry:
+        return "backtick; write the path bare, without markdown decoration"
+    # `](` rather than a bracket, for the reason the glob check gives
+    # below: `app/[slug]/page.tsx` is a real path shape and stays legal.
+    if "](" in entry:
+        return "markdown link; write the path bare, without markdown decoration"
     if "\\" in entry:
         return "backslash; entries use '/' separators"
     # `*` and `?` only. Brackets are ordinary filename characters and

@@ -298,6 +298,8 @@ for bad, label in [
     ("/", "bare slash"),
     ("src/*.py", "glob star"),
     ("src/a?.py", "glob question mark"),
+    ("`src/a.py`", "backticked"),
+    ("[a](src/a.py)", "markdown link"),
     ("~/a.py", "home expansion"),
     ("$OUT/a.py", "variable expansion"),
     ("​src/a.py", "zero-width space"),
@@ -324,6 +326,17 @@ check(
 check(
     "...so the './' spelling is refused, with no filesystem lookup at all",
     owns_entry_problem("./src/a.py") is not None,
+)
+# Same shape, reached by markdown instead: a decorated entry and the bare
+# path it names are two different strings, so the pair answers False and
+# two tasks owning one file need no dep edge to satisfy R13 (#232).
+check(
+    "a backticked entry does not overlap the bare path it names...",
+    paths_overlap("`src/a.py`", "src/a.py") is False,
+)
+check(
+    "...so the decorated spelling is refused before R13 compares it",
+    owns_entry_problem("`src/a.py`") is not None,
 )
 # A directory that already exists is still refused when spelled slashless,
 # even though overlap now catches it: the entry is wrong on its own terms

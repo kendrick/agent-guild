@@ -11,6 +11,13 @@
 
 # The Agent Guild
 
+Run Claude Code or Codex as an org chart: workers build, independent checkers verify, nobody grades their own work.
+
+[![Plugin Build](https://github.com/kendrick/agent-guild/actions/workflows/plugin-build.yml/badge.svg)](https://github.com/kendrick/agent-guild/actions/workflows/plugin-build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Hosts: Claude Code and Codex](https://img.shields.io/badge/hosts-Claude%20Code%20%7C%20Codex-8A63D2)](docs/installing.md)
+[![Runtime: Python 3 stdlib](https://img.shields.io/badge/runtime-Python%203%20stdlib-3776AB)](AGENTS.md)
+
 A copy-in kit and generated plugin that runs Claude Code or Codex as an org chart. An expensive orchestrator plans and rules but never builds; cheap worker subagents build; independent checker agents verify the workers without trusting a word they say. It's a recipe, not a framework: nothing here but each host's own primitives, so there's no runner to install and no service to keep alive.
 
 The idea it's built on: a cheap model doing well-specified work under an independent check is both cheaper and more reliable than one expensive model doing everything and grading itself.
@@ -23,6 +30,43 @@ The idea it's built on: a cheap model doing well-specified work under an indepen
        build deliverables   verify workers'     verifies the
        bulk/standard/craft  work independently  orchestrator's own work
 ```
+
+## Contents
+
+- [Install](#install)
+- [The Four Mechanisms](#the-four-mechanisms)
+- [Where the Enforcement Actually Is](#where-the-enforcement-actually-is)
+- [A Task Through the Lifecycle](#a-task-through-the-lifecycle)
+- [Documentation](#documentation)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Install
+
+The hooks and installer need Python 3 and use only the standard library. You also need Claude Code or Codex, authenticated. The `job` skill calls `gh` when you point it at a GitHub issue.
+
+On a Claude host, install the marketplace once and initialize each project once:
+
+```text
+/plugin marketplace add kendrick/agent-guild
+/plugin install agent-guild@kendrick
+/agent-guild:init
+```
+
+Start a fresh session, then hand the guild a piece of work:
+
+```text
+/agent-guild:job 42
+```
+
+The argument takes a GitHub issue number, a local file, or a URL. The spec lands at `.agent-guild/state/spec.md`, Phase 0 writes the constitution, the auditor reviews it, and no worker dispatches until that audit passes.
+
+Run the setup in a throwaway project first and walk [SMOKE.md](SMOKE.md) before relying on the gates for real work.
+
+[Install Agent Guild](docs/installing.md) is the one setup guide, and it covers the rest: the Codex Git marketplace from the CLI or the desktop app, repo-local Codex bootstrap for the IDE extension, hook trust, cross-vendor credentials and fallbacks, the older Claude marketplace migration, and the double-registration footgun.
+
+Every route follows the same shape: install once for the host, initialize once per project, start a fresh session, verify exactly one set of hooks, then walk SMOKE.md.
 
 ## The Four Mechanisms
 
@@ -63,12 +107,48 @@ Job: rewrite a pricing page. The constitution includes C-4, the tagline must shi
 
 Every step is a file written under `.agent-guild/state/`. Nothing here required a person to watch it happen.
 
-## Install
+## Documentation
 
-Use [Install Agent Guild](docs/installing.md) as the one setup guide. It covers the Claude Code plugin, the Codex Git marketplace from the CLI or desktop app, repo-local Codex bootstrap for the IDE extension, hook trust, cross-vendor credentials and fallbacks, the older Claude marketplace migration, and the double-registration footgun.
+| Document                                  | Covers                                                                                    |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [Install Agent Guild](docs/installing.md) | Every install route, hook trust, cross-vendor credentials, what a re-run of init upgrades |
+| [SMOKE.md](SMOKE.md)                      | The manual smoke suite that proves every gate fires                                       |
+| [The Roles](docs/roles.md)                | What each agent in the roster is for                                                      |
+| [Building The Plugins](docs/building.md)  | Per-host build commands, source-versus-output rules, the CI artifact flow                 |
+| [Publishing](docs/publishing.md)          | Release and distribution                                                                  |
+| [CHANGELOG.md](CHANGELOG.md)              | Generated per release from the commit history                                             |
 
-Every route follows the same shape: install once for the host, initialize once per project, start a fresh session, verify exactly one set of hooks, then walk [SMOKE.md](SMOKE.md).
+The orchestrator contract itself lives in [.agent-guild/CLAUDE.md](.agent-guild/CLAUDE.md), which is the authoritative description of the lifecycle and the state-file protocol.
 
-## Build The Generated Packages
+## Development
 
-The Claude and Codex packages are generated from one shared core. See [Building The Plugins](docs/building.md) for exact per-host build commands, source-versus-output rules, compatibility checks, and the CI artifact flow.
+The hooks and check scripts are Python 3 with no dependencies, so the suites run without a setup step:
+
+```console
+$ python3 .agent-guild/hooks/test_hooks.py
+429 passed, 0 failed
+```
+
+The Claude and Codex packages are generated from one shared core under `guild-core/`. `--check` proves the checked-in packages still match a fresh build:
+
+```console
+$ python3 scripts/build-plugin.py --check
+Validating plugin manifest: plugin/.claude-plugin/plugin.json
+
+✔ Validation passed
+OK: shared-core wrappers, both published packages, and both marketplaces match fresh builds; the Claude plugin passes strict validation
+```
+
+Never edit generated package content as behavior. Behavior is authored in `guild-core/`, host metadata in `scripts/plugin-src/adapters/`, and `scripts/build-plugin.py` combines them. See [Building The Plugins](docs/building.md) for the full rules, and [AGENTS.md](AGENTS.md) for the stack and conventions.
+
+CI runs the same suites on every push and pull request, then builds both packages and diffs them against the checked-in trees.
+
+## Contributing
+
+Issues are welcome, and the most useful ones are cases where a gate let something through that it shouldn't have. For a pull request, open an issue first so the shape is settled before you spend the effort.
+
+Before you push, run `python3 .agent-guild/hooks/test_hooks.py` and `python3 scripts/build-plugin.py --check`. Use conventional-commit messages with a scope.
+
+## License
+
+[MIT](LICENSE) © Kendrick Arnett

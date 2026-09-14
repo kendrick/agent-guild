@@ -2,6 +2,25 @@
   "name": "agent-guild",
   "description": "Runs Codex as an org chart: an orchestrator plans and rules, worker subagents build, and independent checker agents verify the work.",
   "version": "0.8.0",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "claude",
+    "anthropic",
+    "ai-agents",
+    "agentic-ai",
+    "multi-agent-systems",
+    "agent-orchestration",
+    "subagents",
+    "llm",
+    "llm-agents",
+    "developer-tools",
+    "claude-code-plugin",
+    "verification",
+    "orchestration",
+    "hooks"
+  ],
   "author": {
     "name": "Kendrick Arnett"
   },
